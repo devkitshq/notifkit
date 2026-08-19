@@ -1,0 +1,9 @@
+{
+  "name": "notifkit-example",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Example Node.js project demonstrating Notifkit API usage",
+  "scripts": {
+    "start": "node index.js"
+  }
+}
