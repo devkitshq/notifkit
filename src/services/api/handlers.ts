@@ -32,7 +32,7 @@ import { readJsonBody, sendJson, sendNoContent, sendValidationError } from "./ht
 import type { RouteContext } from "./router.js";
 import { globalEmitter, getPriorityBucket, normaliseTarget } from "@/shared/index.js";
 import { metrics } from "@/metrics/index.js";
-import { eq, desc, and, lt, sql, like, or, isNotNull } from "drizzle-orm";
+import { eq, desc, and, lt, lte, gte, sql, like, or, isNotNull } from "drizzle-orm";
 import {
   messageLogs,
   workflowDefinitions,
@@ -547,12 +547,13 @@ export function createHandlers(deps: Deps) {
     const limit = isNaN(limitParam) ? 50 : Math.min(limitParam, 100);
     const cursor = ctx.query.get("cursor");
 
-    const templateId = ctx.query.get("templateId");
-    const workflowInstanceId = ctx.query.get("workflowInstanceId");
-    const channel = ctx.query.get("channel");
-    const status = ctx.query.get("status");
-    const taskId = ctx.query.get("taskId");
-    const search = ctx.query.get("search");
+    const templateId = getQueryParam(ctx, "templateId");
+    const workflowInstanceId = getQueryParam(ctx, "workflowInstanceId");
+    const channel = getQueryParam(ctx, "channel");
+    const status = getQueryParam(ctx, "status");
+    const taskId = getQueryParam(ctx, "taskId");
+    const campaign = getQueryParam(ctx, "campaign") || getQueryParam(ctx, "campaignId");
+    const search = getQueryParam(ctx, "search");
 
     const conditions = [eq(messageLogs.projectId, ctx.projectId!)];
     if (templateId) conditions.push(eq(messageLogs.templateId, templateId));
@@ -560,12 +561,14 @@ export function createHandlers(deps: Deps) {
     if (channel) conditions.push(eq(messageLogs.channel, channel as any));
     if (status) conditions.push(eq(messageLogs.status, status as any));
     if (taskId) conditions.push(eq(messageLogs.taskId, taskId));
+    if (campaign) conditions.push(eq(messageLogs.campaignId, campaign));
     if (search) {
       conditions.push(
         or(
           like(messageLogs.taskId, `%${search}%`),
           like(messageLogs.templateId, `%${search}%`),
           like(messageLogs.providerMessageId, `%${search}%`),
+          like(messageLogs.campaignId, `%${search}%`),
         )!,
       );
     }
@@ -767,7 +770,11 @@ export function createHandlers(deps: Deps) {
   ): Promise<void> {
     const limitParam = getQueryParam(ctx, "limit");
     const limit = limitParam ? Math.min(parseInt(limitParam, 10), 100) : undefined;
+    const search = getQueryParam(ctx, "search")?.trim().toLowerCase();
     let workflows = await deps.workflowRepo.listDefinitions(ctx.projectId!);
+    if (search) {
+      workflows = workflows.filter((w: any) => w.name?.toLowerCase().includes(search));
+    }
     if (limit) {
       workflows = workflows.slice(0, limit);
     }
@@ -807,11 +814,21 @@ export function createHandlers(deps: Deps) {
     res: ServerResponse,
     ctx: RouteContext,
   ): Promise<void> {
-    const limitParam = parseInt(ctx.query.get("limit") || "50", 10);
+    const limitParam = parseInt(getQueryParam(ctx, "limit") || "50", 10);
     const limit = isNaN(limitParam) ? 50 : Math.min(limitParam, 100);
-    const cursor = ctx.query.get("cursor") ?? undefined;
+    const cursor = getQueryParam(ctx, "cursor");
+    const search = getQueryParam(ctx, "search");
+    const segment = getQueryParam(ctx, "segment");
+    const language = getQueryParam(ctx, "language");
+    const timezone = getQueryParam(ctx, "timezone");
+    const channel = getQueryParam(ctx, "channel");
 
-    const result = await deps.userRepo.list(ctx.projectId!, limit, cursor);
+    const filters =
+      search || segment || language || timezone || channel
+        ? { search, segment, language, timezone, channel }
+        : undefined;
+
+    const result = await deps.userRepo.list(ctx.projectId!, limit, cursor, filters);
     sendJson(res, 200, result);
   }
 
@@ -1405,17 +1422,47 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
 
   // ── GET /v1/campaigns — listCampaigns ─────────────────────────────────────
   //
-  // One row per campaign label, newest activity first, so "the one I sent
-  // yesterday" is findable without knowing its name exactly.
+  // One row per campaign label, newest activity first, with support for filtering
+  // by search keyword, channel, date range, and minimum message counts.
   async function listCampaigns(
     _req: IncomingMessage,
     res: ServerResponse,
     ctx: RouteContext,
   ): Promise<void> {
-    const limitParam = parseInt(ctx.query.get("limit") || "20", 10);
+    const limitParam = parseInt(getQueryParam(ctx, "limit") || "20", 10);
     const limit = isNaN(limitParam) ? 20 : Math.min(Math.max(limitParam, 1), 100);
+    const search = getQueryParam(ctx, "search")?.trim();
+    const channel = getQueryParam(ctx, "channel")?.trim();
+    const since = getQueryParam(ctx, "since")?.trim();
+    const until = getQueryParam(ctx, "until")?.trim();
+    const minMessagesParam = parseInt(getQueryParam(ctx, "minMessages") || "", 10);
+    const minMessages = isNaN(minMessagesParam) ? undefined : Math.max(minMessagesParam, 1);
 
-    const rows = await deps.db
+    const conditions = [
+      eq(messageLogs.projectId, ctx.projectId!),
+      isNotNull(messageLogs.campaignId),
+    ];
+
+    if (search) {
+      conditions.push(like(messageLogs.campaignId, `%${search}%`));
+    }
+    if (channel) {
+      conditions.push(eq(messageLogs.channel, channel as any));
+    }
+    if (since) {
+      const sinceDate = new Date(since);
+      if (!isNaN(sinceDate.getTime())) {
+        conditions.push(gte(messageLogs.timestamp, sinceDate));
+      }
+    }
+    if (until) {
+      const untilDate = new Date(until);
+      if (!isNaN(untilDate.getTime())) {
+        conditions.push(lte(messageLogs.timestamp, untilDate));
+      }
+    }
+
+    let query = deps.db
       .select({
         campaign: messageLogs.campaignId,
         messages: sql<number>`count(distinct ${messageLogs.taskId})`,
@@ -1423,10 +1470,16 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
         lastActivityAt: sql<string>`max(${messageLogs.timestamp})`,
       })
       .from(messageLogs)
-      .where(and(eq(messageLogs.projectId, ctx.projectId!), isNotNull(messageLogs.campaignId)))
+      .where(and(...conditions))
       .groupBy(messageLogs.campaignId)
       .orderBy(desc(sql`max(${messageLogs.timestamp})`))
       .limit(limit);
+
+    if (minMessages !== undefined) {
+      query = query.having(gte(sql`count(distinct ${messageLogs.taskId})`, minMessages)) as any;
+    }
+
+    const rows = await query;
 
     sendJson(res, 200, {
       campaigns: rows.map((r: any) => ({
@@ -1553,14 +1606,16 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
     res: ServerResponse,
     ctx: RouteContext,
   ): Promise<void> {
-    const limitParam = parseInt(ctx.query.get("limit") || "100", 10);
+    const limitParam = parseInt(getQueryParam(ctx, "limit") || "100", 10);
     const limit = isNaN(limitParam) ? 100 : Math.min(Math.max(limitParam, 1), 500);
-    const channel = ctx.query.get("channel");
-    const reason = ctx.query.get("reason");
+    const channel = getQueryParam(ctx, "channel");
+    const reason = getQueryParam(ctx, "reason");
+    const target = getQueryParam(ctx, "target");
 
     const conditions = [eq(suppressions.projectId, ctx.projectId!)];
     if (channel) conditions.push(eq(suppressions.channel, channel as any));
     if (reason) conditions.push(eq(suppressions.reason, reason));
+    if (target) conditions.push(like(suppressions.target, `%${target.toLowerCase().trim()}%`));
 
     const rows = await deps.db
       .select()

@@ -1,15 +1,17 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "moduleResolution": "node",
+    "moduleResolution": "Bundler",
     "outDir": "./dist"
   },
   "include": [
     "src/**/*",
     "tests/**/*",
+    "packages/*/src/**/*",
     "vitest.config.ts",
     "tsdown.config.ts",
     "tsup.config.ts",
     "drizzle.config.ts"
-  ]
+  ],
+  "exclude": ["node_modules", "dist", "coverage", "packages/*/dist", "**/*.d.ts"]
 }

@@ -596,31 +596,57 @@ export class UserRepository {
     projectId: string,
     limit: number,
     cursor?: string,
+    filters?: {
+      search?: string;
+      segment?: string;
+      language?: string;
+      timezone?: string;
+      channel?: string;
+    },
   ): Promise<{ users: UserProfile[]; nextCursor: string | null }> {
-    let query = this.db
+    const conditions = [eq(users.projectId, projectId)];
+
+    if (cursor) {
+      const cursorDate = new Date(parseInt(cursor, 10));
+      if (!isNaN(cursorDate.getTime())) {
+        conditions.push(drizzleSql`${users.createdAt} < ${cursorDate.toISOString()}`);
+      }
+    }
+
+    if (filters?.language) {
+      conditions.push(drizzleSql`(${users.attributes}->>'language') = ${filters.language}`);
+    }
+
+    if (filters?.timezone) {
+      conditions.push(drizzleSql`(${users.attributes}->>'timezone') = ${filters.timezone}`);
+    }
+
+    if (filters?.search) {
+      const term = `%${filters.search.trim()}%`;
+      conditions.push(
+        drizzleSql`(${users.externalId} ILIKE ${term} OR (${users.attributes}->>'email') ILIKE ${term})`,
+      );
+    }
+
+    if (filters?.segment) {
+      conditions.push(
+        drizzleSql`EXISTS (SELECT 1 FROM ${userSegments} WHERE ${userSegments.userId} = ${users.id} AND ${userSegments.segment} = ${filters.segment})`,
+      );
+    }
+
+    if (filters?.channel) {
+      conditions.push(
+        drizzleSql`EXISTS (SELECT 1 FROM ${userContacts} WHERE ${userContacts.userId} = ${users.id} AND ${userContacts.channel} = ${filters.channel})`,
+      );
+    }
+
+    const rows = await this.db
       .select()
       .from(users)
-      .where(eq(users.projectId, projectId))
+      .where(and(...conditions))
       .orderBy(desc(users.createdAt))
       .limit(limit);
 
-    if (cursor) {
-      // Decode cursor (timestamp)
-      const cursorDate = new Date(parseInt(cursor, 10));
-      query = this.db
-        .select()
-        .from(users)
-        .where(
-          and(
-            eq(users.projectId, projectId),
-            drizzleSql`${users.createdAt} < ${cursorDate.toISOString()}`,
-          ),
-        )
-        .orderBy(desc(users.createdAt))
-        .limit(limit) as any;
-    }
-
-    const rows = await query;
     const items = rows.map((r) => {
       const attrs = r.attributes as any;
       return {

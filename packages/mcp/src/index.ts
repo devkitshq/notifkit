@@ -13,6 +13,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { NotifkitApi } from "./client.js";
 import { registerTools } from "./tools.js";
 
+import { fileURLToPath } from "node:url";
+
 const DEFAULT_URL = "http://localhost:3000";
 
 export function createServer(options: {
@@ -45,7 +47,7 @@ export function createServer(options: {
   return server;
 }
 
-async function main(): Promise<void> {
+export async function runServer(): Promise<void> {
   const baseUrl = process.env["NOTIFKIT_URL"] ?? DEFAULT_URL;
   const apiKey = process.env["NOTIFKIT_API_KEY"];
   const projectId = process.env["NOTIFKIT_PROJECT_ID"];
@@ -65,7 +67,18 @@ async function main(): Promise<void> {
   console.error(`notifkit-mcp: connected, talking to ${baseUrl}`);
 }
 
-main().catch((error: unknown) => {
-  console.error("notifkit-mcp: fatal:", error instanceof Error ? error.message : error);
-  process.exit(1);
-});
+const entryFile = process.argv[1];
+const isDirectRun =
+  Boolean(entryFile) &&
+  !process.env["VITEST"] &&
+  (fileURLToPath(import.meta.url) === entryFile ||
+    entryFile?.endsWith("notifkit-mcp") ||
+    entryFile?.endsWith("dist/index.js") ||
+    entryFile?.endsWith("src/index.ts"));
+
+if (isDirectRun) {
+  runServer().catch((error: unknown) => {
+    console.error("notifkit-mcp: fatal:", error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
+}

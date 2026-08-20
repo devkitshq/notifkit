@@ -121,8 +121,15 @@ export class NotifkitClient {
   // ─── Missing Endpoints additions ─────────────────────────────────────────────
 
   /** List registered workflow definitions. */
-  async listWorkflows(): Promise<{ workflows: any[] }> {
-    return this.request("/v1/workflows", "GET");
+  async listWorkflows(options?: {
+    limit?: number;
+    search?: string;
+  }): Promise<{ workflows: any[] }> {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set("limit", options.limit.toString());
+    if (options?.search) params.set("search", options.search);
+    const qs = params.toString();
+    return this.request(`/v1/workflows${qs ? `?${qs}` : ""}`, "GET");
   }
 
   /** Get a workflow instance by ID. */
@@ -143,6 +150,9 @@ export class NotifkitClient {
     workflowInstanceId?: string;
     channel?: string;
     status?: string;
+    taskId?: string;
+    campaign?: string;
+    search?: string;
   }): Promise<{ logs: any[]; nextCursor: string | null }> {
     let url = "/v1/notifications/logs";
     if (options) {
@@ -154,6 +164,9 @@ export class NotifkitClient {
         params.append("workflowInstanceId", options.workflowInstanceId);
       if (options.channel) params.append("channel", options.channel);
       if (options.status) params.append("status", options.status);
+      if (options.taskId) params.append("taskId", options.taskId);
+      if (options.campaign) params.append("campaign", options.campaign);
+      if (options.search) params.append("search", options.search);
       const str = params.toString();
       if (str) url += `?${str}`;
     }
@@ -164,10 +177,20 @@ export class NotifkitClient {
   async listUsers(options?: {
     limit?: number;
     cursor?: string;
+    search?: string;
+    segment?: string;
+    language?: string;
+    timezone?: string;
+    channel?: string;
   }): Promise<{ users: any[]; nextCursor: string | null }> {
     const params = new URLSearchParams();
     if (options?.limit) params.set("limit", options.limit.toString());
     if (options?.cursor) params.set("cursor", options.cursor);
+    if (options?.search) params.set("search", options.search);
+    if (options?.segment) params.set("segment", options.segment);
+    if (options?.language) params.set("language", options.language);
+    if (options?.timezone) params.set("timezone", options.timezone);
+    if (options?.channel) params.set("channel", options.channel);
     const qs = params.toString();
     return this.request(`/v1/users${qs ? `?${qs}` : ""}`, "GET");
   }
@@ -223,7 +246,14 @@ export class NotifkitClient {
   // ─── Campaigns ───────────────────────────────────────────────────────────────
 
   /** List campaign labels seen in the delivery log, most recent activity first. */
-  async listCampaigns(options?: { limit?: number }): Promise<{
+  async listCampaigns(options?: {
+    limit?: number;
+    search?: string;
+    channel?: string;
+    since?: string | Date;
+    until?: string | Date;
+    minMessages?: number;
+  }): Promise<{
     campaigns: {
       campaign: string;
       messages: number;
@@ -231,8 +261,26 @@ export class NotifkitClient {
       lastActivityAt: string;
     }[];
   }> {
-    const qs = options?.limit ? `?limit=${options.limit}` : "";
-    return this.request(`/v1/campaigns${qs}`, "GET");
+    const params = new URLSearchParams();
+    if (options?.limit) params.set("limit", String(options.limit));
+    if (options?.search) params.set("search", options.search);
+    if (options?.channel) params.set("channel", options.channel);
+    if (options?.since) {
+      params.set(
+        "since",
+        options.since instanceof Date ? options.since.toISOString() : options.since,
+      );
+    }
+    if (options?.until) {
+      params.set(
+        "until",
+        options.until instanceof Date ? options.until.toISOString() : options.until,
+      );
+    }
+    if (options?.minMessages) params.set("minMessages", String(options.minMessages));
+
+    const qs = params.toString();
+    return this.request(`/v1/campaigns${qs ? `?${qs}` : ""}`, "GET");
   }
 
   /** Delivery and engagement funnel for one campaign. */
@@ -253,11 +301,13 @@ export class NotifkitClient {
     limit?: number;
     channel?: string;
     reason?: string;
+    target?: string;
   }): Promise<{ suppressions: any[] }> {
     const params = new URLSearchParams();
     if (options?.limit) params.set("limit", options.limit.toString());
     if (options?.channel) params.set("channel", options.channel);
     if (options?.reason) params.set("reason", options.reason);
+    if (options?.target) params.set("target", options.target);
     const qs = params.toString();
     return this.request(`/v1/suppressions${qs ? `?${qs}` : ""}`, "GET");
   }

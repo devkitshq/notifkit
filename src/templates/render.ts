@@ -19,10 +19,14 @@ export function interpolate(
   variables: Record<string, unknown>,
   sanitize = true,
 ): string {
-  return tmpl.replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
-    const val = String(variables[k] ?? "");
-    return sanitize ? escapeHtml(val) : val;
-  });
+  return tmpl
+    .replace(/\{\{\{(\w+)\}\}\}/g, (_, k: string) => {
+      return String(variables[k] ?? "");
+    })
+    .replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
+      const val = String(variables[k] ?? "");
+      return sanitize ? escapeHtml(val) : val;
+    });
 }
 
 /**
@@ -62,20 +66,25 @@ function applyEscape(value: string, mode: EscapeMode): string {
 /**
  * Interpolate `{{var}}` placeholders in a single leaf string.
  *
- * Escaping is applied to the SUBSTITUTED VALUE only — never to the surrounding
- * template — so template authors keep their own markup while caller-supplied
- * data cannot break out of it.
+ * `{{{var}}}` (triple braces) interpolates raw unescaped values.
+ * `{{var}}` (double braces) applies contextual escaping to the substituted value.
  */
 function interpolateLeaf(
   tmpl: string,
   variables: Record<string, unknown>,
   mode: EscapeMode,
 ): string {
-  return tmpl.replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
-    const raw = variables[k];
-    if (raw === undefined || raw === null) return "";
-    return applyEscape(typeof raw === "string" ? raw : JSON.stringify(raw), mode);
-  });
+  return tmpl
+    .replace(/\{\{\{(\w+)\}\}\}/g, (_, k: string) => {
+      const raw = variables[k];
+      if (raw === undefined || raw === null) return "";
+      return typeof raw === "string" ? raw : JSON.stringify(raw);
+    })
+    .replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
+      const raw = variables[k];
+      if (raw === undefined || raw === null) return "";
+      return applyEscape(typeof raw === "string" ? raw : JSON.stringify(raw), mode);
+    });
 }
 
 /**

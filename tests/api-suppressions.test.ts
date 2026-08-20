@@ -145,12 +145,18 @@ describe("API compliance handlers", () => {
       expect(mockDb.selects[0]!.limit).toBe(100);
     });
 
-    it("narrows the query when channel and reason are given", async () => {
+    it("narrows the query when channel, reason, and target are given", async () => {
       mockDb.queueSelect([]);
       await handlers.listSuppressions(
         createMockReq(),
         createMockRes(),
-        ctx({ query: new URLSearchParams({ channel: "email", reason: "complained" }) }),
+        ctx({
+          query: new URLSearchParams({
+            channel: "email",
+            reason: "complained",
+            target: "user@example.com",
+          }),
+        }),
       );
 
       // where + orderBy + limit, all against the suppressions table.
@@ -334,6 +340,28 @@ describe("API compliance handlers", () => {
         ctx({ query: new URLSearchParams({ limit: "5000" }) }),
       );
       expect(mockDb.selects[1]!.limit).toBe(100);
+    });
+
+    it("applies search, channel, date range, and minMessages filters", async () => {
+      mockDb.queueSelect([]);
+      const res = createMockRes();
+      await handlers.listCampaigns(
+        createMockReq(),
+        res,
+        ctx({
+          query: new URLSearchParams({
+            search: "spring",
+            channel: "email",
+            since: "2026-05-01T00:00:00.000Z",
+            until: "2026-05-31T23:59:59.000Z",
+            minMessages: "10",
+          }),
+        }),
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(mockDb.selects[0]!.chain).toContain("where");
+      expect(mockDb.selects[0]!.chain).toContain("having");
     });
   });
 

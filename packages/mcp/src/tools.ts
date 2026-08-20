@@ -47,6 +47,79 @@ function handler<T>(fn: (args: T) => Promise<unknown>) {
   };
 }
 
+function escapeHtml(unsafe: string): string {
+  return String(unsafe)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function escapeHeader(unsafe: string): string {
+  return String(unsafe)
+    .replace(/[\r\n]+/g, " ")
+    .trim();
+}
+
+type EscapeMode = "html" | "header" | "text";
+const HTML_FIELDS = new Set(["html", "htmlbody", "bodyhtml", "htmlcontent"]);
+const HEADER_FIELDS = new Set([
+  "subject",
+  "title",
+  "from",
+  "replyto",
+  "cc",
+  "bcc",
+  "preheader",
+  "preview",
+]);
+
+function escapeModeFor(key: string, inherited: EscapeMode): EscapeMode {
+  const k = key.toLowerCase().replace(/[-_]/g, "");
+  if (HTML_FIELDS.has(k)) return "html";
+  if (HEADER_FIELDS.has(k)) return "header";
+  return inherited;
+}
+
+function interpolateValue(
+  tmpl: string,
+  variables: Record<string, unknown>,
+  mode: EscapeMode,
+): string {
+  return tmpl
+    .replace(/\{\{\{(\w+)\}\}\}/g, (_, k: string) => {
+      const raw = variables[k];
+      if (raw === undefined || raw === null) return "";
+      return typeof raw === "string" ? raw : JSON.stringify(raw);
+    })
+    .replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
+      const raw = variables[k];
+      if (raw === undefined || raw === null) return "";
+      const val = typeof raw === "string" ? raw : JSON.stringify(raw);
+      if (mode === "html") return escapeHtml(val);
+      if (mode === "header") return escapeHeader(val);
+      return val;
+    });
+}
+
+function renderContentNode(
+  node: unknown,
+  variables: Record<string, unknown>,
+  mode: EscapeMode,
+): unknown {
+  if (typeof node === "string") return interpolateValue(node, variables, mode);
+  if (Array.isArray(node)) return node.map((item) => renderContentNode(item, variables, mode));
+  if (node && typeof node === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      out[key] = renderContentNode(value, variables, escapeModeFor(key, mode));
+    }
+    return out;
+  }
+  return node;
+}
+
 export function registerTools(server: McpServer, api: NotifkitApi): void {
   // ─── Sending ────────────────────────────────────────────────────────────────
 
@@ -136,12 +209,12 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
     {
       title: "Send a campaign to a list of addresses",
       description:
-        "Send one template to a list of email addresses given directly — the tool creates or updates a " +
-        "user record for each address, then sends, and tags every message with a campaign label so the " +
-        "results can be read back later with get_campaign_stats. Use this when the person supplies the " +
-        "recipients themselves (a pasted list, a spreadsheet column). Use send_notification instead when " +
-        "targeting existing users, a segment, or a topic. Always report the returned campaign label back " +
-        "to the user — it is how they ask about results later. Suppressed addresses (previous " +
+        "Send one template to a list of recipient destinations (email, SMS/phone, push tokens, or webhook URLs) " +
+        "given directly — the tool creates or updates a user record for each address, then sends, and " +
+        "tags every message with a campaign label so the results can be read back later with get_campaign_stats. " +
+        "Supports 'email', 'sms', 'push', and 'webhook' channels. Use this when the person supplies the " +
+        "recipients themselves (a pasted list, a spreadsheet column). Always report the returned campaign label " +
+        "back to the user — it is how they ask about results later. Suppressed addresses (previous " +
         "unsubscribes, complaints, hard bounces) are dropped automatically at send time, so the delivered " +
         "count is normally lower than the list size.",
       inputSchema: {
@@ -154,11 +227,28 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
               "label merges the two into one set of statistics.",
           ),
         template: z.string().min(1).describe("Template id to render."),
+        channel: z
+          .enum(CONTACT_CHANNELS)
+          .optional()
+          .describe(
+            "Channel to send on ('email', 'sms', 'push', or 'webhook'). Defaults to 'email'.",
+          ),
+        recipients: z
+          .array(z.string().min(1))
+          .min(1)
+          .max(10000)
+          .optional()
+          .describe(
+            "Recipient destination addresses: email addresses for email, E.164 phone numbers for sms, device tokens for push, or URLs for webhook.",
+          ),
         emails: z
           .array(z.string().email())
           .min(1)
           .max(10000)
-          .describe("Recipient email addresses."),
+          .optional()
+          .describe(
+            "Recipient email addresses (alias for recipients when sending on email channel).",
+          ),
         data: z
           .record(z.unknown())
           .optional()
@@ -178,31 +268,46 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
       annotations: { title: "Send a campaign", readOnlyHint: false, idempotentHint: false },
     },
     handler(async (args) => {
-      // The API needs a stable user id per address. Deriving it from the
-      // address itself means re-sending to the same list updates those people
-      // rather than creating a second copy of each.
+      const channel = args.channel ?? "email";
+      const rawList = args.recipients ?? args.emails;
+      if (!rawList || rawList.length === 0) {
+        throw new Error("Provide a list of `recipients` (or `emails`) to send to.");
+      }
+
       const seen = new Set<string>();
       const recipients = [];
-      for (const raw of args.emails) {
-        const email = raw.trim().toLowerCase();
-        if (seen.has(email)) continue;
-        seen.add(email);
-        recipients.push({ id: `email:${email}`, email });
+      for (const raw of rawList) {
+        const target = channel === "email" ? raw.trim().toLowerCase() : raw.trim();
+        if (seen.has(target)) continue;
+        seen.add(target);
+
+        let userRecord: Record<string, unknown>;
+        if (channel === "email") {
+          userRecord = { id: `email:${target}`, email: target };
+        } else if (channel === "sms") {
+          userRecord = { id: `phone:${target}`, phone: target };
+        } else if (channel === "push") {
+          userRecord = { id: `push:${target}`, pushToken: target };
+        } else {
+          userRecord = { id: `webhook:${target}` };
+        }
+        recipients.push(userRecord);
       }
 
       const result = await api.post<Record<string, unknown>>("/v1/notify", {
         user: recipients,
         template: args.template,
         campaign: args.campaign,
-        channels: ["email"],
+        channels: [channel],
         ...(args.data ? { data: args.data } : {}),
         ...(args.priority ? { priority: args.priority } : {}),
         ...(args.sendAt ? { sendAt: args.sendAt } : {}),
       });
 
-      const duplicates = args.emails.length - recipients.length;
+      const duplicates = rawList.length - recipients.length;
       return {
         campaign: args.campaign,
+        channel,
         queued: recipients.length,
         ...(duplicates > 0 ? { duplicatesRemoved: duplicates } : {}),
         note:
@@ -220,7 +325,8 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
       description:
         "List recent campaign labels with their size and when they last saw activity, newest first. Call " +
         "this when the user refers to a past send without naming its exact label ('the one I sent " +
-        "yesterday') to find the label to pass to get_campaign_stats.",
+        "yesterday') to find the label to pass to get_campaign_stats. Supports filtering by search query, " +
+        "channel, date range, or minimum message count.",
       inputSchema: {
         limit: z
           .number()
@@ -228,7 +334,35 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
           .min(1)
           .max(100)
           .optional()
-          .describe("How many campaigns to return."),
+          .describe("How many campaigns to return. Defaults to 20."),
+        search: z
+          .string()
+          .optional()
+          .describe("Filter campaigns whose label contains this string (case-insensitive)."),
+        channel: z
+          .enum(CHANNELS)
+          .optional()
+          .describe("Only list campaigns that sent messages on this channel."),
+        since: z
+          .string()
+          .datetime()
+          .optional()
+          .describe(
+            "ISO 8601 timestamp; only return campaigns with activity on or after this date.",
+          ),
+        until: z
+          .string()
+          .datetime()
+          .optional()
+          .describe(
+            "ISO 8601 timestamp; only return campaigns with activity on or before this date.",
+          ),
+        minMessages: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe("Minimum number of distinct messages/recipients for a campaign."),
       },
       annotations: { title: "List campaigns", readOnlyHint: true },
     },
@@ -269,6 +403,10 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
           .enum(["unsubscribed", "complained", "bounced", "manual"])
           .optional()
           .describe("Only suppressions with this reason."),
+        target: z
+          .string()
+          .optional()
+          .describe("Filter suppressions matching this email, phone, or push token."),
       },
       annotations: { title: "List suppressed addresses", readOnlyHint: true },
     },
@@ -343,11 +481,27 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
       title: "List scheduled sends",
       description:
         "List notifications queued for future delivery — those given a `sendAt`, plus any deferred by a " +
-        "recipient's quiet hours. Use this to confirm a scheduled send landed, or to review what is " +
-        "pending before scheduling more.",
+        "recipient's quiet hours. Supports filtering by channel and pagination.",
+      inputSchema: {
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("How many rows to return. Defaults to 50."),
+        cursor: z
+          .string()
+          .optional()
+          .describe("Pagination cursor (taskId) from a previous call's `nextCursor`."),
+        channel: z
+          .enum(CHANNELS)
+          .optional()
+          .describe("Only list scheduled messages intended for this channel."),
+      },
       annotations: { title: "List scheduled sends", readOnlyHint: true },
     },
-    handler(async () => api.get("/v1/notifications/scheduled")),
+    handler(async (args) => api.get("/v1/notifications/scheduled", args)),
   );
 
   server.registerTool(
@@ -357,7 +511,7 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
       description:
         "Query the durable delivery log: what was sent, on which channel, and whether it succeeded. Call " +
         "this to answer 'did it go out?' after a send, or to investigate failures. Filter by template, " +
-        "channel, status, or workflow instance. Results are paginated — pass the returned `nextCursor` " +
+        "channel, status, campaign, or task ID. Results are paginated — pass the returned `nextCursor` " +
         "back as `cursor` for the next page.",
       inputSchema: {
         limit: z
@@ -380,11 +534,66 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
         status: z
           .string()
           .optional()
-          .describe("Delivery status to filter on, e.g. 'sent' or 'failed'."),
+          .describe("Delivery status to filter on, e.g. 'sent', 'delivered', 'failed', 'opened'."),
+        campaign: z
+          .string()
+          .optional()
+          .describe("Only log entries tagged with this campaign label."),
+        taskId: z
+          .string()
+          .optional()
+          .describe("Only log entries for this specific notification task ID."),
+        search: z
+          .string()
+          .optional()
+          .describe(
+            "Search keyword across task IDs, template IDs, provider message IDs, or campaign labels.",
+          ),
       },
       annotations: { title: "Get delivery logs", readOnlyHint: true },
     },
     handler(async (args) => api.get("/v1/notifications/logs", args)),
+  );
+
+  server.registerTool(
+    "get_notification",
+    {
+      title: "Get notification status",
+      description:
+        "Fetch the delivery history and latest state of a specific notification by its task ID. " +
+        "Shows each attempt, provider status, timestamps, and error messages.",
+      inputSchema: {
+        taskId: z
+          .string()
+          .min(1)
+          .describe("Task ID returned from send_notification or send_campaign."),
+      },
+      annotations: { title: "Get notification status", readOnlyHint: true },
+    },
+    handler(async (args) => api.get(`/v1/notifications/${encodeURIComponent(args.taskId)}`)),
+  );
+
+  server.registerTool(
+    "cancel_notification",
+    {
+      title: "Cancel a scheduled notification",
+      description:
+        "Cancel a pending or quiet-hours deferred notification before it is dispatched to the provider. " +
+        "Takes the taskId from send_notification or list_scheduled.",
+      inputSchema: {
+        taskId: z.string().min(1).describe("Task ID of the scheduled notification to cancel."),
+      },
+      annotations: {
+        title: "Cancel a scheduled notification",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    handler(async (args) => {
+      await api.request("DELETE", `/v1/notifications/${encodeURIComponent(args.taskId)}`);
+      return `Cancelled scheduled notification ${args.taskId}.`;
+    }),
   );
 
   // ─── Templates ──────────────────────────────────────────────────────────────
@@ -394,11 +603,25 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
     {
       title: "List templates",
       description:
-        "List every registered template with its channel and content. Call this to find the template id " +
-        "for send_notification, or to check what a template renders before sending with it.",
+        "List registered templates with their channel and content. Supports filtering by channel, " +
+        "topic opt-out category, or limiting result count.",
+      inputSchema: {
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Maximum number of templates to return."),
+        channel: z
+          .enum(CHANNELS)
+          .optional()
+          .describe("Only list templates that render for this channel."),
+        topic: z.string().optional().describe("Only list templates tagged with this topic."),
+      },
       annotations: { title: "List templates", readOnlyHint: true },
     },
-    handler(async () => api.get("/v1/templates")),
+    handler(async (args) => api.get("/v1/templates", args)),
   );
 
   server.registerTool(
@@ -446,6 +669,133 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
     handler(async (args) => api.put("/v1/templates", { templates: [args] })),
   );
 
+  server.registerTool(
+    "delete_template",
+    {
+      title: "Delete a template",
+      description: "Permanently delete a registered template by its ID.",
+      inputSchema: {
+        id: z.string().min(1).describe("Template id to delete."),
+      },
+      annotations: {
+        title: "Delete a template",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    handler(async (args) => {
+      await api.delete(`/v1/templates/${encodeURIComponent(args.id)}`);
+      return `Deleted template ${args.id}.`;
+    }),
+  );
+
+  const previewTemplateHandler = async (args: {
+    id?: string;
+    content?: Record<string, unknown>;
+    data?: Record<string, unknown>;
+    channel?: (typeof CHANNELS)[number];
+  }) => {
+    if (!args.id && !args.content) {
+      throw new Error("Provide either a template `id` or raw `content` to preview.");
+    }
+
+    let rawContent = args.content;
+    let templateChannel = args.channel;
+
+    if (args.id) {
+      const tmpl = await api.get<{
+        id: string;
+        channel?: (typeof CHANNELS)[number];
+        content: Record<string, unknown>;
+      }>(`/v1/templates/${encodeURIComponent(args.id)}`);
+      if (!rawContent) {
+        rawContent = tmpl.content;
+      }
+      if (!templateChannel && tmpl.channel) {
+        templateChannel = tmpl.channel;
+      }
+    }
+
+    const vars = args.data ?? {};
+    const rendered = renderContentNode(rawContent ?? {}, vars, "text");
+
+    const jsonStr = JSON.stringify(rawContent ?? {});
+    const placeholderMatches = Array.from(jsonStr.matchAll(/\{\{\{?(\w+)\}?\}\}/g)).map(
+      (m) => m[1]!,
+    );
+    const placeholders = Array.from(new Set(placeholderMatches));
+    const resolvedVariables = placeholders.filter((p) => p in vars);
+    const unresolvedVariables = placeholders.filter((p) => !(p in vars));
+
+    return {
+      ...(args.id ? { templateId: args.id } : {}),
+      channel: templateChannel ?? "email",
+      rendered,
+      resolvedVariables,
+      unresolvedVariables: unresolvedVariables.length > 0 ? unresolvedVariables : undefined,
+    };
+  };
+
+  server.registerTool(
+    "preview_template",
+    {
+      title: "Preview a template",
+      description:
+        "Dry-run render a template with sample variable data before sending. Pass an existing template " +
+        "`id` or supply raw `content` directly. Interpolates {{variable}} placeholders and returns the " +
+        "rendered output alongside resolved/unresolved variable names.",
+      inputSchema: {
+        id: z.string().optional().describe("Template id to fetch and preview."),
+        content: z
+          .record(z.unknown())
+          .optional()
+          .describe(
+            "Raw template content object (e.g. { subject, body }) to render without saving.",
+          ),
+        data: z
+          .record(z.unknown())
+          .optional()
+          .describe("Sample variable data to interpolate into the template's placeholders."),
+        channel: z
+          .enum(CHANNELS)
+          .optional()
+          .describe(
+            "Target channel (e.g. 'email', 'sms', 'push'). Defaults to the template's channel.",
+          ),
+      },
+      annotations: { title: "Preview a template", readOnlyHint: true },
+    },
+    handler(previewTemplateHandler),
+  );
+
+  server.registerTool(
+    "render_template",
+    {
+      title: "Render template content",
+      description:
+        "Render template content with variable data without dispatching any notifications. " +
+        "Accepts either an existing template `id` or raw `content` object.",
+      inputSchema: {
+        id: z.string().optional().describe("Template id to fetch and render."),
+        content: z
+          .record(z.unknown())
+          .optional()
+          .describe("Raw template content object to render."),
+        data: z
+          .record(z.unknown())
+          .optional()
+          .describe("Variables to interpolate into placeholders."),
+        channel: z
+          .enum(CHANNELS)
+          .optional()
+          .describe("Target channel. Defaults to template channel."),
+      },
+      annotations: { title: "Render template content", readOnlyHint: true },
+    },
+    handler(previewTemplateHandler),
+  );
+
   // ─── Users ──────────────────────────────────────────────────────────────────
 
   server.registerTool(
@@ -453,14 +803,35 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
     {
       title: "List users",
       description:
-        "Page through the project's users. Results are paginated — pass the returned `nextCursor` back as " +
-        "`cursor`. For one known user prefer get_user, which also returns contacts and preferences.",
+        "Page through the project's users with comprehensive filtering. Supports filtering by search " +
+        "keyword (external ID or email), segment tag, language, timezone, or channel contact. " +
+        "Results are paginated — pass the returned `nextCursor` back as `cursor`. For one known user " +
+        "prefer get_user, which also returns contacts and preferences.",
       inputSchema: {
         limit: z.number().int().min(1).max(200).optional().describe("Users per page."),
         cursor: z
           .string()
           .optional()
           .describe("Pagination cursor from a previous call's `nextCursor`."),
+        search: z
+          .string()
+          .optional()
+          .describe("Filter users whose external ID or email contains this search keyword."),
+        segment: z.string().optional().describe("Only list users assigned to this segment tag."),
+        language: z
+          .string()
+          .optional()
+          .describe("Filter users by language tag, e.g. 'en', 'es', 'fr'."),
+        timezone: z
+          .string()
+          .optional()
+          .describe("Filter users by IANA timezone, e.g. 'Europe/London', 'America/New_York'."),
+        channel: z
+          .enum(CONTACT_CHANNELS)
+          .optional()
+          .describe(
+            "Only list users who have a registered contact for this channel (email, sms, push, webhook).",
+          ),
       },
       annotations: { title: "List users", readOnlyHint: true },
     },
@@ -540,6 +911,98 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
   );
 
   server.registerTool(
+    "update_user",
+    {
+      title: "Update a user",
+      description:
+        "Partially update an existing user profile (e.g. language, timezone, segment tags, preferences, or append new contacts) without replacing unspecified fields.",
+      inputSchema: {
+        id: z.string().min(1).describe("User id."),
+        email: z
+          .union([z.string().min(1), z.array(z.string().min(1))])
+          .optional()
+          .describe("One email address or several."),
+        phone: z
+          .union([z.string().min(1), z.array(z.string().min(1))])
+          .optional()
+          .describe("One phone number or several, in E.164 form."),
+        pushToken: z
+          .union([z.string().min(1), z.array(z.string().min(1))])
+          .optional()
+          .describe("One device push token or several."),
+        segments: z
+          .array(z.string().min(1))
+          .optional()
+          .describe("Segment tags to assign to this user."),
+        language: z
+          .string()
+          .optional()
+          .describe("BCP 47 language tag used to pick localised content."),
+        timezone: z
+          .string()
+          .optional()
+          .describe("IANA timezone, e.g. 'Europe/London'. Drives quiet hours."),
+        preferences: z
+          .object({
+            channels: z
+              .record(z.boolean())
+              .optional()
+              .describe("Per-channel opt-in map, e.g. { email: true, sms: false }."),
+            topics: z.record(z.boolean()).optional().describe("Per-topic opt-in map."),
+            quietHours: z
+              .array(
+                z.object({
+                  start: z.string().describe("HH:MM, 24h, UTC."),
+                  end: z.string().describe("HH:MM, 24h, UTC."),
+                }),
+              )
+              .optional()
+              .describe("Windows during which non-critical sends are deferred."),
+          })
+          .optional()
+          .describe("Consent and quiet-hours settings."),
+      },
+      annotations: { title: "Update a user", readOnlyHint: false, idempotentHint: true },
+    },
+    handler(async ({ id, ...body }) => api.patch(`/v1/users/${encodeURIComponent(id)}`, body)),
+  );
+
+  server.registerTool(
+    "delete_user",
+    {
+      title: "Delete a user",
+      description:
+        "Permanently delete a user profile and all associated contacts and preferences by user id.",
+      inputSchema: {
+        id: z.string().min(1).describe("User id to delete."),
+      },
+      annotations: {
+        title: "Delete a user",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    handler(async (args) => {
+      await api.delete(`/v1/users/${encodeURIComponent(args.id)}`);
+      return `Deleted user ${args.id}.`;
+    }),
+  );
+
+  server.registerTool(
+    "get_user_contacts",
+    {
+      title: "Get user contacts",
+      description: "Fetch all registered contact addresses and tokens for a specific user.",
+      inputSchema: {
+        userId: z.string().min(1).describe("User id."),
+      },
+      annotations: { title: "Get user contacts", readOnlyHint: true },
+    },
+    handler(async (args) => api.get(`/v1/users/${encodeURIComponent(args.userId)}/contacts`)),
+  );
+
+  server.registerTool(
     "add_user_contact",
     {
       title: "Add a contact to a user",
@@ -556,6 +1019,75 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
     },
     handler(async ({ userId, ...body }) =>
       api.post(`/v1/users/${encodeURIComponent(userId)}/contacts`, body),
+    ),
+  );
+
+  server.registerTool(
+    "delete_user_contact",
+    {
+      title: "Delete a user contact",
+      description:
+        "Remove one contact destination (email, phone, push token, or webhook URL) from a user profile.",
+      inputSchema: {
+        userId: z.string().min(1).describe("User id."),
+        channel: z.enum(CONTACT_CHANNELS).describe("Channel of the contact to delete."),
+        target: z.string().min(1).describe("The address/number/token/URL to remove."),
+      },
+      annotations: {
+        title: "Delete a user contact",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    handler(async (args) => {
+      await api.delete(
+        `/v1/users/${encodeURIComponent(args.userId)}/contacts/${encodeURIComponent(args.channel)}/${encodeURIComponent(args.target)}`,
+      );
+      return `Deleted ${args.channel} contact '${args.target}' for user ${args.userId}.`;
+    }),
+  );
+
+  server.registerTool(
+    "get_user_preferences",
+    {
+      title: "Get user preferences",
+      description:
+        "Fetch notification channel/topic opt-in preferences and quiet hours for a user.",
+      inputSchema: {
+        userId: z.string().min(1).describe("User id."),
+      },
+      annotations: { title: "Get user preferences", readOnlyHint: true },
+    },
+    handler(async (args) => api.get(`/v1/users/${encodeURIComponent(args.userId)}/preferences`)),
+  );
+
+  server.registerTool(
+    "update_user_preferences",
+    {
+      title: "Update user preferences",
+      description: "Update notification channel/topic opt-ins and quiet hours settings for a user.",
+      inputSchema: {
+        userId: z.string().min(1).describe("User id."),
+        channels: z
+          .record(z.boolean())
+          .optional()
+          .describe("Per-channel opt-in map, e.g. { email: true, sms: false }."),
+        topics: z.record(z.boolean()).optional().describe("Per-topic opt-in map."),
+        quietHours: z
+          .array(
+            z.object({
+              start: z.string().describe("HH:MM, 24h, UTC."),
+              end: z.string().describe("HH:MM, 24h, UTC."),
+            }),
+          )
+          .optional()
+          .describe("Windows during which non-critical sends are deferred."),
+      },
+      annotations: { title: "Update user preferences", readOnlyHint: false, idempotentHint: true },
+    },
+    handler(async ({ userId, ...preferences }) =>
+      api.patch(`/v1/users/${encodeURIComponent(userId)}/preferences`, preferences),
     ),
   );
 
@@ -613,10 +1145,23 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
       title: "List workflows",
       description:
         "List registered workflow definitions and their steps. Call this to find the name to pass to " +
-        "trigger_workflow, or to check a sequence before triggering it.",
+        "trigger_workflow, or to check a sequence before triggering it. Supports filtering by search keyword.",
+      inputSchema: {
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Maximum number of workflow definitions to return."),
+        search: z
+          .string()
+          .optional()
+          .describe("Filter workflow definitions whose name contains this search keyword."),
+      },
       annotations: { title: "List workflows", readOnlyHint: true },
     },
-    handler(async () => api.get("/v1/workflows")),
+    handler(async (args) => api.get("/v1/workflows", args)),
   );
 
   server.registerTool(
@@ -743,5 +1288,164 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
       },
     },
     handler(async (args) => api.post("/v1/dlq/replay", { id: args.id })),
+  );
+
+  server.registerTool(
+    "delete_dead_letter",
+    {
+      title: "Delete a dead-lettered message",
+      description: "Permanently delete/dismiss a dead-letter message from the DLQ by its entry ID.",
+      inputSchema: {
+        id: z.string().min(1).describe("Dead-letter entry id from get_dead_letters."),
+      },
+      annotations: {
+        title: "Delete a dead-letter message",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    handler(async (args) => {
+      await api.delete(`/v1/dlq/${encodeURIComponent(args.id)}`);
+      return `Deleted dead letter message ${args.id}.`;
+    }),
+  );
+
+  server.registerTool(
+    "get_system_metrics",
+    {
+      title: "Get system stream metrics",
+      description:
+        "Report queue depths across all Redis streams and delivery stats for the project.",
+      annotations: { title: "Get system stream metrics", readOnlyHint: true },
+    },
+    handler(async () => api.get("/v1/system/metrics")),
+  );
+
+  // ─── Projects ───────────────────────────────────────────────────────────────
+
+  server.registerTool(
+    "list_projects",
+    {
+      title: "List projects",
+      description: "List all projects configured in this Notifkit deployment.",
+      annotations: { title: "List projects", readOnlyHint: true },
+    },
+    handler(async () => api.get("/v1/projects")),
+  );
+
+  server.registerTool(
+    "create_project",
+    {
+      title: "Create a project",
+      description:
+        "Create a new tenant project with a name and generate its initial admin API key.",
+      inputSchema: {
+        name: z.string().min(1).describe("Project name."),
+      },
+      annotations: { title: "Create a project", readOnlyHint: false },
+    },
+    handler(async (args) => api.post("/v1/projects", { name: args.name })),
+  );
+
+  server.registerTool(
+    "update_project",
+    {
+      title: "Update a project",
+      description: "Update project settings including rate limits and throttle limits.",
+      inputSchema: {
+        id: z.string().min(1).describe("Project id."),
+        rateLimitRpm: z.number().nullable().optional().describe("Requests per minute limit."),
+        throttleLimit: z
+          .number()
+          .nullable()
+          .optional()
+          .describe("Max notifications per throttle window."),
+        throttleWindowHours: z.number().nullable().optional().describe("Throttle window in hours."),
+      },
+      annotations: { title: "Update a project", readOnlyHint: false, idempotentHint: true },
+    },
+    handler(async ({ id, ...settings }) =>
+      api.patch(`/v1/projects/${encodeURIComponent(id)}`, settings),
+    ),
+  );
+
+  server.registerTool(
+    "delete_project",
+    {
+      title: "Delete a project",
+      description: "Permanently delete a project and its associated resources.",
+      inputSchema: {
+        id: z.string().min(1).describe("Project id to delete."),
+      },
+      annotations: {
+        title: "Delete a project",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    handler(async (args) => {
+      await api.delete(`/v1/projects/${encodeURIComponent(args.id)}`);
+      return `Deleted project ${args.id}.`;
+    }),
+  );
+
+  server.registerTool(
+    "list_project_keys",
+    {
+      title: "List project API keys",
+      description: "List all API keys created for a specific project.",
+      inputSchema: {
+        projectId: z.string().min(1).describe("Project id."),
+      },
+      annotations: { title: "List project API keys", readOnlyHint: true },
+    },
+    handler(async (args) => api.get(`/v1/projects/${encodeURIComponent(args.projectId)}/keys`)),
+  );
+
+  server.registerTool(
+    "create_project_key",
+    {
+      title: "Create a project API key",
+      description: "Generate a new API key with 'admin' or 'read_only' role for a project.",
+      inputSchema: {
+        projectId: z.string().min(1).describe("Project id."),
+        role: z
+          .enum(["admin", "read_only"])
+          .optional()
+          .describe("Role for this API key. Defaults to 'admin'."),
+      },
+      annotations: { title: "Create a project API key", readOnlyHint: false },
+    },
+    handler(async (args) =>
+      api.post(`/v1/projects/${encodeURIComponent(args.projectId)}/keys`, {
+        role: args.role ?? "admin",
+      }),
+    ),
+  );
+
+  server.registerTool(
+    "delete_project_key",
+    {
+      title: "Delete a project API key",
+      description: "Revoke and delete an API key for a project.",
+      inputSchema: {
+        projectId: z.string().min(1).describe("Project id."),
+        keyId: z.string().min(1).describe("Key id to revoke."),
+      },
+      annotations: {
+        title: "Delete a project API key",
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+      },
+    },
+    handler(async (args) => {
+      await api.delete(
+        `/v1/projects/${encodeURIComponent(args.projectId)}/keys/${encodeURIComponent(args.keyId)}`,
+      );
+      return `Deleted API key ${args.keyId} for project ${args.projectId}.`;
+    }),
   );
 }

@@ -324,6 +324,9 @@ describe("NotifkitClient", () => {
         workflowInstanceId: "wf_1",
         channel: "email",
         status: "delivered",
+        taskId: "task_1",
+        campaign: "camp_1",
+        search: "keyword",
       });
 
       const { url } = callArgs(fetchMock);
@@ -333,6 +336,27 @@ describe("NotifkitClient", () => {
       expect(url).toContain("workflowInstanceId=wf_1");
       expect(url).toContain("channel=email");
       expect(url).toContain("status=delivered");
+      expect(url).toContain("taskId=task_1");
+      expect(url).toContain("campaign=camp_1");
+      expect(url).toContain("search=keyword");
+    });
+
+    it("getNotificationStatus GETs /v1/notifications/:taskId", async () => {
+      const fetchMock = stubFetch({ status: "delivered", logs: [] });
+      await client().getNotificationStatus("task-123");
+
+      const { url, init } = callArgs(fetchMock);
+      expect(url).toBe("https://api.test/v1/notifications/task-123");
+      expect(init.method).toBe("GET");
+    });
+
+    it("cancelNotification DELETEs /v1/notifications/:taskId", async () => {
+      const fetchMock = stubFetch({ success: true });
+      await client().cancelNotification("task-123");
+
+      const { url, init } = callArgs(fetchMock);
+      expect(url).toBe("https://api.test/v1/notifications/task-123");
+      expect(init.method).toBe("DELETE");
     });
   });
 
@@ -535,6 +559,27 @@ describe("NotifkitClient", () => {
       expect(callArgs(fetchMock).url).toBe("https://api.test/v1/campaigns?limit=15");
     });
 
+    it("listCampaigns serializes search, channel, date ranges, and minMessages filters", async () => {
+      const fetchMock = stubFetch({ campaigns: [] });
+      await client().listCampaigns({
+        limit: 10,
+        search: "invoice",
+        channel: "email",
+        since: "2026-08-01T00:00:00.000Z",
+        until: "2026-08-20T00:00:00.000Z",
+        minMessages: 5,
+      });
+
+      const url = new URL(callArgs(fetchMock).url);
+      expect(url.pathname).toBe("/v1/campaigns");
+      expect(url.searchParams.get("limit")).toBe("10");
+      expect(url.searchParams.get("search")).toBe("invoice");
+      expect(url.searchParams.get("channel")).toBe("email");
+      expect(url.searchParams.get("since")).toBe("2026-08-01T00:00:00.000Z");
+      expect(url.searchParams.get("until")).toBe("2026-08-20T00:00:00.000Z");
+      expect(url.searchParams.get("minMessages")).toBe("5");
+    });
+
     it("getCampaignStats GETs /v1/campaigns/:campaign/stats and encodes special characters", async () => {
       const fetchMock = stubFetch({ campaign: "spring promo / sale", totals: {}, byChannel: {} });
       await client().getCampaignStats("spring promo / sale");
@@ -555,12 +600,18 @@ describe("NotifkitClient", () => {
 
     it("listSuppressions appends all query parameters when provided", async () => {
       const fetchMock = stubFetch({ suppressions: [] });
-      await client().listSuppressions({ limit: 20, channel: "email", reason: "unsubscribed" });
+      await client().listSuppressions({
+        limit: 20,
+        channel: "email",
+        reason: "unsubscribed",
+        target: "user@example.com",
+      });
 
       const { url } = callArgs(fetchMock);
       expect(url).toContain("limit=20");
       expect(url).toContain("channel=email");
       expect(url).toContain("reason=unsubscribed");
+      expect(url).toContain("target=user%40example.com");
     });
 
     it("createSuppression POSTs to /v1/suppressions", async () => {
