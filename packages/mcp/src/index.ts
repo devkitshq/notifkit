@@ -23,7 +23,7 @@ export function createServer(options: {
   projectId?: string;
 }): McpServer {
   const server = new McpServer(
-    { name: "notifkit", version: "0.0.1" },
+    { name: "notifkit", version: "0.1.1" },
     {
       instructions:
         "Tools for notifkit, a self-hosted notification service.\n\n" +

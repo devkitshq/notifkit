@@ -1,6 +1,6 @@
 {
   "name": "@notifkit/mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Model Context Protocol server for notifkit — drive sends, templates, users, and workflows from a terminal agent.",
   "type": "module",
   "main": "dist/index.js",
