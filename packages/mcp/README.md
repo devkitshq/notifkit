@@ -14,22 +14,23 @@ Or skip the install and let your client run it with `npx -y @notifkit/mcp`.
 
 ## Configure
 
-Three environment variables:
+Three environment variables, all of them required:
 
-| Variable              | Required               | Notes                                      |
-| --------------------- | ---------------------- | ------------------------------------------ |
-| `NOTIFKIT_API_KEY`    | yes                    | A project API key, or your `ADMIN_API_KEY` |
-| `NOTIFKIT_URL`        | no                     | Defaults to `http://localhost:3000`        |
-| `NOTIFKIT_PROJECT_ID` | only with an admin key | Which project the admin key should act on  |
+| Variable              | Required | Notes                                                                                                                               |
+| --------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `NOTIFKIT_API_KEY`    | yes      | Your `ADMIN_API_KEY`, or a project API key. The server exits without it                                                             |
+| `NOTIFKIT_URL`        | yes      | Base URL of your notifkit API. Falls back to `http://localhost:3000`, so set it unless the API is there                             |
+| `NOTIFKIT_PROJECT_ID` | yes      | Which project the admin key acts on, sent as `x-project-id`. Without it an admin key gets `400` on everything except `/v1/projects` |
 
-A project-scoped key already carries its project, so it needs no `NOTIFKIT_PROJECT_ID`. Mint one with `POST /v1/projects/:id/keys`. Prefer that over the admin key — it is scoped to a single project and can be revoked on its own.
+The examples below use your `ADMIN_API_KEY`, which carries no project of its own — it needs `NOTIFKIT_PROJECT_ID` to know which project to act on. A project-scoped key already carries its project, so if you swap one in, drop the `NOTIFKIT_PROJECT_ID` line. Prefer that where you can: it is scoped to a single project and can be revoked without rotating the admin key. Mint one with `create_project_key` or `POST /v1/projects/:id/keys`.
 
 ### Claude Code
 
 ```sh
 claude mcp add notifkit \
   --env NOTIFKIT_URL=http://localhost:3000 \
-  --env NOTIFKIT_API_KEY=nk_your_project_key \
+  --env NOTIFKIT_API_KEY=your_admin_api_key \
+  --env NOTIFKIT_PROJECT_ID=6f1c9c1e-3b7a-4d2e-9f04-2c8a5b1d7e33 \
   -- npx -y @notifkit/mcp
 ```
 
@@ -45,7 +46,8 @@ In `claude_desktop_config.json`:
       "args": ["-y", "@notifkit/mcp"],
       "env": {
         "NOTIFKIT_URL": "http://localhost:3000",
-        "NOTIFKIT_API_KEY": "nk_your_project_key"
+        "NOTIFKIT_API_KEY": "your_admin_api_key",
+        "NOTIFKIT_PROJECT_ID": "6f1c9c1e-3b7a-4d2e-9f04-2c8a5b1d7e33"
       }
     }
   }
@@ -62,38 +64,51 @@ The thing this exists for:
 > _(next day)_ **You:** "How did the spring sale do?"
 > **Agent:** → `list_campaigns` → `get_campaign_stats` → "194 delivered, 4 bounced, 2 suppressed. 71 opened (37%), 12 clicked (6%)."
 
-`send_campaign` takes raw email addresses — no user records needed up front. It creates one per address, keyed off the address itself, so re-sending to the same list updates those people rather than duplicating them. Duplicates and case differences within a list are collapsed before sending.
+`send_campaign` takes raw email addresses, phone numbers, or push tokens — no user records needed up front. It creates one per recipient, keyed off the address itself, so re-sending to the same list updates those people rather than duplicating them. Duplicates and case differences within a list are collapsed before sending.
+
+## The `raw_email` Pattern (One-off Sends from Terminal)
+
+Instead of hardcoding a new template in backend code for every custom message, register a single generic pass-through template once:
+
+```json
+{
+  "id": "raw_email",
+  "channel": "email",
+  "content": {
+    "subject": "{{subject}}",
+    "html": "{{{body}}}"
+  }
+}
+```
+
+Because triple braces `{{{body}}}` preserve unescaped HTML, your agent in Claude Code or Cursor can dispatch arbitrary one-off formatted emails directly from terminal prompts:
+
+> **You:** "Send an email to alex@acme.corp saying their invoice is ready at https://app.acme.corp/inv/9481"
+> **Agent:** → `send_campaign({ template: "raw_email", emails: ["alex@acme.corp"], data: { subject: "Invoice #9481 Ready", body: "<p>Download: <a href='...'>Invoice #9481</a></p>" } })`
 
 ## Tools
 
-**Campaigns**
+**Campaigns & Sending**
 
-| Tool                 | What it does                                                                                 |
-| -------------------- | -------------------------------------------------------------------------------------------- |
-| `send_campaign`      | Send a template to a list of email addresses, tagged with a label you can report on later    |
-| `list_campaigns`     | Recent campaign labels with size and last activity — how "the one from yesterday" gets found |
-| `get_campaign_stats` | Sent, delivered, failed, opened, clicked, bounced, complained, unsubscribed, with rates      |
+| Tool                  | What it does                                                                                              |
+| --------------------- | --------------------------------------------------------------------------------------------------------- |
+| `send_campaign`       | Send a template to a list of recipients across `email`, `sms`, `push`, or `webhook` with campaign tagging |
+| `send_notification`   | Send to existing users, a segment, or a topic with `sendAt` scheduling and priority lanes                 |
+| `list_campaigns`      | Recent campaign labels with size and last activity (supports `search`, `channel`, date range)             |
+| `get_campaign_stats`  | Sent, delivered, failed, opened, clicked, bounced, complained, unsubscribed, with rates                   |
+| `list_segments`       | Every segment tag in use — the valid audiences to broadcast to                                            |
+| `list_scheduled`      | Sends queued for the future, including quiet-hours deferrals                                              |
+| `get_delivery_logs`   | Per-message detail with filters for template, channel, status, campaign, or user search                   |
+| `get_notification`    | Status and delivery attempts for a specific task                                                          |
+| `cancel_notification` | Cancel a pending scheduled or quiet-hours deferred notification                                           |
 
-**Sending**
+**Templates** — `list_templates`, `get_template`, `upsert_template`, `delete_template`, `preview_template`, `render_template`
 
-| Tool                | What it does                                                                                                    |
-| ------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `send_notification` | Send to existing users, a segment, or a topic. Takes `sendAt` to schedule and `campaign` to make it reportable. |
-| `list_segments`     | Every segment tag in use — the valid audiences to broadcast to                                                  |
-| `list_scheduled`    | Sends queued for the future, including quiet-hours deferrals                                                    |
-| `get_delivery_logs` | Per-message detail, when the campaign totals are not enough                                                     |
+**Users** — `list_users` (with `search`, `segment`, `language`, `timezone`, `channel` filters), `get_user`, `upsert_user`, `update_user`, `delete_user`, `get_user_contacts`, `add_user_contact`, `delete_user_contact`, `get_user_preferences`, `update_user_preferences`
 
-**Suppressions** — `list_suppressions`, `suppress_address`, `unsuppress_address`
+**Workflows** — `create_workflow`, `list_workflows` (with `search`), `trigger_workflow`, `get_workflow_run`, `cancel_workflow_run`, `ingest_event`
 
-**Templates** — `list_templates`, `get_template`, `upsert_template`
-
-**Users** — `list_users`, `get_user`, `upsert_user`, `add_user_contact`
-
-**Workflows** — `create_workflow`, `list_workflows`, `trigger_workflow`, `get_workflow_run`, `cancel_workflow_run`, `ingest_event`
-
-**Operations** — `get_system_health`, `get_dead_letters`, `replay_dead_letter`
-
-Project and API-key management is deliberately not exposed: minting and revoking credentials is not something an agent should do on your behalf. Use the HTTP API for that.
+**Operations** — `get_system_health`, `get_system_metrics`, `get_dead_letters`, `replay_dead_letter`, `delete_dead_letter`, `list_projects`, `create_project`, `update_project`, `delete_project`, `list_project_keys`, `create_project_key`, `delete_project_key`
 
 ## Reading the numbers
 
