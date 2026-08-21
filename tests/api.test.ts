@@ -435,7 +435,7 @@ describe("API Handlers", () => {
         query: new URLSearchParams("limit=10"),
       } as any);
       expect(res.statusCode).toBe(200);
-      expect(deps.userRepo.list).toHaveBeenCalledWith("proj_1", 10, undefined);
+      expect(deps.userRepo.list).toHaveBeenCalledWith("proj_1", 10, undefined, undefined);
     });
 
     it("listProjects", async () => {
