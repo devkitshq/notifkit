@@ -1,6 +1,6 @@
 {
   "name": "notifkit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Self-hosted notification infrastructure. One call delivers to email, SMS, push, and webhook — routed by preference, quiet hours, and consent.",
   "license": "MIT",
   "author": "devkitshq",
