@@ -6,6 +6,8 @@
 
 Self-hosted notification infrastructure for product notifications. One API call handles email, SMS, push, and webhooks — with preferences, quiet hours, retries, fallback, scheduling, workflows, and delivery logs built in.
 
+[![npm version](https://img.shields.io/npm/v/notifkit.svg?style=flat-square&color=6366f1)](https://www.npmjs.com/package/notifkit) [![npm downloads](https://img.shields.io/npm/dm/notifkit.svg?style=flat-square&color=6366f1)](https://www.npmjs.com/package/notifkit) [![Coverage](https://img.shields.io/badge/coverage-85%25-brightgreen.svg?style=flat-square)](https://github.com/devkitshq/notifkit) [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178c6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Node.js](https://img.shields.io/badge/node-%3E%3D22.0.0-339933.svg?style=flat-square)](https://nodejs.org) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
+
 [Documentation](https://notifkit.dev/docs/) · [Quickstart](https://notifkit.dev/docs/quickstart.html) · [Examples](https://notifkit.dev/docs/examples.html) · [notifkit.dev](https://notifkit.dev)
 
 </div>
@@ -52,15 +54,49 @@ await notifkit.notify({
 notifkit is both an **orchestration engine** and a **typed SDK**.
 
 ```text
-Your App / AI Agent ──(HTTP POST /v1/notify)──► Notifkit API
-                                                     │
-                                            Redis Streams & Postgres
-                                                     │
-                                                     ▼
-                                         Background Workers Pool
-                                                     │
-                                                     ▼
-                                    Transports (Resend, FCM, Twilio...)
+  ┌──────────────────────────────────────────────────────────┐
+  │               Your Application / AI Agent                │
+  │           (Typed SDK / REST API / MCP Server)            │
+  └────────────────────────────┬─────────────────────────────┘
+                               │ HTTP POST /v1/notify
+                               ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │                   Notifkit API Server                    │
+  │       • Schema Validation   • Auth & Multi-Tenancy       │
+  │       • Idempotency Gate    • Priority Queue Ingestion   │
+  └──────────────┬────────────────────────────┬──────────────┘
+                 │                            │
+                 ▼                            ▼
+  ┌─────────────────────────────┐  ┌─────────────────────────┐
+  │    PostgreSQL (Storage)     │  │  Redis (Streams & ZSET) │
+  │  • Users & Preferences      │  │  • Priority Queues      │
+  │  • Templates & Workflows    │  │  • Scheduled Sends      │
+  │  • Delivery Logs & DLQ      │  │  • Sliding Rate Limits  │
+  └──────────────▲──────────────┘  └──────────┬──────────────┘
+                 │                            │
+                 │   ┌────────────────────────┘
+                 │   ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │               Background Workers Pipeline                │
+  │                                                          │
+  │  ┌───────────┐    ┌─────────────┐    ┌────────────────┐  │
+  │  │ Enricher  │───►│   Engine    │───►│    Delivery    │  │
+  │  │ (Resolve) │    │(Quiet Hours)│    │(Rate Limits/CB)│  │
+  │  └───────────┘    └──────┬──────┘    └───────┬────────┘  │
+  │                          │                   │           │
+  │                   ┌──────▼──────┐            │           │
+  │                   │  Scheduler  │────────────┘           │
+  │                   │ (sendAt/QH) │                        │
+  │                   └─────────────┘                        │
+  └──────────────────────────────────┬───────────────────────┘
+                                     │ Dispatch
+                                     ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │                   Provider Transports                    │
+  │                                                          │
+  │  Email: Resend, SES, Postmark    Push: Firebase (FCM)    │
+  │  SMS: Twilio, MessageBird        Webhooks: Custom HTTP   │
+  └──────────────────────────────────────────────────────────┘
 ```
 
 - **`NotifkitServer`**: Runs the HTTP REST API router (`/v1/notify`, `/health`, `/metrics`) and the background worker pipelines (enricher, decision engine, scheduler, delivery).
@@ -73,13 +109,35 @@ Your App / AI Agent ──(HTTP POST /v1/notify)──► Notifkit API
 
 ---
 
-## Built for production, not a demo
+## Battle-tested for production
 
 > **Battle-tested in production:** notifkit powers production notification pipelines handling **thousands of emails, push notifications, and OTPs every day.**
 >
 > It is the infrastructure we built because we needed it ourselves — rather than spending months reinventing distributed notification plumbing or paying SaaS tolls per alert.
 
 **Your servers. Your providers. Your data. Zero notification SaaS markups.**
+
+### Reliability & Chaos Engineering
+
+Because notification delivery is mission-critical, every pipeline component is tested against extreme failure conditions:
+
+```text
+ ┌────────────────┐     Kill Worker     ┌────────────────────────┐
+ │ Redis Streams  │ ──( SIGKILL )────►  │ Auto-Claim & Replay    │ ──► Zero Lost Messages
+ └────────────────┘                     └────────────────────────┘
+ ┌────────────────┐     Drop DB/Redis   ┌────────────────────────┐
+ │ Connection Loss│ ──( Disconnect )──► │ Auto-Reconnect / Retry │ ──► In-Flight State Intact
+ └────────────────┘                     └────────────────────────┘
+ ┌────────────────┐     High Load       ┌────────────────────────┐
+ │ 10k+ Messages  │ ──( Burst )───────► │ Concurrency & Limits   │ ──► Flat Memory, No Leaks
+ └────────────────┘                     └────────────────────────┘
+```
+
+- **Chaos Monkey Testing (`tests/chaos/crash.test.ts`)**: Background worker processes are randomly terminated with `SIGKILL` during active, high-throughput message streaming. Consumer group Pending Entries List (PEL) re-claims guarantee **zero lost messages** and seamless failover.
+- **Infrastructure Recovery Testing (`tests/chaos/recovery.test.ts`)**: PostgreSQL and Redis connections are forcefully severed and restored under live traffic. Verifies automatic client reconnection, worker backpressure, and durable state resumption.
+- **High-Throughput Load Testing (`tests/chaos/load.test.ts`)**: Stressed with bursts of **10,000+ notifications** across parallel worker pools, verifying queue drain velocity, sliding-window rate limiters, and flat memory profiles without leaks.
+- **Race Conditions & Concurrency (`tests/race-conditions.test.ts`, `tests/idempotency.test.ts`)**: Hardened against concurrent duplicate dispatches, overlapping quiet-hour boundary evaluations, atomic user updates, and 24-hour idempotency key deduplication.
+- **100% Real Ephemeral Containers**: Unit, integration, and chaos test suites execute against real PostgreSQL and Redis containers via [Testcontainers](https://testcontainers.com), eliminating mocks for core storage and streaming primitives.
 
 ---
 
