@@ -53,50 +53,40 @@ await notifkit.notify({
 
 notifkit is both an **orchestration engine** and a **typed SDK**.
 
-```text
-  ┌──────────────────────────────────────────────────────────┐
-  │               Your Application / AI Agent                │
-  │           (Typed SDK / REST API / MCP Server)            │
-  └────────────────────────────┬─────────────────────────────┘
-                               │ HTTP POST /v1/notify
-                               ▼
-  ┌──────────────────────────────────────────────────────────┐
-  │                   Notifkit API Server                    │
-  │       • Schema Validation   • Auth & Multi-Tenancy       │
-  │       • Idempotency Gate    • Priority Queue Ingestion   │
-  └──────────────┬────────────────────────────┬──────────────┘
-                 │                            │
-                 ▼                            ▼
-  ┌─────────────────────────────┐  ┌─────────────────────────┐
-  │    PostgreSQL (Storage)     │  │  Redis (Streams & ZSET) │
-  │  • Users & Preferences      │  │  • Priority Queues      │
-  │  • Templates & Workflows    │  │  • Scheduled Sends      │
-  │  • Delivery Logs & DLQ      │  │  • Sliding Rate Limits  │
-  └──────────────▲──────────────┘  └──────────┬──────────────┘
-                 │                            │
-                 │   ┌────────────────────────┘
-                 │   ▼
-  ┌──────────────────────────────────────────────────────────┐
-  │               Background Workers Pipeline                │
-  │                                                          │
-  │  ┌───────────┐    ┌─────────────┐    ┌────────────────┐  │
-  │  │ Enricher  │───►│   Engine    │───►│    Delivery    │  │
-  │  │ (Resolve) │    │(Quiet Hours)│    │(Rate Limits/CB)│  │
-  │  └───────────┘    └──────┬──────┘    └───────┬────────┘  │
-  │                          │                   │           │
-  │                   ┌──────▼──────┐            │           │
-  │                   │  Scheduler  │────────────┘           │
-  │                   │ (sendAt/QH) │                        │
-  │                   └─────────────┘                        │
-  └──────────────────────────────────┬───────────────────────┘
-                                     │ Dispatch
-                                     ▼
-  ┌──────────────────────────────────────────────────────────┐
-  │                   Provider Transports                    │
-  │                                                          │
-  │  Email: Resend, SES, Postmark    Push: Firebase (FCM)    │
-  │  SMS: Twilio, MessageBird        Webhooks: Custom HTTP   │
-  └──────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    App["Your Application / AI Agent<br/>Typed SDK · REST API · MCP Server"]
+
+    App -->|"HTTP POST /v1/notify"| API
+
+    API["Notifkit API Server<br/>Schema Validation · Auth · Multi-Tenancy<br/>Idempotency Gate · Priority Queue Ingestion"]
+
+    API --> PG
+    API --> REDIS
+
+    PG[("PostgreSQL — Storage<br/>Users · Preferences<br/>Templates · Workflows<br/>Delivery Logs · DLQ")]
+    REDIS[("Redis — Streams / ZSET<br/>Priority Queues<br/>Scheduled Sends<br/>Sliding Rate Limits")]
+
+    subgraph WORKERS["Background Workers Pipeline"]
+        direction LR
+        ENRICH["Enricher<br/>(Resolve)"] --> ENGINE["Engine<br/>(Quiet Hours)"] --> DELIVER["Delivery<br/>(Rate Limits / CB)"]
+        ENGINE --> SCHED["Scheduler<br/>(sendAt / QH)"]
+        SCHED --> DELIVER
+    end
+
+    REDIS -->|"consume"| ENRICH
+    ENRICH -.->|"read / write state"| PG
+    DELIVER -.->|"delivery logs"| PG
+    DELIVER -->|"Dispatch"| PROVIDERS
+
+    PROVIDERS["Provider Transports<br/>Email: Resend, SES, Postmark · Push: Firebase (FCM)<br/>SMS: Twilio, MessageBird · Webhooks: Custom HTTP"]
+
+    classDef entry stroke:#6366f1,stroke-width:2px
+    classDef store stroke:#0ea5e9,stroke-width:2px
+    classDef work stroke:#22c55e,stroke-width:2px
+    class App,API,PROVIDERS entry
+    class PG,REDIS store
+    class ENRICH,ENGINE,DELIVER,SCHED work
 ```
 
 - **`NotifkitServer`**: Runs the HTTP REST API router (`/v1/notify`, `/health`, `/metrics`) and the background worker pipelines (enricher, decision engine, scheduler, delivery).
@@ -121,16 +111,18 @@ notifkit is both an **orchestration engine** and a **typed SDK**.
 
 Because notification delivery is mission-critical, every pipeline component is tested against extreme failure conditions:
 
-```text
- ┌────────────────┐     Kill Worker     ┌────────────────────────┐
- │ Redis Streams  │ ──( SIGKILL )────►  │ Auto-Claim & Replay    │ ──► Zero Lost Messages
- └────────────────┘                     └────────────────────────┘
- ┌────────────────┐     Drop DB/Redis   ┌────────────────────────┐
- │ Connection Loss│ ──( Disconnect )──► │ Auto-Reconnect / Retry │ ──► In-Flight State Intact
- └────────────────┘                     └────────────────────────┘
- ┌────────────────┐     High Load       ┌────────────────────────┐
- │ 10k+ Messages  │ ──( Burst )───────► │ Concurrency & Limits   │ ──► Flat Memory, No Leaks
- └────────────────┘                     └────────────────────────┘
+```mermaid
+flowchart LR
+    S1["Redis Streams"] -->|"Kill Worker (SIGKILL)"| M1["Auto-Claim and Replay"] --> O1["Zero Lost Messages"]
+    S2["Connection Loss"] -->|"Drop DB / Redis"| M2["Auto-Reconnect / Retry"] --> O2["In-Flight State Intact"]
+    S3["10k+ Messages"] -->|"Burst"| M3["Concurrency and Limits"] --> O3["Flat Memory, No Leaks"]
+
+    classDef fault stroke:#ef4444,stroke-width:2px
+    classDef guard stroke:#6366f1,stroke-width:2px
+    classDef result stroke:#22c55e,stroke-width:2px
+    class S1,S2,S3 fault
+    class M1,M2,M3 guard
+    class O1,O2,O3 result
 ```
 
 - **Chaos Monkey Testing (`tests/chaos/crash.test.ts`)**: Background worker processes are randomly terminated with `SIGKILL` during active, high-throughput message streaming. Consumer group Pending Entries List (PEL) re-claims guarantee **zero lost messages** and seamless failover.
