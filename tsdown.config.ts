@@ -5,5 +5,7 @@ export default defineConfig({
   format: ["esm"],
   dts: true,
   clean: true,
-  external: ["@testcontainers/postgresql", "@testcontainers/redis", "testcontainers"],
+  deps: {
+    neverBundle: ["@testcontainers/postgresql", "@testcontainers/redis", "testcontainers"],
+  },
 });
