@@ -15,6 +15,13 @@
       "when": 1786643990078,
       "tag": "0001_stale_shotgun",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787991390282,
+      "tag": "0002_add_whatsapp_channel",
+      "breakpoints": true
     }
   ]
 }

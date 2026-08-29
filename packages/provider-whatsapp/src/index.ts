@@ -13,18 +13,15 @@ export interface WhatsAppTransportOptions {
 /**
  * Delivers via Meta's WhatsApp Cloud API.
  *
- * notifkit has no native "whatsapp" channel — the channel enum is fixed
- * across its schemas and DB layer — so this transport registers under
- * `channel: "sms"` and sends WhatsApp messages to the recipient's existing
- * `phone` field instead. Register it in place of an SMS transport, not
- * alongside one; the two can't coexist on the same channel slot.
+ * Registers under notifkit's native `channel: "whatsapp"` and sends to the
+ * recipient's `phone` field (the same field the "sms" channel uses).
  *
  * Free tier: Meta's Cloud API is free for roughly the first 1,000
  * business-initiated conversations per month per WABA, with no per-message
  * SaaS markup on top.
  */
 export class WhatsAppTransport implements Transport {
-  readonly channel = "sms" as const;
+  readonly channel = "whatsapp" as const;
   readonly limits?: { limit: number; windowSeconds: number };
 
   private readonly phoneNumberId: string;
@@ -60,7 +57,7 @@ export class WhatsAppTransport implements Transport {
     if (!text) {
       return {
         success: false,
-        error: "Template has no 'text' content for the sms/WhatsApp channel.",
+        error: "Template has no 'text' content for the whatsapp channel.",
       };
     }
 

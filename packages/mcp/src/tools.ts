@@ -3,8 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { NotifkitApi } from "./client.js";
 import { NotifkitApiError } from "./client.js";
 
-const CHANNELS = ["email", "sms", "push", "webhook", "in-app"] as const;
-const CONTACT_CHANNELS = ["email", "sms", "push", "webhook"] as const;
+const CHANNELS = ["email", "sms", "push", "webhook", "in-app", "whatsapp"] as const;
+const CONTACT_CHANNELS = ["email", "sms", "push", "webhook", "whatsapp"] as const;
 const PRIORITIES = ["low", "normal", "high", "critical"] as const;
 
 interface ToolResult {

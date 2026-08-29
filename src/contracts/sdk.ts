@@ -23,7 +23,7 @@ export type Preferences = z.infer<typeof PreferencesSchema>;
 // ─── Contacts ─────────────────────────────────────────────────────────────────
 
 /** Channels that carry an addressable target (email address, phone, push token, url). */
-export const ContactChannelSchema = z.enum(["email", "sms", "push", "webhook"]);
+export const ContactChannelSchema = z.enum(["email", "sms", "push", "webhook", "whatsapp"]);
 export type ContactChannel = z.infer<typeof ContactChannelSchema>;
 
 /** Accept a single value or an array; always normalise to a non-empty array. */

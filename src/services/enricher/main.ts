@@ -427,7 +427,7 @@ export class EnricherWorker extends BaseWorker {
                     channel === "email"
                       ? (destination ?? profile.email ?? undefined)
                       : (profile.email ?? undefined),
-                  phone: channel === "sms" ? destination : undefined,
+                  phone: channel === "sms" || channel === "whatsapp" ? destination : undefined,
                   webhook: channel === "webhook" ? destination : undefined,
                   locale: profile.language ?? "en",
                   timezone: profile.timezone ?? "UTC",

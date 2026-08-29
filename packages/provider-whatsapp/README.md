@@ -3,10 +3,8 @@
 WhatsApp transport for [notifkit](https://github.com/devkitshq/notifkit) via
 Meta's WhatsApp Cloud API.
 
-notifkit has no native `whatsapp` channel, so this registers under
-`channel: "sms"` and delivers to the recipient's existing `phone` field.
-Register it in place of an SMS transport, not alongside one — the two can't
-share the same channel slot.
+Registers under notifkit's native `channel: "whatsapp"` and delivers to the
+recipient's existing `phone` field (the same field the `"sms"` channel uses).
 
 ```bash
 npm install @notifkit/provider-whatsapp
@@ -16,7 +14,7 @@ npm install @notifkit/provider-whatsapp
 import { WhatsAppTransport } from "@notifkit/provider-whatsapp";
 
 registry.register(
-  "sms",
+  "whatsapp",
   new WhatsAppTransport({
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID!,
     accessToken: process.env.WHATSAPP_ACCESS_TOKEN!,

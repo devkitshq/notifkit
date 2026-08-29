@@ -291,7 +291,7 @@ It can understand notifkit's API and help identify ad-hoc notification code in y
 
 |                     |                                                                                        |
 | :------------------ | :------------------------------------------------------------------------------------- |
-| **Channels**        | `email`, `sms`, `push`, `webhook`                                                      |
+| **Channels**        | `email`, `sms`, `push`, `webhook`, `whatsapp`                                          |
 | **Targeting**       | A user, a list of users, a segment, or a topic                                         |
 | **Priorities**      | `low`, `normal`, `high`, `critical` — separate stream lanes                            |
 | **Scheduling**      | Future sends with `sendAt`, quiet-hours deferral, cancellation                         |

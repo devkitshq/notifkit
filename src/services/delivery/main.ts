@@ -556,7 +556,7 @@ export class DeliveryWorker extends BaseWorker {
           }
         }
       } else {
-        // Other channels (email, sms, webhook) use the pre-resolved destination
+        // Other channels (email, sms, webhook, whatsapp) use the pre-resolved destination
         let result: any = { success: false, error: "No transports" };
         for (const transport of transports) {
           try {
