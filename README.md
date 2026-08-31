@@ -14,7 +14,9 @@ Self-hosted notification infrastructure for product notifications. One API call 
 
 ---
 
-[▶️ Watch the AI demo](assets/ai_demo.mp4)
+https://github.com/user-attachments/assets/4dff98bb-37d3-44b4-bf46-9607c1cd89b5
+
+[▶️ Watch the AI demo](assets/ai_demo.mp4) - this is link to raw video file
 
 ---
 
