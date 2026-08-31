@@ -382,6 +382,13 @@ npm test
 
 The test suite starts its own PostgreSQL and Redis containers, so Docker is the only thing you need running.
 
+## Contact
+
+Questions, bugs, or ideas — mail me. I run this on my own company, which delivers a lot of notifications daily (100K+/day).
+
+- **Email:** [contact.devkitshq@gmail.com](mailto:contact.devkitshq@gmail.com)
+- **Book a 30-min call:** [calendly.com/contact-devkitshq/30min](https://calendly.com/contact-devkitshq/30min)
+
 ## License
 
 MIT. Do what you like with it, including commercially. See [LICENSE](./LICENSE).
