@@ -31,6 +31,8 @@ export class NotifkitServer extends EventEmitter {
   private redisContainer: any = null;
   private eventCleanupFns: (() => void)[] = [];
   private signalHandlersAttached = false;
+  private sigintHandler?: () => void;
+  private sigtermHandler?: () => void;
   private logger: Logger;
 
   constructor(options: NotifkitOptions) {
@@ -192,12 +194,14 @@ export class NotifkitServer extends EventEmitter {
     };
 
     if (!this.signalHandlersAttached) {
-      process.once("SIGINT", () => {
+      this.sigintHandler = () => {
         void handleSignal("SIGINT");
-      });
-      process.once("SIGTERM", () => {
+      };
+      this.sigtermHandler = () => {
         void handleSignal("SIGTERM");
-      });
+      };
+      process.once("SIGINT", this.sigintHandler);
+      process.once("SIGTERM", this.sigtermHandler);
       this.signalHandlersAttached = true;
     }
 
@@ -205,6 +209,12 @@ export class NotifkitServer extends EventEmitter {
   }
 
   async stop() {
+    if (this.signalHandlersAttached) {
+      if (this.sigintHandler) process.removeListener("SIGINT", this.sigintHandler);
+      if (this.sigtermHandler) process.removeListener("SIGTERM", this.sigtermHandler);
+      this.signalHandlersAttached = false;
+    }
+
     // Cleanup event listeners to prevent memory leaks
     for (const cleanup of this.eventCleanupFns) {
       cleanup();

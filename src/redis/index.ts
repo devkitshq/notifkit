@@ -58,9 +58,20 @@ export class RedisClient {
   }
 
   async disconnect(): Promise<void> {
+    if (this.isClosing) return;
     this.isClosing = true;
     this.logger?.info("disconnecting redis");
-    await this.native.quit();
+    try {
+      if (this.native.status !== "end" && this.native.status !== "close") {
+        await this.native.quit();
+      }
+    } catch {
+      try {
+        this.native.disconnect();
+      } catch {
+        // ignore errors on forced disconnect
+      }
+    }
     this.logger?.info("redis disconnected");
   }
 }

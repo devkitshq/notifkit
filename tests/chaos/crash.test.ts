@@ -26,16 +26,23 @@ describe("Crash Testing (Chaos Monkey)", () => {
 
   const spawnWorker = (type: string, id: string) => {
     logger.info(`Spawning worker: ${type} (${id})`);
-    const cp = spawn("cmd", ["/c", "npx", "--no-install", "tsx", "tests/chaos/worker-runner.ts"], {
-      env: {
-        ...process.env,
-        WORKER_TYPE: type,
-        DATABASE_URL: dbUrl,
-        REDIS_URL: redisUrl,
-        LOG_LEVEL: "silent",
+    const isWin = process.platform === "win32";
+    const cp = spawn(
+      isWin ? "cmd.exe" : "npx",
+      isWin
+        ? ["/c", "npx", "--no-install", "tsx", "tests/chaos/worker-runner.ts"]
+        : ["--no-install", "tsx", "tests/chaos/worker-runner.ts"],
+      {
+        env: {
+          ...process.env,
+          WORKER_TYPE: type,
+          DATABASE_URL: dbUrl,
+          REDIS_URL: redisUrl,
+          LOG_LEVEL: "silent",
+        },
+        stdio: "ignore", // ignore output to keep logs clean
       },
-      stdio: "ignore", // ignore output to keep logs clean
-    });
+    );
 
     cp.on("exit", (code, signal) => {
       logger.info(`Worker ${type} (${id}) exited with signal ${signal} (code ${code})`);

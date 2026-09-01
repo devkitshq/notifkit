@@ -50,12 +50,14 @@ jobs:
       # though they cannot locally. This is the only place the real coverage
       # number exists.
       - name: Test
+        id: test
         run: npm test
 
       - name: Generate coverage badge
         # Runs even when the suite fails its thresholds, so the badge reports
         # what coverage actually is rather than going stale on a red build.
-        if: always()
+        # Only runs if the test step was actually executed (not skipped due to earlier failure).
+        if: always() && steps.test.outcome != 'skipped'
         id: badge
         run: node scripts/coverage-badge.mjs --out badge/coverage.json
 
