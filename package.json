@@ -46,6 +46,7 @@
   },
   "files": [
     "dist",
+    "src",
     "drizzle",
     "README.md",
     "LICENSE"

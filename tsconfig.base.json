@@ -16,13 +16,8 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "inlineSources": false,
+    "inlineSources": true,
     "composite": false,
-    "incremental": false,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./src/*"],
-      "notifkit": ["./src/index.ts"]
-    }
+    "incremental": false
   }
 }
