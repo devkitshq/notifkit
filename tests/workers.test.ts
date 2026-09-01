@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AiWorker, PermanentAiError } from "@/services/ai/main.js";
 import { DeliveryWorker } from "@/services/delivery/main.js";
 import { PreferenceRepository } from "@/repositories/index.js";
-import { BaseWorker } from "@/workers/index.js";
+import { BaseWorker, NonRetryableError } from "@/workers/index.js";
 import type { StreamMessage } from "@/queue/index.js";
 import { createMockDb, type MockDb } from "./helpers/mock-db.js";
 import { suppressions } from "@/db/schema.js";
@@ -1239,6 +1239,225 @@ describe("DeliveryWorker", () => {
       await worker.process(pushTask() as any);
 
       expect(second).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── Circuit breaker ───────────────────────────────────────────────────────
+
+  /**
+   * The worker keys one breaker per `${channel}:${transport.constructor.name}`,
+   * so these transports are real classes. Two object literals would both report
+   * the name "Object" and quietly share a single breaker.
+   */
+  describe("circuit breaker", () => {
+    class FlakyTransport {
+      send = vi.fn().mockRejectedValue(new Error("Provider down"));
+    }
+    class HealthyTransport {
+      send = vi.fn().mockResolvedValue({ success: true, providerMessageId: "ok-1" });
+    }
+
+    /** One delivery, absorbing the NonRetryableError a chainless task ends in. */
+    const attempt = (msg: unknown) => worker.process(msg as any).catch((e) => e);
+
+    let nowSpy: ReturnType<typeof vi.spyOn> | undefined;
+    afterEach(() => {
+      nowSpy?.mockRestore();
+      nowSpy = undefined;
+    });
+
+    it("stops calling a transport once five consecutive failures trip the breaker", async () => {
+      const flaky = new FlakyTransport();
+      mockTransportRegistry.getAll.mockReturnValue([flaky]);
+
+      for (let i = 0; i < 5; i++) await attempt(dispatched());
+      expect(flaky.send).toHaveBeenCalledTimes(5);
+
+      await attempt(dispatched());
+
+      // The sixth task never reached the provider — that is the whole point.
+      expect(flaky.send).toHaveBeenCalledTimes(5);
+    });
+
+    it("reports an open breaker as a delivery failure instead of letting it escape", async () => {
+      mockTransportRegistry.getAll.mockReturnValue([new FlakyTransport()]);
+
+      for (let i = 0; i < 5; i++) await attempt(dispatched());
+      const err = await attempt(dispatched());
+
+      // A short-circuit is still a delivery failure: it must reach the emitter
+      // and come back as NonRetryableError, or the task retries forever against
+      // a provider the worker has already given up on.
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toBe("Circuit breaker is OPEN");
+      expect(mockGlobalEmitter.emit).toHaveBeenLastCalledWith(
+        "delivery:failed",
+        "123e4567-e89b-12d3-a456-426614174001",
+        "Circuit breaker is OPEN",
+        "email",
+        "123e4567-e89b-12d3-a456-426614174000",
+      );
+    });
+
+    it("keeps one provider's breaker off another's, so a healthy provider still delivers", async () => {
+      const flaky = new FlakyTransport();
+      const healthy = new HealthyTransport();
+      mockTransportRegistry.getAll.mockReturnValue([flaky, healthy]);
+
+      for (let i = 0; i < 6; i++) await attempt(dispatched());
+
+      expect(flaky.send).toHaveBeenCalledTimes(5); // tripped, then skipped
+      expect(healthy.send).toHaveBeenCalledTimes(6); // never affected
+      expect(mockGlobalEmitter.emit).toHaveBeenLastCalledWith(
+        "delivery:delivered",
+        "123e4567-e89b-12d3-a456-426614174001",
+        "ok-1",
+        "email",
+        "123e4567-e89b-12d3-a456-426614174000",
+      );
+    });
+
+    it("keeps a channel's breaker off the same transport on another channel", async () => {
+      const flaky = new FlakyTransport();
+      mockTransportRegistry.getAll.mockReturnValue([flaky]);
+
+      for (let i = 0; i < 6; i++) await attempt(dispatched());
+      expect(flaky.send).toHaveBeenCalledTimes(5); // email is now open
+
+      await attempt(dispatched({ channel: "sms", destination: "+15551234567" }));
+
+      // sms keys a different breaker, so it gets its own five attempts.
+      expect(flaky.send).toHaveBeenCalledTimes(6);
+    });
+
+    it("resets the count on a success, so intermittent failures never trip it", async () => {
+      const intermittent = new FlakyTransport();
+      intermittent.send
+        .mockRejectedValue(new Error("Provider down"))
+        .mockResolvedValueOnce({ success: true, providerMessageId: "ok-2" });
+      mockTransportRegistry.getAll.mockReturnValue([intermittent]);
+
+      // One success on the very first call, then eight straight failures. The
+      // threshold counts consecutive failures, so four-then-four never trips.
+      await attempt(dispatched());
+      for (let i = 0; i < 4; i++) await attempt(dispatched());
+      intermittent.send.mockResolvedValueOnce({ success: true, providerMessageId: "ok-3" });
+      await attempt(dispatched());
+      for (let i = 0; i < 4; i++) await attempt(dispatched());
+
+      expect(intermittent.send).toHaveBeenCalledTimes(10);
+    });
+
+    it("lets a single probe through once the reset window has passed", async () => {
+      const flaky = new FlakyTransport();
+      mockTransportRegistry.getAll.mockReturnValue([flaky]);
+
+      for (let i = 0; i < 6; i++) await attempt(dispatched());
+      expect(flaky.send).toHaveBeenCalledTimes(5);
+
+      // The provider recovers, but the breaker holds it out for a full 30s.
+      flaky.send.mockResolvedValue({ success: true, providerMessageId: "recovered" });
+      await attempt(dispatched());
+      expect(flaky.send).toHaveBeenCalledTimes(5);
+
+      nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);
+      await attempt(dispatched());
+
+      expect(flaky.send).toHaveBeenCalledTimes(6);
+      expect(mockGlobalEmitter.emit).toHaveBeenLastCalledWith(
+        "delivery:delivered",
+        "123e4567-e89b-12d3-a456-426614174001",
+        "recovered",
+        "email",
+        "123e4567-e89b-12d3-a456-426614174000",
+      );
+    });
+  });
+
+  // ── Fallback chain exhaustion ─────────────────────────────────────────────
+
+  /**
+   * Rolling over to the next channel is well covered; running *out* of channels
+   * is the other half. Every path here has to end in NonRetryableError, because
+   * a retryable throw would send an already-exhausted task around again.
+   */
+  describe("fallback chain exhaustion", () => {
+    const allProvidersFail = () =>
+      mockTransportRegistry.getAll.mockReturnValue([
+        { send: vi.fn().mockRejectedValue(new Error("Provider down")) },
+      ]);
+
+    it("ends the task when the only channel fails with nothing to fall back to", async () => {
+      allProvidersFail();
+
+      await expect(worker.process(dispatched() as any)).rejects.toBeInstanceOf(NonRetryableError);
+
+      expect(mockEnrichedProducers.normal.publish).not.toHaveBeenCalled();
+      expect(mockGlobalEmitter.emit).toHaveBeenCalledWith(
+        "delivery:failed",
+        "123e4567-e89b-12d3-a456-426614174001",
+        "Provider down",
+        "email",
+        "123e4567-e89b-12d3-a456-426614174000",
+      );
+    });
+
+    it("treats an empty fallbackChain as no chain at all", async () => {
+      allProvidersFail();
+
+      await expect(
+        worker.process(dispatched({ fallbackChain: [], recipient }) as any),
+      ).rejects.toBeInstanceOf(NonRetryableError);
+
+      expect(mockEnrichedProducers.normal.publish).not.toHaveBeenCalled();
+    });
+
+    it("does not roll over when a chain is present but the recipient is missing", async () => {
+      allProvidersFail();
+
+      // The rollover rebuilds an enriched payload, which needs the recipient.
+      // Without one the chain is inert, so the task has to fail terminally
+      // rather than look like it was handed on.
+      await expect(
+        worker.process(dispatched({ fallbackChain: ["sms", "push"] }) as any),
+      ).rejects.toBeInstanceOf(NonRetryableError);
+
+      expect(mockEnrichedProducers.normal.publish).not.toHaveBeenCalled();
+    });
+
+    it("clears the chain on the final hop instead of passing an empty array on", async () => {
+      allProvidersFail();
+
+      await worker.process(dispatched({ fallbackChain: ["sms"], recipient }) as any);
+
+      const published = mockEnrichedProducers.normal.publish.mock.calls[0]![0];
+      expect(published.payload.channel).toBe("sms");
+      // Not [] — an empty array would read as "a chain exists" to the next hop.
+      expect(published.payload.fallbackChain).toBeUndefined();
+    });
+
+    it("stops at the end of the chain rather than rolling over forever", async () => {
+      allProvidersFail();
+
+      // Hop one: email fails and hands the task to sms with the chain spent.
+      await worker.process(dispatched({ fallbackChain: ["sms"], recipient }) as any);
+      const next = mockEnrichedProducers.normal.publish.mock.calls[0]![0].payload;
+      expect(next.channel).toBe("sms");
+
+      // Hop two: that sms task fails too, and now there is nowhere left to go.
+      mockEnrichedProducers.normal.publish.mockClear();
+      await expect(
+        worker.process(
+          dispatched({
+            channel: next.channel,
+            fallbackChain: next.fallbackChain,
+            destination: "+15551234567",
+            recipient,
+          }) as any,
+        ),
+      ).rejects.toBeInstanceOf(NonRetryableError);
+
+      expect(mockEnrichedProducers.normal.publish).not.toHaveBeenCalled();
     });
   });
 });

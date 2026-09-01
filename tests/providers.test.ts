@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ResendTransport } from "../packages/provider-resend/src/index.js";
 import { FcmTransport } from "../packages/provider-fcm/src/index.js";
+import { ConsoleTransport } from "../packages/provider-console/src/index.js";
 
 // Mock Resend SDK
 const mockSendEmail = vi.fn();
@@ -404,5 +405,90 @@ describe("TransportRegistry", () => {
 
     // .get() should return the highest priority one
     expect(transportRegistry.get("email")).toBe(mockTransport2);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("ConsoleTransport (Development Provider)", () => {
+  /** The transport's only side effects are stdout and the optional logger. */
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+  });
+
+  const task = (over: Record<string, unknown> = {}): any => ({
+    taskId: "task-uuid-1",
+    enrichedEventId: "enriched-evt-1",
+    recipientId: "usr-1",
+    destination: "device-token-1",
+    priority: "normal",
+    renderedContent: { content: { body: "Hello World" } },
+    ...over,
+  });
+
+  it("reports a success carrying a console-prefixed provider message id", async () => {
+    const result = await new ConsoleTransport().send(task());
+
+    expect(result.success).toBe(true);
+    expect(result.providerMessageId).toMatch(/^console-\d+$/);
+  });
+
+  it("defaults to the push channel when none is named", () => {
+    expect(new ConsoleTransport().channel).toBe("push");
+  });
+
+  it("takes the channel it is given, so it can stand in for email or sms", () => {
+    expect(new ConsoleTransport({ channel: "email" }).channel).toBe("email");
+  });
+
+  it("carries limits through, and leaves them unset when none are given", () => {
+    const limits = { limit: 10, windowSeconds: 60 };
+
+    expect(new ConsoleTransport({ limits }).limits).toEqual(limits);
+    expect(new ConsoleTransport().limits).toBeUndefined();
+  });
+
+  it("prints the parts of the task a developer is watching for", async () => {
+    await new ConsoleTransport().send(task({ renderedContent: { content: { body: "Ship it" } } }));
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const printed = logSpy.mock.calls[0]![0] as string;
+
+    expect(printed).toContain("device-token-1"); // destination
+    expect(printed).toContain("usr-1"); // recipient
+    expect(printed).toContain("normal"); // priority
+    expect(printed).toContain("task-uuid-1"); // taskId
+    expect(printed).toContain(JSON.stringify({ body: "Ship it" })); // content
+  });
+
+  it("logs the delivery with the ids a caller would correlate on", async () => {
+    const logger: any = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+
+    const result = await new ConsoleTransport({ channel: "sms", logger }).send(task());
+
+    expect(logger.info).toHaveBeenCalledWith(
+      {
+        taskId: "task-uuid-1",
+        channel: "sms",
+        destination: "device-token-1",
+        providerMessageId: result.providerMessageId,
+      },
+      "push delivered (console transport)",
+    );
+  });
+
+  it("delivers without a logger, since one is optional", async () => {
+    const transport = new ConsoleTransport();
+
+    await expect(transport.send(task())).resolves.toEqual({
+      success: true,
+      providerMessageId: expect.stringMatching(/^console-\d+$/),
+    });
   });
 });
