@@ -492,3 +492,464 @@ describe("ConsoleTransport (Development Provider)", () => {
     });
   });
 });
+
+// ─── Twilio ──────────────────────────────────────────────────────────────────
+
+import { TwilioTransport } from "../packages/provider-twilio/src/index.js";
+
+const mockCreateMessage = vi.fn();
+
+// Mock only the client factory. `validateRequest` stays real, so the webhook
+// tests exercise Twilio's actual HMAC-SHA1 check rather than a stub of it.
+vi.mock("twilio", async (importOriginal) => {
+  const actual = (await importOriginal()) as any;
+  const real = actual.default ?? actual;
+  const client = vi.fn(() => ({ messages: { create: mockCreateMessage } }));
+  return { default: Object.assign(client, real) };
+});
+
+const ACCOUNT_SID = "ACtest00000000000000000000000000";
+const AUTH_TOKEN = "test-auth-token";
+const CALLBACK_URL = "https://api.example.com/webhooks/twilio";
+
+function twilioTransport(overrides: Record<string, unknown> = {}) {
+  return new TwilioTransport({
+    accountSid: ACCOUNT_SID,
+    authToken: AUTH_TOKEN,
+    from: "+15550000001",
+    statusCallbackUrl: CALLBACK_URL,
+    ...overrides,
+  } as any);
+}
+
+function smsTask(overrides: Record<string, unknown> = {}): any {
+  return {
+    taskId: "task-uuid-sms-1",
+    destination: "+15550000002",
+    renderedContent: { content: { body: "Your code is 123456" } },
+    ...overrides,
+  };
+}
+
+describe("TwilioTransport (SMS Provider)", () => {
+  beforeEach(() => {
+    mockCreateMessage.mockReset();
+  });
+
+  it("registers against the sms channel", () => {
+    expect(twilioTransport().channel).toBe("sms");
+  });
+
+  it("sends an SMS via the Twilio SDK and returns the message sid", async () => {
+    mockCreateMessage.mockResolvedValueOnce({ sid: "SM123", status: "queued" });
+
+    const result = await twilioTransport().send(smsTask());
+
+    expect(mockCreateMessage).toHaveBeenCalledWith({
+      to: "+15550000002",
+      from: "+15550000001",
+      body: "Your code is 123456",
+      statusCallback: CALLBACK_URL,
+    });
+    expect(result).toEqual({ success: true, providerMessageId: "SM123" });
+  });
+
+  it("omits statusCallback when no callback URL is configured", async () => {
+    mockCreateMessage.mockResolvedValueOnce({ sid: "SM124", status: "queued" });
+
+    await twilioTransport({ statusCallbackUrl: undefined }).send(smsTask());
+
+    expect(mockCreateMessage).toHaveBeenCalledWith({
+      to: "+15550000002",
+      from: "+15550000001",
+      body: "Your code is 123456",
+    });
+  });
+
+  it("lets a template pin its own sender, ignoring a non-string one", async () => {
+    mockCreateMessage.mockResolvedValue({ sid: "SM125", status: "queued" });
+
+    await twilioTransport().send(
+      smsTask({ renderedContent: { content: { body: "hi", from: "+15559999999" } } }),
+    );
+    expect(mockCreateMessage.mock.calls[0]?.[0].from).toBe("+15559999999");
+
+    await twilioTransport().send(
+      smsTask({ renderedContent: { content: { body: "hi", from: 123 } } }),
+    );
+    expect(mockCreateMessage.mock.calls[1]?.[0].from).toBe("+15550000001");
+  });
+
+  it("fails without reaching Twilio when the task carries no destination", async () => {
+    const result = await twilioTransport().send(smsTask({ destination: undefined }));
+
+    expect(mockCreateMessage).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      error: "No destination (recipient phone number) on task",
+    });
+  });
+
+  it("fails without reaching Twilio when the task carries no body", async () => {
+    const result = await twilioTransport().send(
+      smsTask({ renderedContent: { content: { subject: "no body here" } } }),
+    );
+
+    expect(mockCreateMessage).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: false, error: "No message body on task" });
+  });
+
+  it.each([
+    [21211, "Invalid 'To' Phone Number"],
+    [21610, "Attempt to send to unsubscribed recipient"],
+    [21612, "Not reachable via SMS"],
+    [21614, "'To' number is not a valid mobile number"],
+  ])("flags a dead destination (%i) as an invalid token", async (code, message) => {
+    mockCreateMessage.mockRejectedValueOnce(Object.assign(new Error(message), { code }));
+
+    await expect(twilioTransport().send(smsTask())).resolves.toEqual({
+      success: false,
+      invalidToken: true,
+      error: message,
+    });
+  });
+
+  it("leaves a retryable failure retryable rather than suppressing the number", async () => {
+    // 20429 is Twilio's rate limit: the number is fine, this attempt was not.
+    mockCreateMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Too Many Requests"), { code: 20429 }),
+    );
+
+    await expect(twilioTransport().send(smsTask())).resolves.toEqual({
+      success: false,
+      invalidToken: false,
+      error: "Too Many Requests",
+    });
+  });
+
+  it("survives an error carrying no Twilio code at all", async () => {
+    mockCreateMessage.mockRejectedValueOnce(new Error("socket hang up"));
+
+    await expect(twilioTransport().send(smsTask())).resolves.toEqual({
+      success: false,
+      invalidToken: false,
+      error: "socket hang up",
+    });
+  });
+});
+
+describe("TwilioTransport (Status callbacks)", () => {
+  /** Produce a body + headers Twilio's own validator accepts. */
+  async function sign(params: Record<string, string>, url = CALLBACK_URL) {
+    const twilio = ((await import("twilio")) as any).default;
+    const rawBody = new URLSearchParams(params).toString();
+    return {
+      rawBody,
+      headers: {
+        "x-twilio-signature": twilio.getExpectedTwilioSignature(AUTH_TOKEN, url, params),
+      } as Record<string, string>,
+    };
+  }
+
+  const undelivered = {
+    MessageSid: "SM123",
+    MessageStatus: "undelivered",
+    To: "+15550000002",
+    From: "+15550000001",
+    ErrorCode: "30005",
+  };
+
+  it("mounts its route at the path of the configured callback URL", () => {
+    const transport = twilioTransport();
+
+    // The API only mounts a webhook route for a transport carrying all three.
+    expect(transport.webhookPath).toBe("/webhooks/twilio");
+    expect(typeof transport.verifyWebhook).toBe("function");
+    expect(typeof transport.parseWebhook).toBe("function");
+  });
+
+  it("advertises no route when no callback URL is configured", () => {
+    expect(twilioTransport({ statusCallbackUrl: undefined }).webhookPath).toBeUndefined();
+  });
+
+  it("refuses to construct with a callback URL that is not a URL", () => {
+    expect(() => twilioTransport({ statusCallbackUrl: "not-a-url" })).toThrow(/not a valid URL/);
+  });
+
+  it("accepts a correctly signed callback", async () => {
+    const { rawBody, headers } = await sign(undelivered);
+
+    await expect(twilioTransport().verifyWebhook(rawBody, headers)).resolves.toBe(true);
+  });
+
+  it("rejects a callback whose body was tampered with after signing", async () => {
+    const { headers } = await sign(undelivered);
+    const forged = new URLSearchParams({
+      ...undelivered,
+      MessageSid: "someone-elses-message",
+    }).toString();
+
+    await expect(twilioTransport().verifyWebhook(forged, headers)).resolves.toBe(false);
+  });
+
+  it("rejects a callback signed for a different URL", async () => {
+    const { rawBody, headers } = await sign(
+      undelivered,
+      "https://evil.example.com/webhooks/twilio",
+    );
+
+    await expect(twilioTransport().verifyWebhook(rawBody, headers)).resolves.toBe(false);
+  });
+
+  it("rejects a callback with no signature header", async () => {
+    const { rawBody } = await sign(undelivered);
+
+    await expect(twilioTransport().verifyWebhook(rawBody, {})).resolves.toBe(false);
+  });
+
+  it("rejects everything when no callback URL is configured", async () => {
+    const { rawBody, headers } = await sign(undelivered);
+
+    await expect(
+      twilioTransport({ statusCallbackUrl: undefined }).verifyWebhook(rawBody, headers),
+    ).resolves.toBe(false);
+  });
+
+  it("reads the form-encoded body the mounted route could not JSON-parse", async () => {
+    const { rawBody, headers } = await sign(undelivered);
+
+    // The route hands over `{}` for a form post; the raw body is the payload.
+    const events = await twilioTransport().parseWebhook({}, rawBody, headers);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      providerMessageId: "SM123",
+      status: "bounced",
+      bounceType: "hard",
+      recipient: "+15550000002",
+    });
+  });
+
+  it("treats an unrecognised failure code as a soft bounce", async () => {
+    const { rawBody, headers } = await sign({
+      ...undelivered,
+      MessageStatus: "failed",
+      ErrorCode: "30008",
+    });
+
+    const events = await twilioTransport().parseWebhook({}, rawBody, headers);
+
+    expect(events[0]).toMatchObject({ status: "bounced", bounceType: "soft" });
+  });
+
+  it("treats a failure with no code at all as a soft bounce", async () => {
+    const { MessageSid, MessageStatus, To, From } = undelivered;
+    const { rawBody, headers } = await sign({ MessageSid, MessageStatus, To, From });
+
+    const events = await twilioTransport().parseWebhook({}, rawBody, headers);
+
+    expect(events[0]).toMatchObject({ status: "bounced", bounceType: "soft" });
+  });
+
+  it("maps a STOP reply to an unsubscribe, not a bounce", async () => {
+    const { rawBody, headers } = await sign({ ...undelivered, ErrorCode: "21610" });
+
+    const events = await twilioTransport().parseWebhook({}, rawBody, headers);
+
+    expect(events[0]).toMatchObject({
+      providerMessageId: "SM123",
+      status: "unsubscribed",
+      recipient: "+15550000002",
+    });
+    expect(events[0]?.bounceType).toBeUndefined();
+  });
+
+  it("maps an RCS/WhatsApp read receipt to opened", async () => {
+    const { rawBody, headers } = await sign({
+      MessageSid: "SM123",
+      MessageStatus: "read",
+      To: "+15550000002",
+    });
+
+    const events = await twilioTransport().parseWebhook({}, rawBody, headers);
+
+    expect(events[0]).toMatchObject({ status: "opened" });
+  });
+
+  it.each(["queued", "sending", "sent", "delivered", "accepted", "canceled"])(
+    "ignores the untracked %s status",
+    async (MessageStatus) => {
+      const { rawBody, headers } = await sign({ MessageSid: "SM123", MessageStatus });
+
+      await expect(twilioTransport().parseWebhook({}, rawBody, headers)).resolves.toEqual([]);
+    },
+  );
+
+  it("falls back to the SmsSid/SmsStatus aliases Twilio sends for SMS", async () => {
+    const { rawBody, headers } = await sign({
+      SmsSid: "SM999",
+      SmsStatus: "undelivered",
+      To: "+15550000002",
+      ErrorCode: "30006",
+    });
+
+    const events = await twilioTransport().parseWebhook({}, rawBody, headers);
+
+    expect(events[0]).toMatchObject({ providerMessageId: "SM999", bounceType: "hard" });
+  });
+
+  it("ignores a verified callback that carries no message sid", async () => {
+    const { rawBody, headers } = await sign({ MessageStatus: "undelivered" });
+
+    await expect(twilioTransport().parseWebhook({}, rawBody, headers)).resolves.toEqual([]);
+  });
+
+  it("does not trust a body that fails verification, even if it is well formed", async () => {
+    // Valid-looking payload, signature for a different body.
+    const { headers } = await sign({ MessageSid: "other", MessageStatus: "delivered" });
+    const rawBody = new URLSearchParams(undelivered).toString();
+
+    await expect(twilioTransport().parseWebhook({}, rawBody, headers)).resolves.toEqual([]);
+  });
+
+  it("ignores a callback that arrives without a raw body to verify", async () => {
+    const { headers } = await sign(undelivered);
+
+    await expect(twilioTransport().parseWebhook({}, undefined, headers)).resolves.toEqual([]);
+  });
+
+  it("keeps the provider detail worth correlating on in metadata", async () => {
+    const { rawBody, headers } = await sign({
+      ...undelivered,
+      ChannelStatusMessage: "Unknown destination handset",
+    });
+
+    const events = await twilioTransport().parseWebhook({}, rawBody, headers);
+
+    expect(events[0]?.metadata).toEqual({
+      messageStatus: "undelivered",
+      errorCode: 30005,
+      channelStatusMessage: "Unknown destination handset",
+    });
+  });
+});
+
+describe("TwilioTransport (Client and logging)", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as any;
+
+  beforeEach(() => {
+    mockCreateMessage.mockReset();
+  });
+
+  it("builds the SDK client once and reuses it across sends", async () => {
+    const twilio = ((await import("twilio")) as any).default;
+    twilio.mockClear();
+    mockCreateMessage.mockResolvedValue({ sid: "SM126", status: "queued" });
+
+    const transport = twilioTransport();
+    await transport.send(smsTask());
+    await transport.send(smsTask());
+
+    expect(mockCreateMessage).toHaveBeenCalledTimes(2);
+    expect(twilio).toHaveBeenCalledTimes(1);
+    expect(twilio).toHaveBeenCalledWith(ACCOUNT_SID, AUTH_TOKEN);
+  });
+
+  it("logs an accepted send and a failed one", async () => {
+    const log = logger();
+    mockCreateMessage.mockResolvedValueOnce({ sid: "SM127", status: "queued" });
+    await twilioTransport({ logger: log }).send(smsTask());
+    expect(log.debug).toHaveBeenCalledWith(
+      { taskId: "task-uuid-sms-1", messageId: "SM127", status: "queued" },
+      "Twilio message accepted",
+    );
+
+    mockCreateMessage.mockRejectedValueOnce(Object.assign(new Error("nope"), { code: 21211 }));
+    await twilioTransport({ logger: log }).send(smsTask());
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-sms-1", code: 21211, error: "nope", invalidToken: true },
+      "Twilio send failed",
+    );
+  });
+
+  it("reads a signature header that arrived as an array", async () => {
+    const rawBody = new URLSearchParams({ MessageSid: "SM128", MessageStatus: "read" }).toString();
+    const twilio = ((await import("twilio")) as any).default;
+    const signature = twilio.getExpectedTwilioSignature(AUTH_TOKEN, CALLBACK_URL, {
+      MessageSid: "SM128",
+      MessageStatus: "read",
+    });
+
+    await expect(
+      twilioTransport().verifyWebhook(rawBody, { "x-twilio-signature": [signature] }),
+    ).resolves.toBe(true);
+  });
+
+  it("logs each reason a callback is dropped", async () => {
+    const log = logger();
+    const rawBody = new URLSearchParams({ MessageSid: "SM129", MessageStatus: "sent" }).toString();
+
+    await twilioTransport({ logger: log, statusCallbackUrl: undefined }).verifyWebhook(rawBody, {});
+    expect(log.error).toHaveBeenCalledWith(
+      "Twilio webhook rejected: statusCallbackUrl is not configured, cannot verify signature",
+    );
+
+    await twilioTransport({ logger: log }).verifyWebhook(rawBody, {});
+    expect(log.warn).toHaveBeenCalledWith(
+      "Twilio webhook rejected: missing x-twilio-signature header",
+    );
+
+    await twilioTransport({ logger: log }).verifyWebhook(rawBody, {
+      "x-twilio-signature": "not-the-signature",
+    });
+    expect(log.warn).toHaveBeenCalledWith("Twilio webhook signature verification failed");
+  });
+
+  it("logs a mapped callback, an ignored one, and a malformed one", async () => {
+    const log = logger();
+    const transport = twilioTransport({ logger: log });
+
+    async function deliver(params: Record<string, string>) {
+      const twilio = ((await import("twilio")) as any).default;
+      const rawBody = new URLSearchParams(params).toString();
+      return transport.parseWebhook({}, rawBody, {
+        "x-twilio-signature": twilio.getExpectedTwilioSignature(AUTH_TOKEN, CALLBACK_URL, params),
+      });
+    }
+
+    await deliver({ MessageSid: "SM130", MessageStatus: "undelivered", ErrorCode: "30005" });
+    expect(log.info).toHaveBeenCalledWith(
+      {
+        providerMessageId: "SM130",
+        status: "bounced",
+        messageStatus: "undelivered",
+        errorCode: 30005,
+      },
+      "Twilio status callback mapped to notifkit status",
+    );
+
+    await deliver({ MessageSid: "SM131", MessageStatus: "delivered" });
+    expect(log.debug).toHaveBeenCalledWith(
+      { messageStatus: "delivered" },
+      "Twilio status callback ignored (untracked message status)",
+    );
+
+    await deliver({ MessageStatus: "undelivered" });
+    expect(log.warn).toHaveBeenCalledWith("Twilio status callback malformed or missing MessageSid");
+  });
+
+  it("omits recipient when the callback carries no To", async () => {
+    const params = { MessageSid: "SM132", MessageStatus: "undelivered", ErrorCode: "30005" };
+    const twilio = ((await import("twilio")) as any).default;
+    const events = await twilioTransport().parseWebhook(
+      {},
+      new URLSearchParams(params).toString(),
+      {
+        "x-twilio-signature": twilio.getExpectedTwilioSignature(AUTH_TOKEN, CALLBACK_URL, params),
+      },
+    );
+
+    expect(events[0]).toMatchObject({ providerMessageId: "SM132", status: "bounced" });
+    expect(events[0]).not.toHaveProperty("recipient");
+  });
+});

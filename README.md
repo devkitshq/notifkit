@@ -320,13 +320,14 @@ First-party packages:
 
 - [`@notifkit/provider-resend`](./packages/provider-resend) — transactional email via Resend
 - [`@notifkit/provider-fcm`](./packages/provider-fcm) — push notifications via Firebase Cloud Messaging
+- [`@notifkit/provider-twilio`](./packages/provider-twilio) — SMS via Twilio, with signature-verified delivery status callbacks
 
 For anything else, implement a simple `Transport`:
 
 ```ts
 class MyTransport implements Transport {
   async send(message) {
-    // Send through Twilio, SES, Postmark, APNs,
+    // Send through SES, Postmark, APNs,
     // SendGrid, a custom webhook, or anything else.
   }
 }
