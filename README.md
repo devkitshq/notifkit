@@ -322,6 +322,7 @@ First-party packages:
 
 - [`@notifkit/provider-resend`](./packages/provider-resend) — transactional email via Resend
 - [`@notifkit/provider-fcm`](./packages/provider-fcm) — push notifications via Firebase Cloud Messaging
+- [`@notifkit/provider-slack`](./packages/provider-slack) — Slack messages via Incoming Webhooks or the Web API
 
 For anything else, implement a simple `Transport`:
 
