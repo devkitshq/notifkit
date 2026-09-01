@@ -6,6 +6,7 @@
   "types": "dist/index.d.ts",
   "files": [
     "dist",
+    "src",
     "README.md",
     "LICENSE"
   ],
@@ -15,7 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "firebase-admin": "^12.0.0"
+    "firebase-admin": "^14.0.0"
   },
   "peerDependencies": {
     "notifkit": "^0.1.0"
