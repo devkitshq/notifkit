@@ -40,6 +40,16 @@ export interface Transport {
   send(task: NotificationDispatchedPayload): Promise<DeliveryResult>;
 
   webhookPath?: string;
+  /**
+   * Handles the one-time GET verification handshake some providers require
+   * before they'll start POSTing to a webhook URL (e.g. Meta's hub.challenge
+   * subscribe flow). Return the raw challenge string to echo back, or
+   * undefined to reject the request. Providers that don't require this
+   * (Resend, etc.) simply omit it.
+   */
+  verifyWebhookChallenge?: (
+    query: URLSearchParams,
+  ) => Promise<string | undefined> | string | undefined;
   verifyWebhook?: (
     rawBody: string,
     headers: Record<string, string | string[] | undefined>,

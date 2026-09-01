@@ -478,7 +478,31 @@ export async function startApiServer() {
   const { transportRegistry } = await import("../../transport/index.js");
   for (const channel of transportRegistry.registeredChannels()) {
     const transport = transportRegistry.get(channel as any);
-    if (transport?.webhookPath && transport?.parseWebhook) {
+    if (!transport?.webhookPath) continue;
+
+    if (transport.verifyWebhookChallenge) {
+      router.get(transport.webhookPath, async (_req, res, ctx) => {
+        try {
+          const challenge = await transport.verifyWebhookChallenge!(ctx.query);
+          if (challenge === undefined) {
+            res.writeHead(403, { "Content-Type": "text/plain" });
+            res.end("Forbidden");
+            return;
+          }
+          res.writeHead(200, { "Content-Type": "text/plain" });
+          res.end(challenge);
+        } catch (err) {
+          logger.error({ err, channel }, "webhook verification challenge error");
+          if (!res.headersSent) {
+            res.writeHead(500, { "Content-Type": "text/plain" });
+            res.end("internal_error");
+          }
+        }
+      });
+      logger.info(`Mounted webhook verification GET for ${channel} at ${transport.webhookPath}`);
+    }
+
+    if (transport.parseWebhook) {
       router.post(transport.webhookPath, async (req, res) => {
         try {
           await Promise.race([
