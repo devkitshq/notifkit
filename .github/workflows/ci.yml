@@ -35,6 +35,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Build
+        run: npm run build
+
       - name: Typecheck workspace packages
         run: npm run typecheck --workspaces --if-present
 
@@ -42,9 +45,6 @@ jobs:
         # Not `npm run lint` — that script carries --fix, which would paper over
         # violations instead of reporting them.
         run: npx eslint .
-
-      - name: Build
-        run: npm run build
 
       # ubuntu-latest ships Docker, so the testcontainers suites run here even
       # though they cannot locally. This is the only place the real coverage
