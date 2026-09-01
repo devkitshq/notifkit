@@ -7,6 +7,7 @@ export default [
     ignores: [
       "**/dist/**",
       "**/node_modules/**",
+      "**/.next/**",
       "**/*.js",
       "**/*.cjs",
       "**/*.mjs",

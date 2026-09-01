@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Only the badge job writes; everything else is read-only.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test & coverage
+    runs-on: ubuntu-latest
+    # The badge step pushes to the `badges` branch on main.
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Typecheck workspace packages
+        run: npm run typecheck --workspaces --if-present
+
+      - name: Lint
+        # Not `npm run lint` — that script carries --fix, which would paper over
+        # violations instead of reporting them.
+        run: npx eslint .
+
+      - name: Build
+        run: npm run build
+
+      # ubuntu-latest ships Docker, so the testcontainers suites run here even
+      # though they cannot locally. This is the only place the real coverage
+      # number exists.
+      - name: Test
+        run: npm test
+
+      - name: Generate coverage badge
+        # Runs even when the suite fails its thresholds, so the badge reports
+        # what coverage actually is rather than going stale on a red build.
+        if: always()
+        id: badge
+        run: node scripts/coverage-badge.mjs --out badge/coverage.json
+
+      - name: Publish badge
+        # steps.badge.outcome guards the case where the suite crashed outright
+        # and never wrote a summary — no badge is better than a misleading one.
+        if: always() && steps.badge.outcome == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PCT: ${{ steps.badge.outputs.pct }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cp badge/coverage.json "$tmp/coverage.json"
+          cd "$tmp"
+          git init -q -b badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add coverage.json
+          git commit -qm "chore(badge): coverage ${PCT}%"
+          # A single-commit orphan branch — the badge has no history worth
+          # keeping, and force-pushing stops it growing without bound.
+          git push -q --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14

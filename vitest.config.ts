@@ -13,8 +13,8 @@ export default defineConfig({
     hookTimeout: 1200_000,
     coverage: {
       provider: "v8",
-      reporter: ["text", "json", "html"],
-      include: ["src/**"],
+      reporter: ["text", "json", "json-summary", "html"],
+      include: ["src/**", "packages/*/src/**"],
       exclude: ["test-project/**", "tests/**", "vitest.config.ts"],
       thresholds: {
         lines: 80,
