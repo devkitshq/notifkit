@@ -14,12 +14,6 @@ Self-hosted notification infrastructure for product notifications. One API call 
 
 ---
 
-https://github.com/user-attachments/assets/4dff98bb-37d3-44b4-bf46-9607c1cd89b5
-
-[▶️ Watch the AI demo](assets/ai_demo.mp4) - this is link to raw video file
-
----
-
 ### The first notification is easy
 
 ```ts
@@ -105,69 +99,61 @@ flowchart TD
 
 ---
 
-## Battle-tested for production
+## Agent-operable
 
-> **Battle-tested in production:** notifkit powers production notification pipelines handling **thousands of emails, push notifications, and OTPs every day.**
->
-> It is the infrastructure we built because we needed it ourselves — rather than spending months reinventing distributed notification plumbing or paying SaaS tolls per alert.
+https://github.com/user-attachments/assets/4dff98bb-37d3-44b4-bf46-9607c1cd89b5
 
-**Your servers. Your providers. Your data. Zero notification SaaS markups.**
+[▶️ Watch the AI demo](assets/ai_demo.mp4) - this is link to raw video file
 
-### Reliability & Chaos Engineering
+**notifkit isn't just an API your application can call — your AI agent can operate it directly.**
 
-Because notification delivery is mission-critical, every pipeline component is tested against extreme failure conditions:
+Connect the notifkit MCP server ([`@notifkit/mcp`](./packages/mcp)) to Claude Code, Cursor, Claude Desktop, Gemini, or any MCP-compatible agent:
 
-```mermaid
-flowchart LR
-    S1["Redis Streams"] -->|"Kill Worker (SIGKILL)"| M1["Auto-Claim and Replay"] --> O1["Zero Lost Messages"]
-    S2["Connection Loss"] -->|"Drop DB / Redis"| M2["Auto-Reconnect / Retry"] --> O2["In-Flight State Intact"]
-    S3["10k+ Messages"] -->|"Burst"| M3["Concurrency and Limits"] --> O3["Flat Memory, No Leaks"]
-
-    classDef fault stroke:#ef4444,stroke-width:2px
-    classDef guard stroke:#6366f1,stroke-width:2px
-    classDef result stroke:#22c55e,stroke-width:2px
-    class S1,S2,S3 fault
-    class M1,M2,M3 guard
-    class O1,O2,O3 result
+```bash
+npx -y @notifkit/mcp
 ```
 
-- **Chaos Monkey Testing (`tests/chaos/crash.test.ts`)**: Background worker processes are randomly terminated with `SIGKILL` during active, high-throughput message streaming. Consumer group Pending Entries List (PEL) re-claims guarantee **zero lost messages** and seamless failover.
-- **Infrastructure Recovery Testing (`tests/chaos/recovery.test.ts`)**: PostgreSQL and Redis connections are forcefully severed and restored under live traffic. Verifies automatic client reconnection, worker backpressure, and durable state resumption.
-- **High-Throughput Load Testing (`tests/chaos/load.test.ts`)**: Stressed with bursts of **10,000+ notifications** across parallel worker pools, verifying queue drain velocity, sliding-window rate limiters, and flat memory profiles without leaks.
-- **Race Conditions & Concurrency (`tests/race-conditions.test.ts`, `tests/idempotency.test.ts`)**: Hardened against concurrent duplicate dispatches, overlapping quiet-hour boundary evaluations, atomic user updates, and 24-hour idempotency key deduplication.
-- **100% Real Ephemeral Containers**: Unit, integration, and chaos test suites execute against real PostgreSQL and Redis containers via [Testcontainers](https://testcontainers.com), eliminating mocks for core storage and streaming primitives.
+### Ask your agent
+
+```text
+You: Why didn't usr_9182 receive their password reset?
+
+Agent: The notification was suppressed because usr_9182's email
+       address has a hard-bounce suppression from yesterday.
+```
+
+Your application and your AI agents use the **same notification infrastructure**:
+
+- **Send & dispatch** — Send one-off notifications or campaigns to users, lists, and segments (`send_notification`, `send_campaign`)
+- **Investigate & triage** — Diagnose delivery issues by inspecting message histories, provider responses, and quiet hours (`get_delivery_logs`, `get_notification`)
+- **Schedule & cancel** — Schedule future sends and cancel pending notifications (`list_scheduled`, `cancel_notification`)
+- **Campaign analytics** — Check delivery, open, click, bounce, and complaint metrics (`list_campaigns`, `get_campaign_stats`)
+- **Template management** — List, preview, and update templates with sample data (`list_templates`, `preview_template`, `upsert_template`)
+- **Users & preferences** — Look up users, contacts, preferences, and segment membership (`list_users`, `get_user_preferences`, `update_user_preferences`)
+- **Workflow operations** — Trigger workflows and inspect workflow runs (`create_workflow`, `trigger_workflow`, `get_workflow_run`)
+- **Suppressions & health** — Manage bounce suppressions, check system queues, and replay dead-letter messages (`list_suppressions`, `get_dead_letters`, `replay_dead_letter`)
+
+### From “write a script” to “just ask”
+
+| Without an agent                                                                                                                                                              | With NotifKit MCP                                                                                                                                                                                                                                                                                                                                                   |
+| :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Jump into the DB to find contact info → open Twilio/Resend or write a throwaway script → format the payload → check their timezone manually → fire it off → hope it delivered | **You:** _“Send an urgent update to alex@acme.com that his package was lost in transit and support is rushing a replacement — text him if push doesn't deliver.”_<br><br>**Agent:** Looks up `alex@acme.com` → renders template → dispatches push with SMS fallback → bypasses quiet hours for urgent delivery → tracks delivery status → confirms it hit his phone |
+
+[Set up MCP](https://notifkit.dev/docs/mcp.html) · [MCP documentation](https://notifkit.dev/docs/mcp.html)
 
 ---
 
-## What you get
+## AI-assisted migration
 
-| The problem you don't want to build                      | How notifkit solves it                                               |
-| :------------------------------------------------------- | :------------------------------------------------------------------- |
-| **“Should this user receive it?”**                       | User preferences, topic opt-outs, and consent gates                  |
-| **“Is this a bad time to send?”**                        | Timezone-aware quiet hours that defer non-urgent sends               |
-| **“What if push fails?”**                                | Automatic ordered multi-channel fallback (`push` → `email` → `sms`)  |
-| **“What if my worker crashes?”**                         | Redis Streams consumer groups, retries, and durable idempotency      |
-| **“What if an event fires twice?”**                      | 24-hour deduplication via idempotency keys                           |
-| **“Can I send this later?”**                             | Priority scheduling with `sendAt` and cancellation before dispatch   |
-| **“Can I send this 3 days after signup?”**               | Stateful multi-step workflows with `wait` and `waitForEvent`         |
-| **“How do I know what happened?”**                       | Queryable delivery logs, Prometheus metrics, and campaign reporting  |
-| **“What happens when a provider goes down?”**            | Circuit breakers, exponential backoff, and DLQ replay                |
-| **“What about bounces and spam complaints?”**            | RFC 8058 one-click unsubscribe and automatic hard-bounce suppression |
-| **“What if I don't want another SaaS holding my data?”** | 100% self-hosted on your PostgreSQL and Redis                        |
+Already have notification code scattered across your application?
 
-> **The idea is simple:** You decide what to say. **notifkit handles getting it there reliably.**
+Point your coding agent at:
 
----
+```text
+https://notifkit.dev/llms-full.txt
+```
 
-## What notifkit is — and what it isn't
-
-**What it is:** the durable notification infrastructure layer running directly inside your own stack.
-
-**What it isn't:** a marketing automation suite.
-
-notifkit is not Customer.io, OneSignal, or SendGrid. You bring your own provider accounts — your keys, your billing, your deliverability.
-
-First-party providers ship for Resend and Firebase Cloud Messaging. Anything else is a simple `Transport` class with a `send()` method.
+It can understand notifkit's API and help identify ad-hoc notification code in your repository and refactor it into durable notifkit calls.
 
 ---
 
@@ -239,57 +225,69 @@ curl -X POST http://localhost:3000/v1/notify \
 
 ---
 
-## Agent-operable
+## Battle-tested for production
 
-**notifkit isn't just an API your application can call — your AI agent can operate it directly.**
+> **Battle-tested in production:** notifkit powers production notification pipelines handling **thousands of emails, push notifications, and OTPs every day.**
+>
+> It is the infrastructure we built because we needed it ourselves — rather than spending months reinventing distributed notification plumbing or paying SaaS tolls per alert.
 
-Connect the notifkit MCP server ([`@notifkit/mcp`](./packages/mcp)) to Claude Code, Cursor, Claude Desktop, Gemini, or any MCP-compatible agent:
+**Your servers. Your providers. Your data. Zero notification SaaS markups.**
 
-```bash
-npx -y @notifkit/mcp
+### Reliability & Chaos Engineering
+
+Because notification delivery is mission-critical, every pipeline component is tested against extreme failure conditions:
+
+```mermaid
+flowchart LR
+    S1["Redis Streams"] -->|"Kill Worker (SIGKILL)"| M1["Auto-Claim and Replay"] --> O1["Zero Lost Messages"]
+    S2["Connection Loss"] -->|"Drop DB / Redis"| M2["Auto-Reconnect / Retry"] --> O2["In-Flight State Intact"]
+    S3["10k+ Messages"] -->|"Burst"| M3["Concurrency and Limits"] --> O3["Flat Memory, No Leaks"]
+
+    classDef fault stroke:#ef4444,stroke-width:2px
+    classDef guard stroke:#6366f1,stroke-width:2px
+    classDef result stroke:#22c55e,stroke-width:2px
+    class S1,S2,S3 fault
+    class M1,M2,M3 guard
+    class O1,O2,O3 result
 ```
 
-### Ask your agent
-
-```text
-You: Why didn't usr_9182 receive their password reset?
-
-Agent: The notification was suppressed because usr_9182's email
-       address has a hard-bounce suppression from yesterday.
-```
-
-Your application and your AI agents use the **same notification infrastructure**:
-
-- **Send & dispatch** — Send one-off notifications or campaigns to users, lists, and segments (`send_notification`, `send_campaign`)
-- **Investigate & triage** — Diagnose delivery issues by inspecting message histories, provider responses, and quiet hours (`get_delivery_logs`, `get_notification`)
-- **Schedule & cancel** — Schedule future sends and cancel pending notifications (`list_scheduled`, `cancel_notification`)
-- **Campaign analytics** — Check delivery, open, click, bounce, and complaint metrics (`list_campaigns`, `get_campaign_stats`)
-- **Template management** — List, preview, and update templates with sample data (`list_templates`, `preview_template`, `upsert_template`)
-- **Users & preferences** — Look up users, contacts, preferences, and segment membership (`list_users`, `get_user_preferences`, `update_user_preferences`)
-- **Workflow operations** — Trigger workflows and inspect workflow runs (`create_workflow`, `trigger_workflow`, `get_workflow_run`)
-- **Suppressions & health** — Manage bounce suppressions, check system queues, and replay dead-letter messages (`list_suppressions`, `get_dead_letters`, `replay_dead_letter`)
-
-### From “write a script” to “just ask”
-
-| Without an agent                                                                                                                                                              | With NotifKit MCP                                                                                                                                                                                                                                                                                                                                                   |
-| :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Jump into the DB to find contact info → open Twilio/Resend or write a throwaway script → format the payload → check their timezone manually → fire it off → hope it delivered | **You:** _“Send an urgent update to alex@acme.com that his package was lost in transit and support is rushing a replacement — text him if push doesn't deliver.”_<br><br>**Agent:** Looks up `alex@acme.com` → renders template → dispatches push with SMS fallback → bypasses quiet hours for urgent delivery → tracks delivery status → confirms it hit his phone |
-
-[Set up MCP](https://notifkit.dev/docs/mcp.html) · [MCP documentation](https://notifkit.dev/docs/mcp.html)
+- **Chaos Monkey Testing (`tests/chaos/crash.test.ts`)**: Background worker processes are randomly terminated with `SIGKILL` during active, high-throughput message streaming. Consumer group Pending Entries List (PEL) re-claims guarantee **zero lost messages** and seamless failover.
+- **Infrastructure Recovery Testing (`tests/chaos/recovery.test.ts`)**: PostgreSQL and Redis connections are forcefully severed and restored under live traffic. Verifies automatic client reconnection, worker backpressure, and durable state resumption.
+- **High-Throughput Load Testing (`tests/chaos/load.test.ts`)**: Stressed with bursts of **10,000+ notifications** across parallel worker pools, verifying queue drain velocity, sliding-window rate limiters, and flat memory profiles without leaks.
+- **Race Conditions & Concurrency (`tests/race-conditions.test.ts`, `tests/idempotency.test.ts`)**: Hardened against concurrent duplicate dispatches, overlapping quiet-hour boundary evaluations, atomic user updates, and 24-hour idempotency key deduplication.
+- **100% Real Ephemeral Containers**: Unit, integration, and chaos test suites execute against real PostgreSQL and Redis containers via [Testcontainers](https://testcontainers.com), eliminating mocks for core storage and streaming primitives.
 
 ---
 
-## AI-assisted migration
+## What you get
 
-Already have notification code scattered across your application?
+| The problem you don't want to build                      | How notifkit solves it                                               |
+| :------------------------------------------------------- | :------------------------------------------------------------------- |
+| **“Should this user receive it?”**                       | User preferences, topic opt-outs, and consent gates                  |
+| **“Is this a bad time to send?”**                        | Timezone-aware quiet hours that defer non-urgent sends               |
+| **“What if push fails?”**                                | Automatic ordered multi-channel fallback (`push` → `email` → `sms`)  |
+| **“What if my worker crashes?”**                         | Redis Streams consumer groups, retries, and durable idempotency      |
+| **“What if an event fires twice?”**                      | 24-hour deduplication via idempotency keys                           |
+| **“Can I send this later?”**                             | Priority scheduling with `sendAt` and cancellation before dispatch   |
+| **“Can I send this 3 days after signup?”**               | Stateful multi-step workflows with `wait` and `waitForEvent`         |
+| **“How do I know what happened?”**                       | Queryable delivery logs, Prometheus metrics, and campaign reporting  |
+| **“What happens when a provider goes down?”**            | Circuit breakers, exponential backoff, and DLQ replay                |
+| **“What about bounces and spam complaints?”**            | RFC 8058 one-click unsubscribe and automatic hard-bounce suppression |
+| **“What if I don't want another SaaS holding my data?”** | 100% self-hosted on your PostgreSQL and Redis                        |
 
-Point your coding agent at:
+> **The idea is simple:** You decide what to say. **notifkit handles getting it there reliably.**
 
-```text
-https://notifkit.dev/llms-full.txt
-```
+---
 
-It can understand notifkit's API and help identify ad-hoc notification code in your repository and refactor it into durable notifkit calls.
+## What notifkit is — and what it isn't
+
+**What it is:** the durable notification infrastructure layer running directly inside your own stack.
+
+**What it isn't:** a marketing automation suite.
+
+notifkit is not Customer.io, OneSignal, or SendGrid. You bring your own provider accounts — your keys, your billing, your deliverability.
+
+First-party providers ship for Resend and Firebase Cloud Messaging. Anything else is a simple `Transport` class with a `send()` method.
 
 ---
 
