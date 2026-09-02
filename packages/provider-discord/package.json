@@ -1,0 +1,40 @@
+{
+  "name": "@notifkit/provider-discord",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "notifkit": "^0.1.0"
+  },
+  "devDependencies": {
+    "notifkit": "file:../../",
+    "typescript": "^5.8.3"
+  },
+  "description": "Discord webhook transport for notifkit — sends messages through an incoming Discord webhook.",
+  "license": "MIT",
+  "author": "devkitshq",
+  "homepage": "https://notifkit.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devkitshq/notifkit.git",
+    "directory": "packages/provider-discord"
+  },
+  "bugs": {
+    "url": "https://github.com/devkitshq/notifkit/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

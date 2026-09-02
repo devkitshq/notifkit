@@ -90,17 +90,17 @@ Because triple braces `{{{body}}}` preserve unescaped HTML, your agent in Claude
 
 **Campaigns & Sending**
 
-| Tool                  | What it does                                                                                              |
-| --------------------- | --------------------------------------------------------------------------------------------------------- |
-| `send_campaign`       | Send a template to a list of recipients across `email`, `sms`, `push`, or `webhook` with campaign tagging |
-| `send_notification`   | Send to existing users, a segment, or a topic with `sendAt` scheduling and priority lanes                 |
-| `list_campaigns`      | Recent campaign labels with size and last activity (supports `search`, `channel`, date range)             |
-| `get_campaign_stats`  | Sent, delivered, failed, opened, clicked, bounced, complained, unsubscribed, with rates                   |
-| `list_segments`       | Every segment tag in use — the valid audiences to broadcast to                                            |
-| `list_scheduled`      | Sends queued for the future, including quiet-hours deferrals                                              |
-| `get_delivery_logs`   | Per-message detail with filters for template, channel, status, campaign, or user search                   |
-| `get_notification`    | Status and delivery attempts for a specific task                                                          |
-| `cancel_notification` | Cancel a pending scheduled or quiet-hours deferred notification                                           |
+| Tool                  | What it does                                                                                                                     |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `send_campaign`       | Send a template to a list of recipients across `email`, `sms`, `push`, `webhook`, `telegram`, or `discord` with campaign tagging |
+| `send_notification`   | Send to existing users, a segment, or a topic with `sendAt` scheduling and priority lanes                                        |
+| `list_campaigns`      | Recent campaign labels with size and last activity (supports `search`, `channel`, date range)                                    |
+| `get_campaign_stats`  | Sent, delivered, failed, opened, clicked, bounced, complained, unsubscribed, with rates                                          |
+| `list_segments`       | Every segment tag in use — the valid audiences to broadcast to                                                                   |
+| `list_scheduled`      | Sends queued for the future, including quiet-hours deferrals                                                                     |
+| `get_delivery_logs`   | Per-message detail with filters for template, channel, status, campaign, or user search                                          |
+| `get_notification`    | Status and delivery attempts for a specific task                                                                                 |
+| `cancel_notification` | Cancel a pending scheduled or quiet-hours deferred notification                                                                  |
 
 **Templates** — `list_templates`, `get_template`, `upsert_template`, `delete_template`, `preview_template`, `render_template`
 
