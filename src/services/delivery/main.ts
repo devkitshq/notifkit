@@ -422,10 +422,13 @@ export class DeliveryWorker extends BaseWorker {
           await this.contactRepo.deactivate(
             task.projectId,
             task.recipientId,
-            "push",
+            task.channel as any,
             task.destination,
           );
-          this.logger.info({ token: task.destination }, "deactivated invalid push token");
+          this.logger.info(
+            { channel: task.channel, target: task.destination },
+            "deactivated invalid contact target",
+          );
           this.globalEmitter.emit(
             "delivery:failed",
             task.taskId,

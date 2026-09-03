@@ -8,6 +8,8 @@ export const RecipientProfileSchema = z.object({
   webhook: z.string().url().optional(),
   pushTokens: z.array(z.string()).optional(),
   pushToken: z.string().optional(),
+  telegram: z.string().optional(),
+  discord: z.string().url().optional(),
   locale: z.string().default("en"),
   timezone: z.string().default("UTC"),
   preferences: z.object({
