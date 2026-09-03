@@ -15,6 +15,13 @@
       "when": 1786643990078,
       "tag": "0001_stale_shotgun",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788339340939,
+      "tag": "0002_wide_colleen_wing",
+      "breakpoints": true
     }
   ]
 }

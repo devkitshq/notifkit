@@ -17,7 +17,15 @@ import {
 import { sql } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
-export const channelEnum = pgEnum("channel", ["email", "sms", "push", "webhook", "in-app"]);
+export const channelEnum = pgEnum("channel", [
+  "email",
+  "sms",
+  "push",
+  "webhook",
+  "in-app",
+  "telegram",
+  "discord",
+]);
 
 export const projects = pgTable("projects", {
   id: uuid("id").primaryKey().defaultRandom(),

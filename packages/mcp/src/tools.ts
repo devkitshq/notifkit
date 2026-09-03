@@ -3,8 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { NotifkitApi } from "./client.js";
 import { NotifkitApiError } from "./client.js";
 
-const CHANNELS = ["email", "sms", "push", "webhook", "in-app"] as const;
-const CONTACT_CHANNELS = ["email", "sms", "push", "webhook"] as const;
+const CHANNELS = ["email", "sms", "push", "webhook", "in-app", "telegram", "discord"] as const;
+const CONTACT_CHANNELS = ["email", "sms", "push", "webhook", "telegram", "discord"] as const;
 const PRIORITIES = ["low", "normal", "high", "critical"] as const;
 
 interface ToolResult {
@@ -209,14 +209,15 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
     {
       title: "Send a campaign to a list of addresses",
       description:
-        "Send one template to a list of recipient destinations (email, SMS/phone, push tokens, or webhook URLs) " +
-        "given directly — the tool creates or updates a user record for each address, then sends, and " +
-        "tags every message with a campaign label so the results can be read back later with get_campaign_stats. " +
-        "Supports 'email', 'sms', 'push', and 'webhook' channels. Use this when the person supplies the " +
-        "recipients themselves (a pasted list, a spreadsheet column). Always report the returned campaign label " +
-        "back to the user — it is how they ask about results later. Suppressed addresses (previous " +
-        "unsubscribes, complaints, hard bounces) are dropped automatically at send time, so the delivered " +
-        "count is normally lower than the list size.",
+        "Send one template to a list of recipient destinations (email, SMS/phone, push tokens, webhook URLs, " +
+        "Telegram chat ids, or Discord webhook URLs) given directly — the tool creates or updates a user " +
+        "record for each address, then sends, and tags every message with a campaign label so the results " +
+        "can be read back later with get_campaign_stats. Supports 'email', 'sms', 'push', 'webhook', " +
+        "'telegram', and 'discord' channels. Use this when the person supplies the recipients themselves " +
+        "(a pasted list, a spreadsheet column). Always report the returned campaign label back to the user " +
+        "— it is how they ask about results later. Suppressed addresses (previous unsubscribes, complaints, " +
+        "hard bounces) are dropped automatically at send time, so the delivered count is normally lower than " +
+        "the list size.",
       inputSchema: {
         campaign: z
           .string()
@@ -231,7 +232,7 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
           .enum(CONTACT_CHANNELS)
           .optional()
           .describe(
-            "Channel to send on ('email', 'sms', 'push', or 'webhook'). Defaults to 'email'.",
+            "Channel to send on ('email', 'sms', 'push', 'webhook', 'telegram', or 'discord'). Defaults to 'email'.",
           ),
         recipients: z
           .array(z.string().min(1))
@@ -239,7 +240,8 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
           .max(10000)
           .optional()
           .describe(
-            "Recipient destination addresses: email addresses for email, E.164 phone numbers for sms, device tokens for push, or URLs for webhook.",
+            "Recipient destination addresses: email addresses for email, E.164 phone numbers for sms, " +
+              "device tokens for push, URLs for webhook, chat ids for telegram, or webhook URLs for discord.",
           ),
         emails: z
           .array(z.string().email())
@@ -288,6 +290,10 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
           userRecord = { id: `phone:${target}`, phone: target };
         } else if (channel === "push") {
           userRecord = { id: `push:${target}`, pushToken: target };
+        } else if (channel === "telegram") {
+          userRecord = { id: `telegram:${target}` };
+        } else if (channel === "discord") {
+          userRecord = { id: `discord:${target}` };
         } else {
           userRecord = { id: `webhook:${target}` };
         }
@@ -830,7 +836,8 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
           .enum(CONTACT_CHANNELS)
           .optional()
           .describe(
-            "Only list users who have a registered contact for this channel (email, sms, push, webhook).",
+            "Only list users who have a registered contact for this channel " +
+              "(email, sms, push, webhook, telegram, discord).",
           ),
       },
       annotations: { title: "List users", readOnlyHint: true },
