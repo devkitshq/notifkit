@@ -953,3 +953,894 @@ describe("TwilioTransport (Client and logging)", () => {
     expect(events[0]).not.toHaveProperty("recipient");
   });
 });
+
+// ─── Telegram ────────────────────────────────────────────────────────────────
+
+import { TelegramTransport } from "../packages/provider-telegram/src/index.js";
+
+const BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11";
+
+/**
+ * Stubs `fetch` with the Bot API's envelope. Telegram signals failure in the
+ * JSON body (`ok: false`) rather than the HTTP status, so these tests drive
+ * the body and leave the status at 200 the way the real API does.
+ */
+function stubTelegram(body: unknown) {
+  const fn = vi.fn().mockResolvedValue({ json: async () => body });
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+/** The JSON payload sent to the Bot API on the Nth call. */
+function telegramBody(fn: ReturnType<typeof stubTelegram>, n = 0) {
+  return JSON.parse((fn.mock.calls[n]![1] as RequestInit).body as string);
+}
+
+function telegramTransport(overrides: Record<string, unknown> = {}) {
+  return new TelegramTransport({ botToken: BOT_TOKEN, ...overrides } as any);
+}
+
+function telegramTask(overrides: Record<string, unknown> = {}): any {
+  return {
+    taskId: "task-uuid-tg-1",
+    destination: "987654321",
+    renderedContent: { content: { body: "Your build is green" } },
+    ...overrides,
+  };
+}
+
+const okResult = (messageId: number) => ({ ok: true, result: { message_id: messageId } });
+
+describe("TelegramTransport (Telegram Provider)", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as any;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("registers against the telegram channel", () => {
+    expect(telegramTransport().channel).toBe("telegram");
+  });
+
+  it("defaults to the bot-wide rate ceiling and accepts an override", () => {
+    expect(telegramTransport().limits).toEqual({ limit: 30, windowSeconds: 1 });
+    expect(telegramTransport({ limits: { limit: 1, windowSeconds: 1 } }).limits).toEqual({
+      limit: 1,
+      windowSeconds: 1,
+    });
+  });
+
+  it("posts to the bot's sendMessage endpoint and returns the message id", async () => {
+    const fetchMock = stubTelegram(okResult(4242));
+
+    const result = await telegramTransport().send(telegramTask());
+
+    expect(fetchMock.mock.calls[0]![0]).toBe(
+      `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
+    );
+    expect(telegramBody(fetchMock)).toEqual({
+      chat_id: "987654321",
+      text: "Your build is green",
+    });
+    expect(result).toEqual({ success: true, providerMessageId: "4242" });
+  });
+
+  it("prefers content.text over content.body", async () => {
+    const fetchMock = stubTelegram(okResult(1));
+
+    await telegramTransport().send(
+      telegramTask({ renderedContent: { content: { text: "from text", body: "from body" } } }),
+    );
+
+    expect(telegramBody(fetchMock).text).toBe("from text");
+  });
+
+  it("folds a rendered subject onto the first line", async () => {
+    const fetchMock = stubTelegram(okResult(2));
+
+    await telegramTransport().send(
+      telegramTask({ renderedContent: { content: { subject: "Deploy", body: "shipped" } } }),
+    );
+
+    expect(telegramBody(fetchMock).text).toBe("Deploy\n\nshipped");
+  });
+
+  it("sends plain text unless a parse mode is configured", async () => {
+    const fetchMock = stubTelegram(okResult(3));
+
+    await telegramTransport().send(telegramTask());
+    expect(telegramBody(fetchMock, 0)).not.toHaveProperty("parse_mode");
+
+    await telegramTransport({ parseMode: "HTML" }).send(telegramTask());
+    expect(telegramBody(fetchMock, 1).parse_mode).toBe("HTML");
+  });
+
+  it("lets a template pin its own parse mode, ignoring a non-string one", async () => {
+    const fetchMock = stubTelegram(okResult(4));
+
+    await telegramTransport({ parseMode: "HTML" }).send(
+      telegramTask({ renderedContent: { content: { body: "hi", parseMode: "MarkdownV2" } } }),
+    );
+    expect(telegramBody(fetchMock, 0).parse_mode).toBe("MarkdownV2");
+
+    await telegramTransport({ parseMode: "HTML" }).send(
+      telegramTask({ renderedContent: { content: { body: "hi", parseMode: 7 } } }),
+    );
+    expect(telegramBody(fetchMock, 1).parse_mode).toBe("HTML");
+  });
+
+  it("passes through the preview and notification opt-outs", async () => {
+    const fetchMock = stubTelegram(okResult(5));
+
+    await telegramTransport().send(
+      telegramTask({
+        renderedContent: {
+          content: { body: "quiet", disableWebPagePreview: true, disableNotification: true },
+        },
+      }),
+    );
+
+    expect(telegramBody(fetchMock)).toMatchObject({
+      link_preview_options: { is_disabled: true },
+      disable_notification: true,
+    });
+  });
+
+  it("fails without reaching Telegram when the task carries no destination", async () => {
+    const fetchMock = stubTelegram(okResult(6));
+
+    const result = await telegramTransport().send(telegramTask({ destination: undefined }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      error: "No destination (Telegram chat id) on task",
+    });
+  });
+
+  it("returns an empty provider id when the API omits the message id", async () => {
+    stubTelegram({ ok: true });
+
+    const result = await telegramTransport().send(telegramTask());
+
+    expect(result).toEqual({ success: true, providerMessageId: "" });
+  });
+
+  it("treats a 403 as a dead target", async () => {
+    const log = logger();
+    stubTelegram({ ok: false, error_code: 403, description: "Forbidden: bot was blocked" });
+
+    const result = await telegramTransport({ logger: log }).send(telegramTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: true,
+      error: "Forbidden: bot was blocked",
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-tg-1", errorCode: 403, description: "Forbidden: bot was blocked" },
+      "Telegram send failed",
+    );
+  });
+
+  it.each([
+    ["chat not found", true],
+    ["user is deactivated", true],
+    ["message text is empty", false],
+  ])("classifies a 400 describing %j as dead=%s", async (description, invalidToken) => {
+    stubTelegram({ ok: false, error_code: 400, description });
+
+    const result = await telegramTransport().send(telegramTask());
+
+    expect(result).toEqual({ success: false, invalidToken, error: description });
+  });
+
+  it("falls back to a synthetic message when the API omits a description", async () => {
+    stubTelegram({ ok: false, error_code: 429 });
+    expect(await telegramTransport().send(telegramTask())).toEqual({
+      success: false,
+      invalidToken: false,
+      error: "Telegram API error 429",
+    });
+
+    stubTelegram({ ok: false });
+    expect(await telegramTransport().send(telegramTask())).toEqual({
+      success: false,
+      invalidToken: false,
+      error: "Telegram API error unknown",
+    });
+  });
+
+  it("does not treat a bare 400 as a dead target", async () => {
+    // A 400 with no description at all still has to be matched against the
+    // dead-target patterns without throwing on the missing string.
+    stubTelegram({ ok: false, error_code: 400 });
+
+    expect(await telegramTransport().send(telegramTask())).toEqual({
+      success: false,
+      invalidToken: false,
+      error: "Telegram API error 400",
+    });
+  });
+
+  it("reports a transport-level failure without marking the target dead", async () => {
+    const log = logger();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("socket hang up")));
+
+    const result = await telegramTransport({ logger: log }).send(telegramTask());
+
+    expect(result).toEqual({ success: false, error: "socket hang up" });
+    expect(log.error).toHaveBeenCalledWith(
+      { taskId: "task-uuid-tg-1", error: "socket hang up" },
+      "Telegram unexpected error",
+    );
+  });
+
+  it("logs an accepted send", async () => {
+    const log = logger();
+    stubTelegram(okResult(99));
+
+    await telegramTransport({ logger: log }).send(telegramTask());
+
+    expect(log.debug).toHaveBeenCalledWith(
+      { taskId: "task-uuid-tg-1", providerMessageId: "99" },
+      "Telegram message sent",
+    );
+  });
+});
+
+// ─── Discord ─────────────────────────────────────────────────────────────────
+
+import { DiscordTransport } from "../packages/provider-discord/src/index.js";
+
+const WEBHOOK_URL = "https://discord.com/api/webhooks/123/abcdef";
+
+/**
+ * Stubs `fetch` with a webhook Response double. Discord signals failure with
+ * the HTTP status, and the transport reads the body as text on that path and
+ * as JSON on the success path — so both readers are stubbed here.
+ */
+function stubDiscord(body: unknown, status = 200) {
+  const fn = vi.fn().mockResolvedValue({
+    status,
+    ok: status >= 200 && status < 300,
+    json: async () => body,
+    text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+  });
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+/** The JSON payload posted to the webhook on the Nth call. */
+function discordBody(fn: ReturnType<typeof stubDiscord>, n = 0) {
+  return JSON.parse((fn.mock.calls[n]![1] as RequestInit).body as string);
+}
+
+function discordTask(overrides: Record<string, unknown> = {}): any {
+  return {
+    taskId: "task-uuid-dc-1",
+    destination: WEBHOOK_URL,
+    renderedContent: { content: { body: "Build finished" } },
+    ...overrides,
+  };
+}
+
+describe("DiscordTransport (Discord Provider)", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as any;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("registers against the discord channel", () => {
+    expect(new DiscordTransport().channel).toBe("discord");
+  });
+
+  it("constructs without options and defaults to the per-webhook rate ceiling", () => {
+    expect(new DiscordTransport().limits).toEqual({ limit: 5, windowSeconds: 2 });
+    expect(new DiscordTransport({ limits: { limit: 1, windowSeconds: 1 } }).limits).toEqual({
+      limit: 1,
+      windowSeconds: 1,
+    });
+  });
+
+  it("posts to the webhook with wait=true and returns the message id", async () => {
+    const fetchMock = stubDiscord({ id: "msg-9001" });
+
+    const result = await new DiscordTransport().send(discordTask());
+
+    // `wait=true` is what makes Discord answer with the created message rather
+    // than an empty 204, so the id can be recorded.
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(`${WEBHOOK_URL}?wait=true`);
+    expect(discordBody(fetchMock)).toEqual({ content: "Build finished" });
+    expect(result).toEqual({ success: true, providerMessageId: "msg-9001" });
+  });
+
+  it("prefers content.text over content.body", async () => {
+    const fetchMock = stubDiscord({ id: "m1" });
+
+    await new DiscordTransport().send(
+      discordTask({ renderedContent: { content: { text: "from text", body: "from body" } } }),
+    );
+
+    expect(discordBody(fetchMock).content).toBe("from text");
+  });
+
+  it("bolds a rendered subject onto the first line", async () => {
+    const fetchMock = stubDiscord({ id: "m2" });
+
+    await new DiscordTransport().send(
+      discordTask({ renderedContent: { content: { subject: "Deploy", body: "shipped" } } }),
+    );
+
+    expect(discordBody(fetchMock).content).toBe("**Deploy**\nshipped");
+  });
+
+  it("omits sender identity unless configured", async () => {
+    const fetchMock = stubDiscord({ id: "m3" });
+
+    await new DiscordTransport().send(discordTask());
+    expect(discordBody(fetchMock, 0)).not.toHaveProperty("username");
+    expect(discordBody(fetchMock, 0)).not.toHaveProperty("avatar_url");
+
+    await new DiscordTransport({ username: "notifkit", avatarUrl: "https://img/a.png" }).send(
+      discordTask(),
+    );
+    expect(discordBody(fetchMock, 1)).toMatchObject({
+      username: "notifkit",
+      avatar_url: "https://img/a.png",
+    });
+  });
+
+  it("lets a template pin its own sender, ignoring blank and non-string values", async () => {
+    const fetchMock = stubDiscord({ id: "m4" });
+    const transport = new DiscordTransport({ username: "base", avatarUrl: "https://img/base.png" });
+
+    await transport.send(
+      discordTask({
+        renderedContent: {
+          content: { body: "hi", username: "alerts", avatarUrl: "https://img/alerts.png" },
+        },
+      }),
+    );
+    expect(discordBody(fetchMock, 0)).toMatchObject({
+      username: "alerts",
+      avatar_url: "https://img/alerts.png",
+    });
+
+    // Empty strings and wrong types fall back to the transport's own defaults.
+    await transport.send(
+      discordTask({ renderedContent: { content: { body: "hi", username: "", avatarUrl: 5 } } }),
+    );
+    expect(discordBody(fetchMock, 1)).toMatchObject({
+      username: "base",
+      avatar_url: "https://img/base.png",
+    });
+  });
+
+  it("forwards embeds only when they are an array", async () => {
+    const fetchMock = stubDiscord({ id: "m5" });
+    const embeds = [{ title: "Coverage", description: "80%" }];
+
+    await new DiscordTransport().send(
+      discordTask({ renderedContent: { content: { body: "hi", embeds } } }),
+    );
+    expect(discordBody(fetchMock, 0).embeds).toEqual(embeds);
+
+    await new DiscordTransport().send(
+      discordTask({ renderedContent: { content: { body: "hi", embeds: "nope" } } }),
+    );
+    expect(discordBody(fetchMock, 1)).not.toHaveProperty("embeds");
+  });
+
+  it("fails without reaching Discord when the task carries no destination", async () => {
+    const fetchMock = stubDiscord({ id: "m6" });
+
+    const result = await new DiscordTransport().send(discordTask({ destination: undefined }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      error: "No destination (Discord webhook URL) on task",
+    });
+  });
+
+  it("returns an empty provider id when the response carries no JSON", async () => {
+    const fn = vi.fn().mockResolvedValue({
+      status: 200,
+      ok: true,
+      json: async () => {
+        throw new Error("Unexpected end of JSON input");
+      },
+      text: async () => "",
+    });
+    vi.stubGlobal("fetch", fn);
+
+    const result = await new DiscordTransport().send(discordTask());
+
+    expect(result).toEqual({ success: true, providerMessageId: "" });
+  });
+
+  it.each([
+    [404, true],
+    [401, true],
+    [500, false],
+    [429, false],
+  ])("classifies a %i response as dead=%s", async (status, invalidToken) => {
+    stubDiscord("rate limited or gone", status);
+
+    const result = await new DiscordTransport().send(discordTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken,
+      error: `Discord webhook error ${status}: rate limited or gone`,
+    });
+  });
+
+  it("logs a rejected send", async () => {
+    const log = logger();
+    stubDiscord("missing permissions", 403);
+
+    await new DiscordTransport({ logger: log }).send(discordTask());
+
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-dc-1", status: 403, errorBody: "missing permissions" },
+      "Discord send failed",
+    );
+  });
+
+  it("reports a malformed webhook URL without marking the target dead", async () => {
+    const log = logger();
+    const fetchMock = stubDiscord({ id: "m7" });
+
+    const result = await new DiscordTransport({ logger: log }).send(
+      discordTask({ destination: "not-a-url" }),
+    );
+
+    // `new URL()` throws before any request is attempted.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: "task-uuid-dc-1" }),
+      "Discord unexpected error",
+    );
+  });
+
+  it("reports a transport-level failure", async () => {
+    const log = logger();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("socket hang up")));
+
+    const result = await new DiscordTransport({ logger: log }).send(discordTask());
+
+    expect(result).toEqual({ success: false, error: "socket hang up" });
+    expect(log.error).toHaveBeenCalledWith(
+      { taskId: "task-uuid-dc-1", error: "socket hang up" },
+      "Discord unexpected error",
+    );
+  });
+
+  it("logs an accepted send", async () => {
+    const log = logger();
+    stubDiscord({ id: "msg-42" });
+
+    await new DiscordTransport({ logger: log }).send(discordTask());
+
+    expect(log.debug).toHaveBeenCalledWith(
+      { taskId: "task-uuid-dc-1", providerMessageId: "msg-42" },
+      "Discord message sent",
+    );
+  });
+});
+
+// ─── Slack ───────────────────────────────────────────────────────────────────
+
+import { SlackTransport } from "../packages/provider-slack/src/index.js";
+
+const SLACK_BOT_TOKEN = "xoxb-0000-1111-test";
+const HOOK_URL = "https://hooks.slack.com/services/T000/B000/xyz";
+const POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage";
+
+/** Stubs `fetch` for the Web API, which reports failure in a JSON envelope. */
+function stubSlackApi(body: unknown, status = 200) {
+  const fn = vi.fn().mockResolvedValue({
+    status,
+    ok: status >= 200 && status < 300,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  });
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+/** Stubs `fetch` for Incoming Webhooks, which answer with a plain-text body. */
+function stubSlackHook(body: string, status = 200) {
+  const fn = vi.fn().mockResolvedValue({
+    status,
+    ok: status >= 200 && status < 300,
+    text: async () => body,
+    json: async () => ({}),
+  });
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+/** The JSON payload sent to Slack on the Nth call. */
+function slackBody(fn: ReturnType<typeof stubSlackApi>, n = 0) {
+  return JSON.parse((fn.mock.calls[n]![1] as RequestInit).body as string);
+}
+
+function slackTask(overrides: Record<string, unknown> = {}): any {
+  return {
+    taskId: "task-uuid-slack-1",
+    destination: "C0123456789",
+    renderedContent: { content: { body: "Deploy finished" } },
+    ...overrides,
+  };
+}
+
+describe("SlackTransport (Slack Provider)", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as any;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("rides the existing webhook channel rather than adding one of its own", () => {
+    expect(new SlackTransport().channel).toBe("webhook");
+  });
+
+  it("constructs without options and defaults to a conservative rate ceiling", () => {
+    expect(new SlackTransport().limits).toEqual({ limit: 50, windowSeconds: 60 });
+    expect(new SlackTransport({ limits: { limit: 1, windowSeconds: 1 } }).limits).toEqual({
+      limit: 1,
+      windowSeconds: 1,
+    });
+  });
+
+  it("accepts `token` as an alias for `botToken`", async () => {
+    const fetchMock = stubSlackApi({ ok: true, ts: "1700000000.000100" });
+
+    await new SlackTransport({ token: SLACK_BOT_TOKEN }).send(slackTask());
+
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      `Bearer ${SLACK_BOT_TOKEN}`,
+    );
+  });
+
+  it.each([
+    ["clientId", { clientId: "123.456" }],
+    ["clientSecret", { clientSecret: "shhh" }],
+  ])("warns when %s arrives without a usable token", (_label, opts) => {
+    const log = logger();
+
+    new SlackTransport({ ...opts, appId: "A123", logger: log });
+
+    expect(log.warn).toHaveBeenCalledWith(
+      { appId: "A123" },
+      expect.stringContaining("clientId/clientSecret authenticate Slack's OAuth install flow"),
+    );
+  });
+
+  it("stays quiet when OAuth credentials accompany a real token", () => {
+    const log = logger();
+
+    new SlackTransport({
+      clientId: "123.456",
+      clientSecret: "shhh",
+      botToken: SLACK_BOT_TOKEN,
+      logger: log,
+    });
+
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  describe("destination resolution", () => {
+    it("prefers a template's pinned channel over the task destination", async () => {
+      const fetchMock = stubSlackApi({ ok: true, ts: "1.1" });
+
+      await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(
+        slackTask({ renderedContent: { content: { body: "hi", channel: "#system-alerts" } } }),
+      );
+
+      expect(slackBody(fetchMock).channel).toBe("#system-alerts");
+    });
+
+    it("ignores a non-string pinned channel and falls back to the task destination", async () => {
+      const fetchMock = stubSlackApi({ ok: true, ts: "1.2" });
+
+      await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(
+        slackTask({ renderedContent: { content: { body: "hi", channel: 42 } } }),
+      );
+
+      expect(slackBody(fetchMock).channel).toBe("C0123456789");
+    });
+
+    it("falls back to the configured webhook for a task with no destination", async () => {
+      const fetchMock = stubSlackHook("ok");
+
+      const result = await new SlackTransport({ webhookUrl: HOOK_URL }).send(
+        slackTask({ destination: undefined }),
+      );
+
+      expect(String(fetchMock.mock.calls[0]![0])).toBe(HOOK_URL);
+      expect(result.success).toBe(true);
+    });
+
+    it("fails without reaching Slack when nothing names a destination", async () => {
+      const fetchMock = stubSlackApi({ ok: true });
+
+      const result = await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(
+        slackTask({ destination: undefined }),
+      );
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: false,
+        error: "No destination (Slack channel/user ID, or webhook URL) on task",
+      });
+    });
+
+    it("refuses a channel id when no token is configured", async () => {
+      const fetchMock = stubSlackApi({ ok: true });
+
+      const result = await new SlackTransport().send(slackTask());
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        success: false,
+        error: "Destination is a Slack channel/user ID but no botToken (or token) is configured",
+      });
+    });
+  });
+
+  describe("message body", () => {
+    it("prefers content.text over content.body", async () => {
+      const fetchMock = stubSlackApi({ ok: true, ts: "1.3" });
+
+      await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(
+        slackTask({ renderedContent: { content: { text: "from text", body: "from body" } } }),
+      );
+
+      expect(slackBody(fetchMock).text).toBe("from text");
+    });
+
+    it("forwards blocks only when they are an array", async () => {
+      const fetchMock = stubSlackApi({ ok: true, ts: "1.4" });
+      const blocks = [{ type: "section", text: { type: "mrkdwn", text: "hi" } }];
+
+      await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(
+        slackTask({ renderedContent: { content: { body: "hi", blocks } } }),
+      );
+      expect(slackBody(fetchMock, 0).blocks).toEqual(blocks);
+
+      await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(
+        slackTask({ renderedContent: { content: { body: "hi", blocks: "nope" } } }),
+      );
+      expect(slackBody(fetchMock, 1)).not.toHaveProperty("blocks");
+    });
+
+    it("always sends fallback text, even when the message is carried by blocks", async () => {
+      const fetchMock = stubSlackApi({ ok: true, ts: "1.5" });
+      const blocks = [{ type: "divider" }];
+
+      // Subject stands in when there is no body at all …
+      await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(
+        slackTask({ renderedContent: { content: { subject: "Nightly build", blocks } } }),
+      );
+      expect(slackBody(fetchMock, 0).text).toBe("Nightly build");
+
+      // … and a constant stands in when there is neither.
+      await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(
+        slackTask({ renderedContent: { content: { blocks } } }),
+      );
+      expect(slackBody(fetchMock, 1).text).toBe("New notification");
+    });
+  });
+
+  describe("chat.postMessage", () => {
+    it("posts to the Web API and returns a channel-qualified message id", async () => {
+      const fetchMock = stubSlackApi({ ok: true, ts: "1700000000.000100", channel: "C999" });
+
+      const result = await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(slackTask());
+
+      expect(fetchMock.mock.calls[0]![0]).toBe(POST_MESSAGE_URL);
+      expect(result).toEqual({ success: true, providerMessageId: "C999:1700000000.000100" });
+    });
+
+    it("falls back to the requested channel when the response omits one", async () => {
+      stubSlackApi({ ok: true, ts: "1700000000.000200" });
+
+      const result = await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(slackTask());
+
+      expect(result).toEqual({
+        success: true,
+        providerMessageId: "C0123456789:1700000000.000200",
+      });
+    });
+
+    it("reports no message id when the response omits the timestamp", async () => {
+      stubSlackApi({ ok: true });
+
+      const result = await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(slackTask());
+
+      expect(result).toEqual({ success: true, providerMessageId: undefined });
+    });
+
+    it.each([
+      ["channel_not_found", true],
+      ["is_archived", true],
+      ["channel_is_archived", true],
+      ["user_not_found", true],
+      ["account_inactive", true],
+      ["not_in_channel", true],
+      ["ratelimited", false],
+      ["invalid_auth", false],
+    ])("classifies %s as dead-destination=%s", async (error, invalidToken) => {
+      stubSlackApi({ ok: false, error });
+
+      const result = await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(slackTask());
+
+      expect(result).toEqual({ success: false, invalidToken, error });
+    });
+
+    it("falls back to a generic message when the API names no error", async () => {
+      stubSlackApi({ ok: false });
+
+      const result = await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(slackTask());
+
+      expect(result).toEqual({ success: false, invalidToken: false, error: "Slack API error" });
+    });
+
+    it("logs both outcomes with the app id that produced them", async () => {
+      const log = logger();
+      stubSlackApi({ ok: true, ts: "1.6", channel: "C1" });
+      await new SlackTransport({ botToken: SLACK_BOT_TOKEN, appId: "A123", logger: log }).send(
+        slackTask(),
+      );
+      expect(log.debug).toHaveBeenCalledWith(
+        { taskId: "task-uuid-slack-1", appId: "A123", providerMessageId: "C1:1.6" },
+        "Slack message sent",
+      );
+
+      stubSlackApi({ ok: false, error: "channel_not_found" });
+      await new SlackTransport({ botToken: SLACK_BOT_TOKEN, appId: "A123", logger: log }).send(
+        slackTask(),
+      );
+      expect(log.warn).toHaveBeenCalledWith(
+        {
+          taskId: "task-uuid-slack-1",
+          appId: "A123",
+          error: "channel_not_found",
+          invalidToken: true,
+        },
+        "Slack chat.postMessage failed",
+      );
+    });
+
+    it("reports a transport-level failure", async () => {
+      const log = logger();
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("socket hang up")));
+
+      const result = await new SlackTransport({ botToken: SLACK_BOT_TOKEN, logger: log }).send(
+        slackTask(),
+      );
+
+      expect(result).toEqual({ success: false, error: "socket hang up" });
+      expect(log.error).toHaveBeenCalledWith(
+        { taskId: "task-uuid-slack-1", error: "socket hang up" },
+        "Slack unexpected error",
+      );
+    });
+  });
+
+  describe("incoming webhooks", () => {
+    const hookTask = () => slackTask({ destination: HOOK_URL });
+
+    it("posts the message unauthenticated and synthesises a message id", async () => {
+      const fetchMock = stubSlackHook("ok");
+
+      const result = await new SlackTransport().send(hookTask());
+
+      const init = fetchMock.mock.calls[0]![1] as RequestInit;
+      // A webhook URL carries its own authorisation, so no bearer token is sent.
+      expect(init.headers).not.toHaveProperty("Authorization");
+      expect(result).toEqual({
+        success: true,
+        providerMessageId: "slack-webhook-task-uuid-slack-1",
+      });
+    });
+
+    it("forwards blocks over the webhook route too", async () => {
+      const fetchMock = stubSlackHook("ok");
+      const blocks = [{ type: "divider" }];
+
+      await new SlackTransport().send(
+        slackTask({
+          destination: HOOK_URL,
+          renderedContent: { content: { body: "hi", blocks } },
+        }),
+      );
+
+      expect(slackBody(fetchMock)).toEqual({ text: "hi", blocks });
+    });
+
+    it("tolerates the trailing whitespace Slack sometimes returns", async () => {
+      stubSlackHook("ok\n");
+
+      const result = await new SlackTransport().send(hookTask());
+
+      expect(result.success).toBe(true);
+    });
+
+    it.each([
+      ["channel_not_found", true],
+      ["channel_is_archived", true],
+      ["no_service", true],
+      ["invalid_payload", false],
+    ])("classifies the %j response body as dead-destination=%s", async (body, invalidToken) => {
+      stubSlackHook(body, 400);
+
+      const result = await new SlackTransport().send(hookTask());
+
+      expect(result).toEqual({ success: false, invalidToken, error: body });
+    });
+
+    it("falls back to the status code when the body is empty", async () => {
+      stubSlackHook("", 500);
+
+      const result = await new SlackTransport().send(hookTask());
+
+      expect(result).toEqual({ success: false, invalidToken: false, error: "HTTP 500" });
+    });
+
+    it("fails a 200 that does not actually say ok", async () => {
+      stubSlackHook("invalid_payload", 200);
+
+      const result = await new SlackTransport().send(hookTask());
+
+      expect(result).toEqual({ success: false, invalidToken: false, error: "invalid_payload" });
+    });
+
+    it("logs both outcomes", async () => {
+      const log = logger();
+      stubSlackHook("ok");
+      await new SlackTransport({ appId: "A9", logger: log }).send(hookTask());
+      expect(log.debug).toHaveBeenCalledWith(
+        {
+          taskId: "task-uuid-slack-1",
+          appId: "A9",
+          providerMessageId: "slack-webhook-task-uuid-slack-1",
+        },
+        "Slack webhook message sent",
+      );
+
+      stubSlackHook("no_service", 404);
+      await new SlackTransport({ appId: "A9", logger: log }).send(hookTask());
+      expect(log.warn).toHaveBeenCalledWith(
+        {
+          taskId: "task-uuid-slack-1",
+          appId: "A9",
+          status: 404,
+          body: "no_service",
+          invalidToken: true,
+        },
+        "Slack incoming webhook failed",
+      );
+    });
+
+    it("reports a transport-level failure", async () => {
+      const log = logger();
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("dns failure")));
+
+      const result = await new SlackTransport({ logger: log }).send(hookTask());
+
+      expect(result).toEqual({ success: false, error: "dns failure" });
+      expect(log.error).toHaveBeenCalledWith(
+        { taskId: "task-uuid-slack-1", error: "dns failure" },
+        "Slack unexpected error",
+      );
+    });
+  });
+});

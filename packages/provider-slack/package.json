@@ -1,0 +1,40 @@
+{
+  "name": "@notifkit/provider-slack",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "notifkit": "^0.1.0"
+  },
+  "devDependencies": {
+    "notifkit": "file:../../",
+    "typescript": "^5.8.3"
+  },
+  "description": "Slack transport for notifkit, via Incoming Webhooks or the chat.postMessage Web API.",
+  "license": "MIT",
+  "author": "devkitshq",
+  "homepage": "https://notifkit.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devkitshq/notifkit.git",
+    "directory": "packages/provider-slack"
+  },
+  "bugs": {
+    "url": "https://github.com/devkitshq/notifkit/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

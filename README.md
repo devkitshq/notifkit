@@ -320,6 +320,7 @@ First-party packages:
 
 - [`@notifkit/provider-resend`](./packages/provider-resend) — transactional email via Resend
 - [`@notifkit/provider-fcm`](./packages/provider-fcm) — push notifications via Firebase Cloud Messaging
+- [`@notifkit/provider-slack`](./packages/provider-slack) — Slack messages via Incoming Webhooks or the Web API
 - [`@notifkit/provider-twilio`](./packages/provider-twilio) — SMS via Twilio, with signature-verified delivery status callbacks
 - [`@notifkit/provider-telegram`](./packages/provider-telegram) — messages via a Telegram bot
 - [`@notifkit/provider-discord`](./packages/provider-discord) — messages via a Discord webhook
