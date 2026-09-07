@@ -295,7 +295,7 @@ First-party providers ship for Resend and Firebase Cloud Messaging. Anything els
 
 |                     |                                                                                        |
 | :------------------ | :------------------------------------------------------------------------------------- |
-| **Channels**        | `email`, `sms`, `push`, `webhook`                                                      |
+| **Channels**        | `email`, `sms`, `push`, `webhook`, `telegram`, `discord`, `whatsapp`                   |
 | **Targeting**       | A user, a list of users, a segment, or a topic                                         |
 | **Priorities**      | `low`, `normal`, `high`, `critical` — separate stream lanes                            |
 | **Scheduling**      | Future sends with `sendAt`, quiet-hours deferral, cancellation                         |
@@ -324,6 +324,7 @@ First-party packages:
 - [`@notifkit/provider-twilio`](./packages/provider-twilio) — SMS via Twilio, with signature-verified delivery status callbacks
 - [`@notifkit/provider-telegram`](./packages/provider-telegram) — messages via a Telegram bot
 - [`@notifkit/provider-discord`](./packages/provider-discord) — messages via a Discord webhook
+- [`@notifkit/provider-whatsapp`](./packages/provider-whatsapp) — messages via Meta's WhatsApp Cloud API
 
 For anything else, implement a simple `Transport`:
 

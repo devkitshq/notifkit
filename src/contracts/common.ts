@@ -8,6 +8,7 @@ export const NotificationChannelSchema = z.enum([
   "in-app",
   "telegram",
   "discord",
+  "whatsapp",
 ]);
 export type NotificationChannel = z.infer<typeof NotificationChannelSchema>;
 

@@ -164,7 +164,7 @@ export class AiWorker extends BaseWorker {
       const destination =
         pending.channel === "email"
           ? pending.recipient.email
-          : pending.channel === "sms"
+          : pending.channel === "sms" || pending.channel === "whatsapp"
             ? pending.recipient.phone
             : pending.channel === "webhook"
               ? pending.recipient.webhook

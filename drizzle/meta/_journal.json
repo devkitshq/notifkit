@@ -22,6 +22,13 @@
       "when": 1788339340939,
       "tag": "0002_wide_colleen_wing",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788779801992,
+      "tag": "0003_skinny_daimon_hellstrom",
+      "breakpoints": true
     }
   ]
 }

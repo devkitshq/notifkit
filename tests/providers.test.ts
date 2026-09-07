@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHmac } from "node:crypto";
 import { ResendTransport } from "../packages/provider-resend/src/index.js";
 import { FcmTransport } from "../packages/provider-fcm/src/index.js";
 import { ConsoleTransport } from "../packages/provider-console/src/index.js";
@@ -1841,6 +1842,244 @@ describe("SlackTransport (Slack Provider)", () => {
         { taskId: "task-uuid-slack-1", error: "dns failure" },
         "Slack unexpected error",
       );
+    });
+  });
+});
+
+import { WhatsAppTransport } from "../packages/provider-whatsapp/src/index.js";
+
+describe("WhatsAppTransport (WhatsApp Provider)", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as any;
+
+  function whatsappTransport(overrides: Record<string, unknown> = {}) {
+    return new WhatsAppTransport({
+      phoneNumberId: "phone-12345",
+      accessToken: "meta-access-token",
+      ...overrides,
+    } as any);
+  }
+
+  function whatsappTask(overrides: Record<string, unknown> = {}): any {
+    return {
+      taskId: "task-uuid-wa-1",
+      destination: "+1 (555) 123-4567",
+      renderedContent: { content: { text: "Your verification code is 123456" } },
+      ...overrides,
+    };
+  }
+
+  it("exposes the whatsapp channel", () => {
+    expect(whatsappTransport().channel).toBe("whatsapp");
+    expect(whatsappTransport().webhookPath).toBe("/webhooks/whatsapp");
+  });
+
+  it("fails if recipient has no phone number", async () => {
+    const result = await whatsappTransport().send(whatsappTask({ destination: undefined }));
+    expect(result).toEqual({
+      success: false,
+      error: "No phone number on recipient; cannot send WhatsApp message.",
+    });
+  });
+
+  it("fails if template has no text content", async () => {
+    const result = await whatsappTransport().send(
+      whatsappTask({ renderedContent: { content: {} } }),
+    );
+    expect(result).toEqual({
+      success: false,
+      error: "Template has no 'text' content for the whatsapp channel.",
+    });
+  });
+
+  it("sends text message via Meta Graph API successfully", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        messaging_product: "whatsapp",
+        contacts: [{ input: "15551234567", wa_id: "15551234567" }],
+        messages: [{ id: "wamid.HBgLMTU1NTEyMzQ1NjcVAgASGBQzQT..." }],
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await whatsappTransport().send(whatsappTask());
+
+    expect(result).toEqual({
+      success: true,
+      providerMessageId: "wamid.HBgLMTU1NTEyMzQ1NjcVAgASGBQzQT...",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://graph.facebook.com/v21.0/phone-12345/messages",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer meta-access-token",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: "15551234567",
+          type: "text",
+          text: { body: "Your verification code is 123456" },
+        }),
+      }),
+    );
+  });
+
+  it("handles HTTP error and detects invalid token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({
+        error: { message: "Invalid OAuth access token", code: 190 },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await whatsappTransport().send(whatsappTask());
+
+    expect(result).toEqual({
+      success: false,
+      error: "Invalid OAuth access token",
+      invalidToken: true,
+    });
+  });
+
+  it("handles fetch exception gracefully", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network error")));
+
+    const result = await whatsappTransport().send(whatsappTask());
+
+    expect(result).toEqual({
+      success: false,
+      error: "network error",
+    });
+  });
+
+  it("logs error when send fails", async () => {
+    const log = logger();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: async () => ({ error: { message: "Server error" } }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await whatsappTransport({ logger: log }).send(whatsappTask());
+
+    expect(log.error).toHaveBeenCalledWith(
+      { status: 500, error: { message: "Server error" } },
+      "WhatsApp send failed",
+    );
+  });
+
+  describe("Webhook verification & parsing", () => {
+    it("handles hub.challenge verification when valid", () => {
+      const transport = whatsappTransport({ verifyToken: "secret-token-123" });
+      const query = new URLSearchParams({
+        "hub.mode": "subscribe",
+        "hub.verify_token": "secret-token-123",
+        "hub.challenge": "challenge_12345",
+      });
+
+      expect(transport.verifyWebhookChallenge(query)).toBe("challenge_12345");
+    });
+
+    it("rejects challenge on token mismatch or missing configuration", () => {
+      const transportWithoutToken = whatsappTransport();
+      const query = new URLSearchParams({
+        "hub.mode": "subscribe",
+        "hub.verify_token": "secret-token-123",
+        "hub.challenge": "challenge_12345",
+      });
+
+      expect(transportWithoutToken.verifyWebhookChallenge(query)).toBeUndefined();
+
+      const transportWithToken = whatsappTransport({ verifyToken: "secret-token-123" });
+      const badQuery = new URLSearchParams({
+        "hub.mode": "subscribe",
+        "hub.verify_token": "wrong-token",
+        "hub.challenge": "challenge_12345",
+      });
+      expect(transportWithToken.verifyWebhookChallenge(badQuery)).toBeUndefined();
+    });
+
+    it("verifies webhook signature with appSecret", () => {
+      const appSecret = "meta-app-secret-xyz";
+      const transport = whatsappTransport({ appSecret });
+      const body = JSON.stringify({ entry: [] });
+      const sig = createHmac("sha256", appSecret).update(body).digest("hex");
+
+      expect(
+        transport.verifyWebhook(body, {
+          "x-hub-signature-256": `sha256=${sig}`,
+        }),
+      ).toBe(true);
+
+      expect(
+        transport.verifyWebhook(body, {
+          "x-hub-signature-256": "sha256=invalid-signature",
+        }),
+      ).toBe(false);
+
+      expect(transport.verifyWebhook(body, {})).toBe(false);
+      expect(
+        whatsappTransport().verifyWebhook(body, { "x-hub-signature-256": `sha256=${sig}` }),
+      ).toBe(false);
+    });
+
+    it("parses webhook status events (read and failed)", async () => {
+      const transport = whatsappTransport();
+      const webhookPayload = {
+        entry: [
+          {
+            changes: [
+              {
+                value: {
+                  statuses: [
+                    {
+                      id: "msg-1",
+                      status: "read",
+                      recipient_id: "15551234567",
+                      timestamp: "1700000000",
+                    },
+                    {
+                      id: "msg-2",
+                      status: "failed",
+                      recipient_id: "15559876543",
+                      timestamp: "1700000010",
+                      errors: [{ code: 131051, title: "Message failed to send" }],
+                    },
+                    {
+                      id: "msg-3",
+                      status: "delivered",
+                      recipient_id: "15550000000",
+                      timestamp: "1700000020",
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      const events = await transport.parseWebhook(webhookPayload);
+      expect(events).toHaveLength(2);
+      expect(events[0]).toEqual({
+        providerMessageId: "msg-1",
+        status: "opened",
+        timestamp: new Date(1700000000 * 1000),
+        recipient: "15551234567",
+      });
+      expect(events[1]).toEqual({
+        providerMessageId: "msg-2",
+        status: "bounced",
+        timestamp: new Date(1700000010 * 1000),
+        recipient: "15559876543",
+        metadata: { errors: [{ code: 131051, title: "Message failed to send" }] },
+      });
     });
   });
 });

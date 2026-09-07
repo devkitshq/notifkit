@@ -30,6 +30,7 @@ export const ContactChannelSchema = z.enum([
   "webhook",
   "telegram",
   "discord",
+  "whatsapp",
 ]);
 export type ContactChannel = z.infer<typeof ContactChannelSchema>;
 
