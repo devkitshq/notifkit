@@ -58,7 +58,7 @@ export interface SlackTransportOptions {
 }
 
 export class SlackTransport implements Transport {
-  readonly channel = "webhook" as const;
+  readonly channel = "slack" as const;
   readonly limits?: { limit: number; windowSeconds: number };
 
   private readonly botToken?: string;

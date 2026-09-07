@@ -31,6 +31,7 @@ export const ContactChannelSchema = z.enum([
   "telegram",
   "discord",
   "whatsapp",
+  "slack",
 ]);
 export type ContactChannel = z.infer<typeof ContactChannelSchema>;
 

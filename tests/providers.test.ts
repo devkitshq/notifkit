@@ -1487,8 +1487,8 @@ describe("SlackTransport (Slack Provider)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("rides the existing webhook channel rather than adding one of its own", () => {
-    expect(new SlackTransport().channel).toBe("webhook");
+  it("exposes the dedicated slack channel", () => {
+    expect(new SlackTransport().channel).toBe("slack");
   });
 
   it("constructs without options and defaults to a conservative rate ceiling", () => {

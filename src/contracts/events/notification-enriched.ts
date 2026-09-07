@@ -10,6 +10,7 @@ export const RecipientProfileSchema = z.object({
   pushToken: z.string().optional(),
   telegram: z.string().optional(),
   discord: z.string().url().optional(),
+  slack: z.string().optional(),
   locale: z.string().default("en"),
   timezone: z.string().default("UTC"),
   preferences: z.object({

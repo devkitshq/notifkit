@@ -26,6 +26,7 @@ export const channelEnum = pgEnum("channel", [
   "telegram",
   "discord",
   "whatsapp",
+  "slack",
 ]);
 
 export const projects = pgTable("projects", {

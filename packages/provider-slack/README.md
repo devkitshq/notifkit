@@ -1,7 +1,7 @@
 # @notifkit/provider-slack
 
 Slack transport for [notifkit](https://github.com/devkitshq/notifkit). Registers
-against the `webhook` channel and posts through either a Slack bot token
+against the `slack` channel and posts through either a Slack bot token
 (`chat.postMessage`) or a plain Incoming Webhook URL — whichever a recipient's
 stored contact target resolves to.
 
@@ -35,7 +35,7 @@ shape:
 | `appId`                     | Purely descriptive — shows up in log lines so you can tell multiple Slack app installations apart. Doesn't affect sending.               |
 | `clientId` / `clientSecret` | Accepted, but **not** used to authenticate sends — see below.                                                                            |
 
-A recipient's `webhook` contact target (or a template's own `channel`
+A recipient's `slack` contact target (or a template's own `channel`
 override, or the transport's `webhookUrl` fallback) decides how the message
 is actually delivered:
 

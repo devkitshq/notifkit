@@ -29,6 +29,13 @@
       "when": 1788779801992,
       "tag": "0003_skinny_daimon_hellstrom",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788780502388,
+      "tag": "0004_pretty_bruce_banner",
+      "breakpoints": true
     }
   ]
 }
