@@ -4,7 +4,7 @@
 
 **You shouldn't have to build a notification system.**
 
-Self-hosted notification infrastructure for product notifications. One API call handles email, SMS, push, and webhooks — with preferences, quiet hours, retries, fallback, scheduling, workflows, and delivery logs built in.
+Self-hosted notification infrastructure for product notifications. One API call handles email, SMS, push, and webhooks, with preferences, quiet hours, retries, fallback, scheduling, workflows, and delivery logs built in.
 
 [![npm version](https://img.shields.io/npm/v/notifkit.svg?style=flat-square&color=6366f1)](https://www.npmjs.com/package/notifkit) [![npm downloads](https://img.shields.io/npm/dm/notifkit.svg?style=flat-square&color=6366f1)](https://www.npmjs.com/package/notifkit) [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/devkitshq/notifkit/badges/coverage.json&style=flat-square)](https://github.com/devkitshq/notifkit/actions/workflows/ci.yml) [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178c6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Node.js](https://img.shields.io/badge/node-%3E%3D22.0.0-339933.svg?style=flat-square)](https://nodejs.org) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 
@@ -12,9 +12,7 @@ Self-hosted notification infrastructure for product notifications. One API call 
 
 </div>
 
----
-
-### The first notification is easy
+### Sending one notification is easy
 
 ```ts
 await sendEmail({
@@ -24,13 +22,9 @@ await sendEmail({
 });
 ```
 
-### Then reality hits
+Sending them reliably is the hard part. Users opt out. People are asleep. Push tokens die. Providers throw 503s. Channels fail and need fallback. Somewhere along the way you need timezone-aware quiet hours, future scheduling, deduplication, multi-channel templates, delivery logs, unsubscribe handling, multi-step workflows, and a dead-letter queue nobody wants to maintain.
 
-Users opt out. People are asleep. Push tokens die. Providers throw 503s. Some channels fail and need fallback. You need timezone-aware quiet hours, future scheduling, deduplication, multi-channel templates, delivery logs, unsubscribe handling, multi-step workflows, and a dead-letter queue nobody wants to maintain.
-
-**notifkit is that machinery, already built.**
-
-Your app makes one typed call. notifkit handles the rest — **who gets it, which channel to use, when to send it, whether they're allowed to receive it, and what happens when delivery fails.**
+notifkit is that machinery. Your app makes one typed call, and notifkit decides who gets the notification, which channel to use, when to send it, whether the user is allowed to receive it, and what to do when delivery fails.
 
 ```ts
 import { notifkit } from "notifkit";
@@ -43,15 +37,11 @@ await notifkit.notify({
 });
 ```
 
-> **Push first. If it fails, email.**
->
-> Preferences, consent, quiet hours, retries, deduplication, throttling, template rendering, and delivery tracking happen behind that single call.
+That call tries push, then email if push fails. Preferences, consent, quiet hours, retries, deduplication, throttling, template rendering, and delivery tracking all happen behind it.
 
----
+## How it runs
 
-## What actually runs
-
-notifkit is both an **orchestration engine** and a **typed SDK**.
+notifkit is an orchestration engine and a typed SDK.
 
 ```mermaid
 flowchart TD
@@ -79,7 +69,7 @@ flowchart TD
     DELIVER -.->|"delivery logs"| PG
     DELIVER -->|"Dispatch"| PROVIDERS
 
-    PROVIDERS["Provider Transports<br/>Email: Resend, SES, Postmark · Push: Firebase (FCM)<br/>SMS: Twilio, MessageBird · Webhooks: Custom HTTP"]
+    PROVIDERS["Provider Transports<br/>Email: Resend · Push: Firebase (FCM) · SMS: Twilio<br/>Chat: Slack, Telegram, Discord, WhatsApp<br/>Webhooks: Custom HTTP"]
 
     classDef entry stroke:#6366f1,stroke-width:2px
     classDef store stroke:#0ea5e9,stroke-width:2px
@@ -89,25 +79,19 @@ flowchart TD
     class ENRICH,ENGINE,DELIVER,SCHED work
 ```
 
-- **`NotifkitServer`**: Runs the HTTP REST API router (`/v1/notify`, `/health`, `/metrics`) and the background worker pipelines (enricher, decision engine, scheduler, delivery).
-- **`NotifkitClient`**: The lightweight client your application uses to trigger notifications, sync templates, and manage users over HTTP.
+`NotifkitServer` runs the HTTP REST API router (`/v1/notify`, `/health`, `/metrics`) and the background worker pipelines: enricher, decision engine, scheduler, and delivery. `NotifkitClient` is the lightweight client your application uses to trigger notifications, sync templates, and manage users over HTTP.
 
 ### Topologies
 
-- **Single Process (Monolith)**: Run the API and all workers in the same Node.js process (`services: ["all"]`). Perfect for small-to-medium apps, side projects, and staging.
-- **Distributed Services**: Run stateless API servers (`services: ["api"]`) behind a load balancer and scale worker pools (`services: ["enricher", "engine", "delivery", "scheduler"]`) horizontally across Redis Streams consumer groups.
-
----
+In a single process, the API and all workers run in the same Node.js process (`services: ["all"]`), which works for small and medium apps, side projects, and staging. Distributed, you run stateless API servers (`services: ["api"]`) behind a load balancer and scale worker pools (`services: ["enricher", "engine", "delivery", "scheduler"]`) horizontally across Redis Streams consumer groups.
 
 ## Agent-operable
 
 https://github.com/user-attachments/assets/4dff98bb-37d3-44b4-bf46-9607c1cd89b5
 
-[▶️ Watch the AI demo](assets/ai_demo.mp4) - this is link to raw video file
+[Watch the AI demo](assets/ai_demo.mp4) (link to the raw video file)
 
-**notifkit isn't just an API your application can call — your AI agent can operate it directly.**
-
-Connect the notifkit MCP server ([`@notifkit/mcp`](./packages/mcp)) to Claude Code, Cursor, Claude Desktop, Gemini, or any MCP-compatible agent:
+An AI agent can operate notifkit directly. Connect the notifkit MCP server ([`@notifkit/mcp`](./packages/mcp)) to Claude Code, Cursor, Claude Desktop, Gemini, or any MCP-compatible agent:
 
 ```bash
 npx -y @notifkit/mcp
@@ -122,40 +106,34 @@ Agent: The notification was suppressed because usr_9182's email
        address has a hard-bounce suppression from yesterday.
 ```
 
-Your application and your AI agents use the **same notification infrastructure**:
+Your application and your AI agents use the same notification infrastructure. Through MCP an agent can:
 
-- **Send & dispatch** — Send one-off notifications or campaigns to users, lists, and segments (`send_notification`, `send_campaign`)
-- **Investigate & triage** — Diagnose delivery issues by inspecting message histories, provider responses, and quiet hours (`get_delivery_logs`, `get_notification`)
-- **Schedule & cancel** — Schedule future sends and cancel pending notifications (`list_scheduled`, `cancel_notification`)
-- **Campaign analytics** — Check delivery, open, click, bounce, and complaint metrics (`list_campaigns`, `get_campaign_stats`)
-- **Template management** — List, preview, and update templates with sample data (`list_templates`, `preview_template`, `upsert_template`)
-- **Users & preferences** — Look up users, contacts, preferences, and segment membership (`list_users`, `get_user_preferences`, `update_user_preferences`)
-- **Workflow operations** — Trigger workflows and inspect workflow runs (`create_workflow`, `trigger_workflow`, `get_workflow_run`)
-- **Suppressions & health** — Manage bounce suppressions, check system queues, and replay dead-letter messages (`list_suppressions`, `get_dead_letters`, `replay_dead_letter`)
+- Send one-off notifications or campaigns to users, lists, and segments (`send_notification`, `send_campaign`)
+- Diagnose delivery issues by inspecting message histories, provider responses, and quiet hours (`get_delivery_logs`, `get_notification`)
+- Schedule future sends and cancel pending notifications (`list_scheduled`, `cancel_notification`)
+- Check delivery, open, click, bounce, and complaint metrics (`list_campaigns`, `get_campaign_stats`)
+- List, preview, and update templates with sample data (`list_templates`, `preview_template`, `upsert_template`)
+- Look up users, contacts, preferences, and segment membership (`list_users`, `get_user_preferences`, `update_user_preferences`)
+- Trigger workflows and inspect workflow runs (`create_workflow`, `trigger_workflow`, `get_workflow_run`)
+- Manage bounce suppressions, check system queues, and replay dead-letter messages (`list_suppressions`, `get_dead_letters`, `replay_dead_letter`)
 
-### From “write a script” to “just ask”
+### The same task, with and without an agent
 
-| Without an agent                                                                                                                                                              | With NotifKit MCP                                                                                                                                                                                                                                                                                                                                                   |
-| :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Jump into the DB to find contact info → open Twilio/Resend or write a throwaway script → format the payload → check their timezone manually → fire it off → hope it delivered | **You:** _“Send an urgent update to alex@acme.com that his package was lost in transit and support is rushing a replacement — text him if push doesn't deliver.”_<br><br>**Agent:** Looks up `alex@acme.com` → renders template → dispatches push with SMS fallback → bypasses quiet hours for urgent delivery → tracks delivery status → confirms it hit his phone |
+| Without an agent                                                                                                                                                               | With the notifkit MCP server                                                                                                                                                                                                                                                                                                                                                      |
+| :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Query the database for contact info, open Twilio or Resend or write a throwaway script, format the payload, check the user's timezone by hand, send it, and hope it delivered. | **You:** _"Send an urgent update to alex@acme.com that his package was lost in transit and support is rushing a replacement. Text him if push doesn't deliver."_<br><br>**Agent:** Looks up `alex@acme.com`, renders the template, dispatches push with SMS fallback, bypasses quiet hours because the send is urgent, tracks delivery status, and confirms it reached his phone. |
 
-[Set up MCP](https://notifkit.dev/docs/mcp.html) · [MCP documentation](https://notifkit.dev/docs/mcp.html)
-
----
+[MCP documentation](https://notifkit.dev/docs/mcp.html)
 
 ## AI-assisted migration
 
-Already have notification code scattered across your application?
-
-Point your coding agent at:
+Already have notification code scattered across your application? Point your coding agent at:
 
 ```text
 https://notifkit.dev/llms-full.txt
 ```
 
-It can understand notifkit's API and help identify ad-hoc notification code in your repository and refactor it into durable notifkit calls.
-
----
+It can read notifkit's API from there, find ad-hoc notification code in your repository, and refactor it into notifkit calls.
 
 ## Quickstart
 
@@ -203,9 +181,9 @@ await notifkit.notify({
 });
 ```
 
-### 3. Or call directly via REST API
+### 3. Or call the REST API directly
 
-You don't need the Node.js SDK — notifkit exposes a standard HTTP REST API, so you can dispatch notifications and manage resources from any language (cURL, Python, Go, etc.):
+The Node.js SDK is optional. notifkit exposes a standard HTTP REST API, so you can dispatch notifications and manage resources from any language (cURL, Python, Go, and so on):
 
 ```bash
 curl -X POST http://localhost:3000/v1/notify \
@@ -218,24 +196,17 @@ curl -X POST http://localhost:3000/v1/notify \
   }'
 ```
 
-### Development vs. Production
+### Development vs. production
 
-- **Local Development**: Docker is the only prerequisite. In development, notifkit starts throwaway PostgreSQL and Redis containers automatically.
-- **Production**: Node 22+, PostgreSQL, Redis. Run migrations by pointing `drizzle-kit` at `node_modules/notifkit/drizzle`.
+Locally, Docker is the only prerequisite: in development notifkit starts throwaway PostgreSQL and Redis containers for you. In production you need Node 22+, PostgreSQL, and Redis, and you run migrations by pointing `drizzle-kit` at `node_modules/notifkit/drizzle`.
 
----
+## Running in production
 
-## Battle-tested for production
+notifkit powers production notification pipelines that send thousands of emails, push notifications, and OTPs every day. We built it because we needed it ourselves and didn't want to spend months rebuilding distributed notification plumbing or pay a SaaS per alert. It runs on your servers, with your provider accounts and your data.
 
-> **Battle-tested in production:** notifkit powers production notification pipelines handling **thousands of emails, push notifications, and OTPs every day.**
->
-> It is the infrastructure we built because we needed it ourselves — rather than spending months reinventing distributed notification plumbing or paying SaaS tolls per alert.
+### Reliability and failure testing
 
-**Your servers. Your providers. Your data. Zero notification SaaS markups.**
-
-### Reliability & Chaos Engineering
-
-Because notification delivery is mission-critical, every pipeline component is tested against extreme failure conditions:
+Every component of the pipeline is tested against failure:
 
 ```mermaid
 flowchart LR
@@ -251,45 +222,35 @@ flowchart LR
     class O1,O2,O3 result
 ```
 
-- **Chaos Monkey Testing (`tests/chaos/crash.test.ts`)**: Background worker processes are randomly terminated with `SIGKILL` during active, high-throughput message streaming. Consumer group Pending Entries List (PEL) re-claims guarantee **zero lost messages** and seamless failover.
-- **Infrastructure Recovery Testing (`tests/chaos/recovery.test.ts`)**: PostgreSQL and Redis connections are forcefully severed and restored under live traffic. Verifies automatic client reconnection, worker backpressure, and durable state resumption.
-- **High-Throughput Load Testing (`tests/chaos/load.test.ts`)**: Stressed with bursts of **10,000+ notifications** across parallel worker pools, verifying queue drain velocity, sliding-window rate limiters, and flat memory profiles without leaks.
-- **Race Conditions & Concurrency (`tests/race-conditions.test.ts`, `tests/idempotency.test.ts`)**: Hardened against concurrent duplicate dispatches, overlapping quiet-hour boundary evaluations, atomic user updates, and 24-hour idempotency key deduplication.
-- **100% Real Ephemeral Containers**: Unit, integration, and chaos test suites execute against real PostgreSQL and Redis containers via [Testcontainers](https://testcontainers.com), eliminating mocks for core storage and streaming primitives.
-
----
+- Crash testing (`tests/chaos/crash.test.ts`): background worker processes are killed with `SIGKILL` during high-throughput message streaming. Consumer group Pending Entries List (PEL) re-claims mean no messages are lost and another worker takes over.
+- Infrastructure recovery (`tests/chaos/recovery.test.ts`): PostgreSQL and Redis connections are severed and restored under live traffic, verifying client reconnection, worker backpressure, and durable state resumption.
+- Load testing (`tests/chaos/load.test.ts`): bursts of 10,000+ notifications across parallel worker pools, checking queue drain speed, sliding-window rate limiters, and memory use over time.
+- Race conditions and concurrency (`tests/race-conditions.test.ts`, `tests/idempotency.test.ts`): concurrent duplicate dispatches, overlapping quiet-hour boundary evaluations, atomic user updates, and 24-hour idempotency key deduplication.
+- Real containers, no mocks: unit, integration, and chaos suites all run against real PostgreSQL and Redis containers via [Testcontainers](https://testcontainers.com).
 
 ## What you get
 
-| The problem you don't want to build                      | How notifkit solves it                                               |
-| :------------------------------------------------------- | :------------------------------------------------------------------- |
-| **“Should this user receive it?”**                       | User preferences, topic opt-outs, and consent gates                  |
-| **“Is this a bad time to send?”**                        | Timezone-aware quiet hours that defer non-urgent sends               |
-| **“What if push fails?”**                                | Automatic ordered multi-channel fallback (`push` → `email` → `sms`)  |
-| **“What if my worker crashes?”**                         | Redis Streams consumer groups, retries, and durable idempotency      |
-| **“What if an event fires twice?”**                      | 24-hour deduplication via idempotency keys                           |
-| **“Can I send this later?”**                             | Priority scheduling with `sendAt` and cancellation before dispatch   |
-| **“Can I send this 3 days after signup?”**               | Stateful multi-step workflows with `wait` and `waitForEvent`         |
-| **“How do I know what happened?”**                       | Queryable delivery logs, Prometheus metrics, and campaign reporting  |
-| **“What happens when a provider goes down?”**            | Circuit breakers, exponential backoff, and DLQ replay                |
-| **“What about bounces and spam complaints?”**            | RFC 8058 one-click unsubscribe and automatic hard-bounce suppression |
-| **“What if I don't want another SaaS holding my data?”** | 100% self-hosted on your PostgreSQL and Redis                        |
+| The problem you don't want to build                  | How notifkit solves it                                               |
+| :--------------------------------------------------- | :------------------------------------------------------------------- |
+| "Should this user receive it?"                       | User preferences, topic opt-outs, and consent gates                  |
+| "Is this a bad time to send?"                        | Timezone-aware quiet hours that defer non-urgent sends               |
+| "What if push fails?"                                | Ordered multi-channel fallback (`push`, then `email`, then `sms`)    |
+| "What if my worker crashes?"                         | Redis Streams consumer groups, retries, and durable idempotency      |
+| "What if an event fires twice?"                      | 24-hour deduplication via idempotency keys                           |
+| "Can I send this later?"                             | Priority scheduling with `sendAt` and cancellation before dispatch   |
+| "Can I send this 3 days after signup?"               | Stateful multi-step workflows with `wait` and `waitForEvent`         |
+| "How do I know what happened?"                       | Queryable delivery logs, Prometheus metrics, and campaign reporting  |
+| "What happens when a provider goes down?"            | Circuit breakers, exponential backoff, and DLQ replay                |
+| "What about bounces and spam complaints?"            | RFC 8058 one-click unsubscribe and automatic hard-bounce suppression |
+| "What if I don't want another SaaS holding my data?" | Fully self-hosted on your PostgreSQL and Redis                       |
 
-> **The idea is simple:** You decide what to say. **notifkit handles getting it there reliably.**
+You decide what to say. notifkit gets it there.
 
----
+## Scope
 
-## What notifkit is — and what it isn't
+notifkit is the durable notification layer that runs inside your own stack. It is not a marketing automation suite, and it does not replace Customer.io, OneSignal, or SendGrid. You bring your own provider accounts and pay them directly.
 
-**What it is:** the durable notification infrastructure layer running directly inside your own stack.
-
-**What it isn't:** a marketing automation suite.
-
-notifkit is not Customer.io, OneSignal, or SendGrid. You bring your own provider accounts — your keys, your billing, your deliverability.
-
-First-party providers ship for Resend and Firebase Cloud Messaging. Anything else is a simple `Transport` class with a `send()` method.
-
----
+First-party providers cover Resend, Firebase Cloud Messaging, Slack, Twilio, Telegram, Discord, and WhatsApp. Anything else is a `Transport` class with a `send()` method.
 
 ## Feature matrix
 
@@ -297,7 +258,7 @@ First-party providers ship for Resend and Firebase Cloud Messaging. Anything els
 | :------------------ | :------------------------------------------------------------------------------------- |
 | **Channels**        | `email`, `sms`, `push`, `webhook`, `telegram`, `discord`, `whatsapp`, `slack`          |
 | **Targeting**       | A user, a list of users, a segment, or a topic                                         |
-| **Priorities**      | `low`, `normal`, `high`, `critical` — separate stream lanes                            |
+| **Priorities**      | `low`, `normal`, `high`, `critical`, on separate stream lanes                          |
 | **Scheduling**      | Future sends with `sendAt`, quiet-hours deferral, cancellation                         |
 | **Preferences**     | Per-user channel and topic opt-outs, quiet hours, contact-level overrides              |
 | **Workflows**       | Multi-step sequences with `wait`, `waitForEvent`, and `notify` steps                   |
@@ -310,23 +271,19 @@ First-party providers ship for Resend and Firebase Cloud Messaging. Anything els
 | **Agent operation** | MCP server for sending, triage, campaigns, templates, workflows, and system operations |
 | **Observability**   | Prometheus `/metrics`, `/health`, `/live`, `/ready`, and queryable delivery logs       |
 
----
-
 ## Providers
 
-Bring your own provider accounts.
+Bring your own provider accounts. First-party packages:
 
-First-party packages:
+- [`@notifkit/provider-resend`](./packages/provider-resend): transactional email via Resend
+- [`@notifkit/provider-fcm`](./packages/provider-fcm): push notifications via Firebase Cloud Messaging
+- [`@notifkit/provider-slack`](./packages/provider-slack): Slack messages via Incoming Webhooks or the Web API
+- [`@notifkit/provider-twilio`](./packages/provider-twilio): SMS via Twilio, with signature-verified delivery status callbacks
+- [`@notifkit/provider-telegram`](./packages/provider-telegram): messages via a Telegram bot
+- [`@notifkit/provider-discord`](./packages/provider-discord): messages via a Discord webhook
+- [`@notifkit/provider-whatsapp`](./packages/provider-whatsapp): messages via Meta's WhatsApp Cloud API
 
-- [`@notifkit/provider-resend`](./packages/provider-resend) — transactional email via Resend
-- [`@notifkit/provider-fcm`](./packages/provider-fcm) — push notifications via Firebase Cloud Messaging
-- [`@notifkit/provider-slack`](./packages/provider-slack) — Slack messages via Incoming Webhooks or the Web API
-- [`@notifkit/provider-twilio`](./packages/provider-twilio) — SMS via Twilio, with signature-verified delivery status callbacks
-- [`@notifkit/provider-telegram`](./packages/provider-telegram) — messages via a Telegram bot
-- [`@notifkit/provider-discord`](./packages/provider-discord) — messages via a Discord webhook
-- [`@notifkit/provider-whatsapp`](./packages/provider-whatsapp) — messages via Meta's WhatsApp Cloud API
-
-For anything else, implement a simple `Transport`:
+For anything else, implement a `Transport`:
 
 ```ts
 class MyTransport implements Transport {
@@ -337,9 +294,7 @@ class MyTransport implements Transport {
 }
 ```
 
-**Your keys. Your billing. Your deliverability.**
-
----
+The keys, the billing, and the deliverability stay yours.
 
 ## Documentation
 
@@ -361,23 +316,13 @@ Everything lives at [**notifkit.dev/docs**](https://notifkit.dev/docs/).
 | [Reference](https://notifkit.dev/docs/reference.html)                          | API, payloads, and SDK methods                           |
 | [MCP server](https://notifkit.dev/docs/mcp.html)                               | Operate notifkit from an AI agent                        |
 
----
-
 ## Why build this?
 
-Because notification infrastructure looks simple until you're responsible for it.
+Notification infrastructure looks simple until you're responsible for it. Queues, retries, provider adapters, preference systems, quiet-hour logic, workflows, suppression handling, and operational tooling take months to build well. notifkit is what we built instead, and it's what we run.
 
-You can spend months building queues, retries, provider adapters, preference systems, quiet-hour logic, workflows, suppression handling, and operational tooling.
+## Star the repo
 
-Or you can use the infrastructure we built for ourselves.
-
-**notifkit exists so your team can spend its time building the product — not another notification platform.**
-
----
-
-## Star the repo ⭐
-
-If notifkit saves you a month or two you were about to spend building this yourself, **[give it a star on GitHub](https://github.com/devkitshq/notifkit)** — it's the cheapest way to help other people find it.
+If notifkit saved you the month or two you were about to spend building this yourself, [give it a star on GitHub](https://github.com/devkitshq/notifkit). It helps other people find it.
 
 ## Contributing
 
@@ -393,10 +338,10 @@ The test suite starts its own PostgreSQL and Redis containers, so Docker is the 
 
 ## Contact
 
-Questions, bugs, or ideas — mail me. I run this on my own company, which delivers a lot of notifications daily (100K+/day).
+Questions, bugs, or ideas: email me. I run notifkit at my own company, which delivers 100K+ notifications a day.
 
 - **Email:** [contact.devkitshq@gmail.com](mailto:contact.devkitshq@gmail.com)
-- **Book a 30-min call:** [calendly.com/contact-devkitshq/30min](https://calendly.com/contact-devkitshq/30min)
+- **Book a 30-min call:** [calendly.com/contact-devkitshq/30min](https://calendly.com/contact-devkitshq/30min) (I’ll be available to answer any questions you may have, but I won’t be able to assist with the integration process directly.)
 
 ## License
 
