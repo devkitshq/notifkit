@@ -1,0 +1,43 @@
+{
+  "name": "@notifkit/provider-twilio",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "twilio": "^5.0.0"
+  },
+  "peerDependencies": {
+    "notifkit": "^0.1.0"
+  },
+  "devDependencies": {
+    "notifkit": "file:../../",
+    "typescript": "^5.8.3"
+  },
+  "description": "Twilio SMS transport for notifkit, with signature-verified delivery status callbacks.",
+  "license": "MIT",
+  "author": "devkitshq",
+  "homepage": "https://notifkit.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devkitshq/notifkit.git",
+    "directory": "packages/provider-twilio"
+  },
+  "bugs": {
+    "url": "https://github.com/devkitshq/notifkit/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
