@@ -85,7 +85,7 @@ flowchart TD
 
 In a single process, the API and all workers run in the same Node.js process (`services: ["all"]`), which works for small and medium apps, side projects, and staging. Distributed, you run stateless API servers (`services: ["api"]`) behind a load balancer and scale worker pools (`services: ["enricher", "engine", "delivery", "scheduler"]`) horizontally across Redis Streams consumer groups.
 
-## Quickstart
+## Quickstart (needs 5 mins)
 
 ### 1. Install
 
