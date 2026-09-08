@@ -265,20 +265,6 @@ notifkit is the durable notification layer that runs inside your own stack. It i
 
 First-party providers cover Resend, Firebase Cloud Messaging, Slack, Twilio, Telegram, Discord, and WhatsApp. Anything else is a `Transport` class with a `send()` method.
 
-### How this compares to Novu
-
-Novu is the established open-source project in this space, and if you want a notification platform with a dashboard, a visual workflow editor, and a drop-in in-app inbox component, use Novu. It is more mature, has a much larger community, and solves a broader problem.
-
-notifkit is a narrower, more embeddable take on the same layer:
-
-- **A library first, a platform second.** notifkit is an npm package you can run inside your existing Node process. Novu self-hosts as a set of services (API, worker, WebSocket server, dashboard SPA) that you deploy and operate alongside your app.
-- **Postgres, not MongoDB.** notifkit stores state in PostgreSQL with Drizzle migrations and queues in Redis Streams. If Postgres is already your database, there is no new datastore to run.
-- **Workflows as code.** Multi-step sequences are typed TypeScript, versioned in your repo, rather than built in a visual editor.
-- **MIT, all of it.** There is no open-core split. Novu is MIT at the core with enterprise features under a commercial license; notifkit has no feature held back from the self-hosted build.
-- **MCP as a first-class interface.** Agents operate the same infrastructure your app uses, including triage and delivery-log inspection.
-
-What notifkit does not have: an in-app notification center or inbox component, a web dashboard for non-engineers, digest aggregation, or Novu's provider catalog. If you need those, Novu is the better fit.
-
 ## Agent-operable
 
 https://github.com/user-attachments/assets/4dff98bb-37d3-44b4-bf46-9607c1cd89b5
