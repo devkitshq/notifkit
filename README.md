@@ -85,56 +85,6 @@ flowchart TD
 
 In a single process, the API and all workers run in the same Node.js process (`services: ["all"]`), which works for small and medium apps, side projects, and staging. Distributed, you run stateless API servers (`services: ["api"]`) behind a load balancer and scale worker pools (`services: ["enricher", "engine", "delivery", "scheduler"]`) horizontally across Redis Streams consumer groups.
 
-## Agent-operable
-
-https://github.com/user-attachments/assets/4dff98bb-37d3-44b4-bf46-9607c1cd89b5
-
-[Watch the AI demo](assets/ai_demo.mp4) (link to the raw video file)
-
-An AI agent can operate notifkit directly. Connect the notifkit MCP server ([`@notifkit/mcp`](./packages/mcp)) to Claude Code, Cursor, Claude Desktop, Gemini, or any MCP-compatible agent:
-
-```bash
-npx -y @notifkit/mcp
-```
-
-### Ask your agent
-
-```text
-You: Why didn't usr_9182 receive their password reset?
-
-Agent: The notification was suppressed because usr_9182's email
-       address has a hard-bounce suppression from yesterday.
-```
-
-Your application and your AI agents use the same notification infrastructure. Through MCP an agent can:
-
-- Send one-off notifications or campaigns to users, lists, and segments (`send_notification`, `send_campaign`)
-- Diagnose delivery issues by inspecting message histories, provider responses, and quiet hours (`get_delivery_logs`, `get_notification`)
-- Schedule future sends and cancel pending notifications (`list_scheduled`, `cancel_notification`)
-- Check delivery, open, click, bounce, and complaint metrics (`list_campaigns`, `get_campaign_stats`)
-- List, preview, and update templates with sample data (`list_templates`, `preview_template`, `upsert_template`)
-- Look up users, contacts, preferences, and segment membership (`list_users`, `get_user_preferences`, `update_user_preferences`)
-- Trigger workflows and inspect workflow runs (`create_workflow`, `trigger_workflow`, `get_workflow_run`)
-- Manage bounce suppressions, check system queues, and replay dead-letter messages (`list_suppressions`, `get_dead_letters`, `replay_dead_letter`)
-
-### The same task, with and without an agent
-
-| Without an agent                                                                                                                                                               | With the notifkit MCP server                                                                                                                                                                                                                                                                                                                                                      |
-| :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Query the database for contact info, open Twilio or Resend or write a throwaway script, format the payload, check the user's timezone by hand, send it, and hope it delivered. | **You:** _"Send an urgent update to alex@acme.com that his package was lost in transit and support is rushing a replacement. Text him if push doesn't deliver."_<br><br>**Agent:** Looks up `alex@acme.com`, renders the template, dispatches push with SMS fallback, bypasses quiet hours because the send is urgent, tracks delivery status, and confirms it reached his phone. |
-
-[MCP documentation](https://notifkit.dev/docs/mcp.html)
-
-## AI-assisted migration
-
-Already have notification code scattered across your application? Point your coding agent at:
-
-```text
-https://notifkit.dev/llms-full.txt
-```
-
-It can read notifkit's API from there, find ad-hoc notification code in your repository, and refactor it into notifkit calls.
-
 ## Quickstart
 
 ### 1. Install
@@ -202,7 +152,7 @@ Locally, Docker is the only prerequisite: in development notifkit starts throwaw
 
 ## Running in production
 
-notifkit powers production notification pipelines that send thousands of emails, push notifications, and OTPs every day. We built it because we needed it ourselves and didn't want to spend months rebuilding distributed notification plumbing or pay a SaaS per alert. It runs on your servers, with your provider accounts and your data.
+notifkit runs in production at my own company, delivering 100K+ notifications a day across email, push, and OTPs. I built it because I needed it and didn't want to spend months rebuilding distributed notification plumbing or pay a SaaS per alert. It runs on your servers, with your provider accounts and your data.
 
 ### Reliability and failure testing
 
@@ -251,6 +201,68 @@ You decide what to say. notifkit gets it there.
 notifkit is the durable notification layer that runs inside your own stack. It is not a marketing automation suite, and it does not replace Customer.io, OneSignal, or SendGrid. You bring your own provider accounts and pay them directly.
 
 First-party providers cover Resend, Firebase Cloud Messaging, Slack, Twilio, Telegram, Discord, and WhatsApp. Anything else is a `Transport` class with a `send()` method.
+
+### How this compares to Novu
+
+Novu is the established open-source project in this space, and if you want a notification platform with a dashboard, a visual workflow editor, and a drop-in in-app inbox component, use Novu. It is more mature, has a much larger community, and solves a broader problem.
+
+notifkit is a narrower, more embeddable take on the same layer:
+
+- **A library first, a platform second.** notifkit is an npm package you can run inside your existing Node process. Novu self-hosts as a set of services (API, worker, WebSocket server, dashboard SPA) that you deploy and operate alongside your app.
+- **Postgres, not MongoDB.** notifkit stores state in PostgreSQL with Drizzle migrations and queues in Redis Streams. If Postgres is already your database, there is no new datastore to run.
+- **Workflows as code.** Multi-step sequences are typed TypeScript, versioned in your repo, rather than built in a visual editor.
+- **MIT, all of it.** There is no open-core split. Novu is MIT at the core with enterprise features under a commercial license; notifkit has no feature held back from the self-hosted build.
+- **MCP as a first-class interface.** Agents operate the same infrastructure your app uses, including triage and delivery-log inspection.
+
+What notifkit does not have: an in-app notification center or inbox component, a web dashboard for non-engineers, digest aggregation, or Novu's provider catalog. If you need those, Novu is the better fit.
+
+## Agent-operable
+
+https://github.com/user-attachments/assets/4dff98bb-37d3-44b4-bf46-9607c1cd89b5
+
+An AI agent can operate notifkit directly. Connect the notifkit MCP server ([`@notifkit/mcp`](./packages/mcp)) to Claude Code, Cursor, Claude Desktop, Gemini, or any MCP-compatible agent:
+
+```bash
+npx -y @notifkit/mcp
+```
+
+### Ask your agent
+
+```text
+You: Why didn't usr_9182 receive their password reset?
+
+Agent: The notification was suppressed because usr_9182's email
+       address has a hard-bounce suppression from yesterday.
+```
+
+Your application and your AI agents use the same notification infrastructure. Through MCP an agent can:
+
+- Send one-off notifications or campaigns to users, lists, and segments (`send_notification`, `send_campaign`)
+- Diagnose delivery issues by inspecting message histories, provider responses, and quiet hours (`get_delivery_logs`, `get_notification`)
+- Schedule future sends and cancel pending notifications (`list_scheduled`, `cancel_notification`)
+- Check delivery, open, click, bounce, and complaint metrics (`list_campaigns`, `get_campaign_stats`)
+- List, preview, and update templates with sample data (`list_templates`, `preview_template`, `upsert_template`)
+- Look up users, contacts, preferences, and segment membership (`list_users`, `get_user_preferences`, `update_user_preferences`)
+- Trigger workflows and inspect workflow runs (`create_workflow`, `trigger_workflow`, `get_workflow_run`)
+- Manage bounce suppressions, check system queues, and replay dead-letter messages (`list_suppressions`, `get_dead_letters`, `replay_dead_letter`)
+
+### The same task, with and without an agent
+
+| Without an agent                                                                                                                                                               | With the notifkit MCP server                                                                                                                                                                                                                                                                                                                                                      |
+| :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Query the database for contact info, open Twilio or Resend or write a throwaway script, format the payload, check the user's timezone by hand, send it, and hope it delivered. | **You:** _"Send an urgent update to alex@acme.com that his package was lost in transit and support is rushing a replacement. Text him if push doesn't deliver."_<br><br>**Agent:** Looks up `alex@acme.com`, renders the template, dispatches push with SMS fallback, bypasses quiet hours because the send is urgent, tracks delivery status, and confirms it reached his phone. |
+
+[MCP documentation](https://notifkit.dev/docs/mcp.html)
+
+## AI-assisted migration
+
+Already have notification code scattered across your application? Point your coding agent at:
+
+```text
+https://notifkit.dev/llms-full.txt
+```
+
+It can read notifkit's API from there, find ad-hoc notification code in your repository, and refactor it into notifkit calls.
 
 ## Feature matrix
 
@@ -318,15 +330,11 @@ Everything lives at [**notifkit.dev/docs**](https://notifkit.dev/docs/).
 
 ## Why build this?
 
-Notification infrastructure looks simple until you're responsible for it. Queues, retries, provider adapters, preference systems, quiet-hour logic, workflows, suppression handling, and operational tooling take months to build well. notifkit is what we built instead, and it's what we run.
-
-## Star the repo
-
-If notifkit saved you the month or two you were about to spend building this yourself, [give it a star on GitHub](https://github.com/devkitshq/notifkit). It helps other people find it.
+Notification infrastructure looks simple until you're responsible for it. Queues, retries, provider adapters, preference systems, quiet-hour logic, workflows, suppression handling, and operational tooling take months to build well. notifkit is what I built instead, and it's what I run.
 
 ## Contributing
 
-Issues and pull requests are welcome.
+Issues and pull requests are welcome. Stars help other people find the project.
 
 ```bash
 npm install
@@ -338,10 +346,7 @@ The test suite starts its own PostgreSQL and Redis containers, so Docker is the 
 
 ## Contact
 
-Questions, bugs, or ideas: email me. I run notifkit at my own company, which delivers 100K+ notifications a day.
-
-- **Email:** [contact.devkitshq@gmail.com](mailto:contact.devkitshq@gmail.com)
-- **Book a 30-min call:** [calendly.com/contact-devkitshq/30min](https://calendly.com/contact-devkitshq/30min) (I’ll be available to answer any questions you may have, but I won’t be able to assist with the integration process directly.)
+Questions, bugs, or ideas: [contact.devkitshq@gmail.com](mailto:contact.devkitshq@gmail.com), or open an issue.
 
 ## License
 
