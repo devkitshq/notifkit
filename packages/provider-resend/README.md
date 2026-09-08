@@ -1,8 +1,9 @@
 # @notifkit/provider-resend
 
 Resend email transport for [notifkit](https://github.com/devkitshq/notifkit).
-Sends through Resend and verifies delivery webhooks with svix, so bounces and
-complaints feed back into notifkit's suppression list automatically.
+Sends through Resend and verifies delivery webhook signatures with the Resend
+SDK, so bounces and complaints feed back into notifkit's suppression list
+automatically.
 
 ```bash
 npm install @notifkit/provider-resend

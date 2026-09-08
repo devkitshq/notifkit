@@ -3,16 +3,21 @@ import { createHmac } from "node:crypto";
 import { ResendTransport } from "../packages/provider-resend/src/index.js";
 import { FcmTransport } from "../packages/provider-fcm/src/index.js";
 import { ConsoleTransport } from "../packages/provider-console/src/index.js";
+import type * as ResendModule from "resend";
 
-// Mock Resend SDK
+// Mock Resend SDK. Only `emails.send` is stubbed: `webhooks.verify` is local
+// HMAC checking, so the webhook tests exercise the real implementation.
 const mockSendEmail = vi.fn();
-vi.mock("resend", () => {
+vi.mock("resend", async (importOriginal) => {
+  const actual = await importOriginal<typeof ResendModule>();
   return {
-    Resend: vi.fn().mockImplementation(() => {
+    ...actual,
+    Resend: vi.fn().mockImplementation((apiKey: string) => {
       return {
         emails: {
           send: mockSendEmail,
         },
+        webhooks: new actual.Resend(apiKey).webhooks,
       };
     }),
   };
@@ -262,23 +267,30 @@ describe("FcmTransport (Push Provider)", () => {
   });
 });
 
-import { Webhook } from "svix";
-
 describe("ResendTransport (Webhooks)", () => {
   const webhookSecret = `whsec_${Buffer.from("notifkit-webhook-test-secret").toString("base64")}`;
 
-  /** Produce a body + headers that svix will accept, the way Resend sends them. */
-  function sign(payload: unknown) {
+  /**
+   * Produce a body + headers the verifier will accept, the way Resend sends
+   * them: a Standard Webhooks `v1,<base64 hmac>` signature over
+   * `<id>.<unix timestamp>.<body>`, under the `svix-*` header prefix.
+   */
+  function sign(payload: unknown, prefix: "svix" | "webhook" = "svix") {
     const rawBody = JSON.stringify(payload);
     const msgId = "msg_2abc";
-    const timestamp = new Date();
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+
+    const key = Buffer.from(webhookSecret.replace("whsec_", ""), "base64");
+    const signature = createHmac("sha256", key)
+      .update(`${msgId}.${timestamp}.${rawBody}`)
+      .digest("base64");
 
     return {
       rawBody,
       headers: {
-        "svix-id": msgId,
-        "svix-timestamp": Math.floor(timestamp.getTime() / 1000).toString(),
-        "svix-signature": new Webhook(webhookSecret).sign(msgId, timestamp, rawBody),
+        [`${prefix}-id`]: msgId,
+        [`${prefix}-timestamp`]: timestamp,
+        [`${prefix}-signature`]: `v1,${signature}`,
       } as Record<string, string>,
     };
   }
@@ -309,6 +321,17 @@ describe("ResendTransport (Webhooks)", () => {
       webhookSecret,
     });
     const { rawBody, headers } = sign(bounced);
+
+    expect(transport.verifyWebhook(rawBody, headers)).toBe(true);
+  });
+
+  it("accepts the Standard Webhooks `webhook-*` header prefix too", () => {
+    const transport = new ResendTransport({
+      apiKey: "test-api-key",
+      from: "onboarding@resend.dev",
+      webhookSecret,
+    });
+    const { rawBody, headers } = sign(bounced, "webhook");
 
     expect(transport.verifyWebhook(rawBody, headers)).toBe(true);
   });

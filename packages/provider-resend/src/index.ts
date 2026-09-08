@@ -2,7 +2,6 @@ import type { DeliveryResult, Transport } from "notifkit";
 import type { NotificationDispatchedPayload, Logger } from "notifkit";
 import type { WebhookEvent } from "notifkit";
 import { Resend } from "resend";
-import { Webhook } from "svix";
 
 export interface ResendTransportOptions {
   apiKey: string;
@@ -102,7 +101,7 @@ export class ResendTransport implements Transport {
   }
 
   /**
-   * Check the svix signature and return the verified payload, or null.
+   * Check the webhook signature and return the verified payload, or null.
    *
    * Fail closed. An unverified webhook is an anonymous, forgeable write into
    * delivery history, so a missing secret or missing request data is a reason
@@ -126,14 +125,32 @@ export class ResendTransport implements Transport {
       return null;
     }
 
-    const svixHeaders: Record<string, string> = {};
+    // Header names are case-insensitive on the wire, and Resend has sent these
+    // under both the `svix-*` and the Standard Webhooks `webhook-*` prefix.
+    // Accept either, so an older endpoint keeps verifying after this upgrade.
+    const lower: Record<string, string> = {};
     for (const [key, val] of Object.entries(headers)) {
-      if (Array.isArray(val)) svixHeaders[key] = val.join(",");
-      else if (val) svixHeaders[key] = val;
+      if (Array.isArray(val)) lower[key.toLowerCase()] = val.join(" ");
+      else if (val) lower[key.toLowerCase()] = val;
+    }
+    const pick = (name: string) => lower[`webhook-${name}`] ?? lower[`svix-${name}`];
+
+    const id = pick("id");
+    const timestamp = pick("timestamp");
+    const signature = pick("signature");
+
+    if (!id || !timestamp || !signature) {
+      this.logger?.warn("Resend webhook rejected: missing signature headers");
+      return null;
     }
 
     try {
-      return new Webhook(this.webhookSecret).verify(rawBody, svixHeaders);
+      // `webhooks.verify` is local HMAC checking — no API call, no key use.
+      return this.resend.webhooks.verify({
+        payload: rawBody,
+        headers: { id, timestamp, signature },
+        webhookSecret: this.webhookSecret,
+      });
     } catch (err: any) {
       this.logger?.warn({ error: err.message }, "Resend webhook signature verification failed");
       return null;
@@ -156,7 +173,7 @@ export class ResendTransport implements Transport {
     headers?: Record<string, string | string[] | undefined>,
   ): Promise<WebhookEvent[]> {
     // Verify again rather than trusting the caller's parse of the body. This
-    // method is public and may be called directly, and the payload svix returns
+    // method is public and may be called directly, and the verified payload
     // is the only one worth acting on.
     const verified = this.verifySignature(rawBody, headers);
     if (verified === null) return [];
