@@ -91,12 +91,17 @@ In a single process, the API and all workers run in the same Node.js process (`s
 
 ```bash
 npm install notifkit @notifkit/provider-resend
-npm install -D tsx
+npm install -D tsx @testcontainers/postgresql @testcontainers/redis
 ```
+
+The two `@testcontainers/*` packages are what notifkit uses to start throwaway PostgreSQL and Redis containers in development. They are imported lazily, only when the server is given neither a `databaseUrl`/`redisUrl` option nor a `DATABASE_URL`/`REDIS_URL` environment variable, so `devDependencies` is the right place for them.
+
+> [!WARNING]
+> Those containers are for local development only. They are thrown away when the process exits, taking every user, template, delivery log, and queued notification with them. Before you deploy, point notifkit at a real PostgreSQL and Redis — set `DATABASE_URL` and `REDIS_URL` (or pass `databaseUrl` and `redisUrl`) and run with `NODE_ENV=production`, which refuses to start a container and fails loudly if either is missing.
 
 ### 2. Run the engine
 
-`server.ts` starts the API and the worker pipelines. In development it auto-starts throwaway PostgreSQL and Redis containers, so Docker is the only prerequisite.
+`server.ts` starts the API and the worker pipelines. In development it auto-starts those containers, so Docker is the only prerequisite.
 
 ```ts
 // server.ts
@@ -106,18 +111,45 @@ import { ResendTransport } from "@notifkit/provider-resend";
 const server = new NotifkitServer({
   services: ["all"], // API + enricher + engine + scheduler + delivery
   port: 3000,
-  providers: [new ResendTransport({ apiKey: process.env.RESEND_API_KEY! })],
+  providers: [
+    new ResendTransport({
+      apiKey: process.env.RESEND_API_KEY!,
+      from: "notifications@yourdomain.com",
+    }),
+  ],
 });
 
 await server.start();
 console.log("notifkit listening on http://localhost:3000");
 ```
 
+`ADMIN_API_KEY` is the root credential. It is read from the environment, it is what mints project API keys in the next step, and without it the project-management routes answer `403`. Any string works locally:
+
 ```bash
-RESEND_API_KEY=re_xxx npx tsx server.ts
+ADMIN_API_KEY=supersecretkey RESEND_API_KEY=re_xxx npx tsx server.ts
 ```
 
-### 3. Dispatch your first notification
+> [!WARNING]
+> `supersecretkey` is a local placeholder. In production this one value can mint keys for every project, so use a long random string kept in your secret store — `openssl rand -hex 32` is enough.
+
+### 3. Create a project and its API key
+
+Every `/v1/*` route requires a project API key, and only the admin credential can mint one, so this is the single bootstrap step between a running server and your first notification:
+
+```bash
+ADMIN_API_KEY=supersecretkey npx notifkit-create-project "my-app"
+```
+
+```
+Project "my-app" created. Save the API key now — it is not recoverable.
+
+NOTIFKIT_PROJECT_ID=1ce67fa1-b4a9-4985-8046-ef6018912b2a
+NOTIFKIT_API_KEY=nk_live_f57c57b76d795cef89e2dbf6b6f352a36…
+```
+
+The server stores only a SHA-256 hash of the key, so the `nk_live_…` value is printed once and never again — put it in your app's `.env` now. Point the script at another host with `NOTIFKIT_URL`, and mint further keys later with `POST /v1/projects/:id/keys` (`role: "read_only"` there gets you a key that can read but not send).
+
+### 4. Dispatch your first notification
 
 `client.ts` is your application code. It talks to the server over HTTP: register a template, register a user, and send.
 
@@ -125,7 +157,10 @@ RESEND_API_KEY=re_xxx npx tsx server.ts
 // client.ts
 import { NotifkitClient } from "notifkit";
 
-const notifkit = new NotifkitClient({ baseUrl: "http://localhost:3000" });
+const notifkit = new NotifkitClient({
+  baseUrl: "http://localhost:3000",
+  apiKey: process.env.NOTIFKIT_API_KEY!,
+});
 
 // 1. Register a template
 await notifkit.syncTemplates({
@@ -153,16 +188,17 @@ await notifkit.notify({
 With the server still running in the first terminal, run the client in a second one:
 
 ```bash
-npx tsx client.ts
+NOTIFKIT_API_KEY=nk_live_xxx npx tsx client.ts
 ```
 
-### 4. Or call the REST API directly
+### 5. Or call the REST API directly
 
-The Node.js SDK is optional. notifkit exposes a standard HTTP REST API, so you can dispatch notifications and manage resources from any language (cURL, Python, Go, and so on):
+The Node.js SDK is optional. notifkit exposes a standard HTTP REST API, so you can dispatch notifications and manage resources from any language (cURL, Python, Go, and so on). The same project API key goes in the `Authorization` header (an `x-api-key` header works too):
 
 ```bash
 curl -X POST http://localhost:3000/v1/notify \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $NOTIFKIT_API_KEY" \
   -d '{
     "user": "usr_123",
     "template": "order-shipped",

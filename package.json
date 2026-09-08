@@ -1,6 +1,6 @@
 {
   "name": "notifkit",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Self-hosted notification infrastructure. One call delivers to email, SMS, push, and webhook — routed by preference, quiet hours, and consent.",
   "license": "MIT",
   "author": "devkitshq",
@@ -48,12 +48,17 @@
     "dist",
     "src",
     "drizzle",
+    "scripts/create-project.mjs",
     "README.md",
     "LICENSE"
   ],
+  "bin": {
+    "notifkit-create-project": "./scripts/create-project.mjs"
+  },
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
+    "create-project": "node scripts/create-project.mjs",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "lint": "eslint . --fix",
