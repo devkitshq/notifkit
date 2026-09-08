@@ -58,6 +58,19 @@ describe("extractAuthToken", () => {
     expect(extractAuthToken(req as any)).toBe("my-token-with-spaces");
   });
 
+  // `set ADMIN_API_KEY=key && cmd` on Windows puts a trailing space in the
+  // variable. The token side is trimmed, so if the configured side were not,
+  // the two could never match and every admin request would 401.
+  it("matches a configured key that carries the whitespace a shell added", async () => {
+    const { readBaseConfig } = await import("@/config/index.js");
+
+    const config = readBaseConfig({ ADMIN_API_KEY: "supersecretkey " } as NodeJS.ProcessEnv);
+    const token = extractAuthToken({ headers: { authorization: "Bearer supersecretkey" } } as any);
+
+    expect(config.ADMIN_API_KEY).toBe("supersecretkey");
+    expect(token).toBe(config.ADMIN_API_KEY);
+  });
+
   it("prioritizes Bearer authorization header over x-api-key if both are present", () => {
     const req = {
       headers: {

@@ -38,7 +38,11 @@ export const baseConfigSchema = z.object({
   HOST: z.string().default("127.0.0.1"),
   REDIS_URL: z.string().url().default("redis://localhost:6379"),
   DATABASE_URL: z.string().url().default("postgres://platform:platform@localhost:5432/notifkit"),
-  ADMIN_API_KEY: z.string().optional(),
+  // Trimmed because the incoming bearer token is trimmed before comparison, so
+  // an untrimmed value here could never match it. `set KEY=value && cmd` on
+  // Windows puts a trailing space in the variable, which otherwise turns every
+  // admin request into a 401 that reads like a wrong key.
+  ADMIN_API_KEY: z.string().trim().optional(),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).default(10),
   QUEUE_MAX_LEN: z.coerce.number().int().min(1).default(10000000),
   DB_MAX_CONNECTIONS: z.coerce.number().int().min(1).default(2),
