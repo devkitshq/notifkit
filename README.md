@@ -123,6 +123,8 @@ await server.start();
 console.log("notifkit listening on http://localhost:3000");
 ```
 
+`from` is required on `ResendTransport` — it is the sender for any template that does not name its own, and it has to be an address on a domain you have verified in Resend. A template can override it with its own `from`, so one transport can serve both `no-reply@` receipts and `marketing@` campaigns.
+
 `ADMIN_API_KEY` is the root credential. It is read from the environment, it is what mints project API keys in the next step, and without it the project-management routes answer `403`. Any string works locally:
 
 ```bash
