@@ -91,25 +91,43 @@ In a single process, the API and all workers run in the same Node.js process (`s
 
 ```bash
 npm install notifkit @notifkit/provider-resend
+npm install -D tsx
 ```
 
-### 2. Run the engine and dispatch your first notification
+### 2. Run the engine
+
+`server.ts` starts the API and the worker pipelines. In development it auto-starts throwaway PostgreSQL and Redis containers, so Docker is the only prerequisite.
 
 ```ts
-import { NotifkitServer, NotifkitClient } from "notifkit";
+// server.ts
+import { NotifkitServer } from "notifkit";
 import { ResendTransport } from "@notifkit/provider-resend";
 
-// 1. Start the server (runs API + workers; auto-starts Postgres & Redis in dev)
 const server = new NotifkitServer({
-  services: ["all"],
+  services: ["all"], // API + enricher + engine + scheduler + delivery
   port: 3000,
   providers: [new ResendTransport({ apiKey: process.env.RESEND_API_KEY! })],
 });
-await server.start();
 
-// 2. Instantiate client and register a template
+await server.start();
+console.log("notifkit listening on http://localhost:3000");
+```
+
+```bash
+RESEND_API_KEY=re_xxx npx tsx server.ts
+```
+
+### 3. Dispatch your first notification
+
+`client.ts` is your application code. It talks to the server over HTTP: register a template, register a user, and send.
+
+```ts
+// client.ts
+import { NotifkitClient } from "notifkit";
+
 const notifkit = new NotifkitClient({ baseUrl: "http://localhost:3000" });
 
+// 1. Register a template
 await notifkit.syncTemplates({
   templates: [
     {
@@ -120,9 +138,10 @@ await notifkit.syncTemplates({
   ],
 });
 
-// 3. Register user and dispatch
+// 2. Register a user
 await notifkit.addUser({ id: "usr_123", email: "alex@acme.com" });
 
+// 3. Dispatch
 await notifkit.notify({
   user: "usr_123",
   template: "order-shipped",
@@ -131,7 +150,13 @@ await notifkit.notify({
 });
 ```
 
-### 3. Or call the REST API directly
+With the server still running in the first terminal, run the client in a second one:
+
+```bash
+npx tsx client.ts
+```
+
+### 4. Or call the REST API directly
 
 The Node.js SDK is optional. notifkit exposes a standard HTTP REST API, so you can dispatch notifications and manage resources from any language (cURL, Python, Go, and so on):
 
