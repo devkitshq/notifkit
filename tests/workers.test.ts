@@ -762,6 +762,44 @@ describe("EnricherWorker", () => {
     const enriched = mockProducers.normal.publishBatch.mock.calls[0][0][0].payload;
     expect(enriched.recipient.preferences.optedOut).toBe(true);
   });
+
+  it("resolves multi-channel contacts (e.g. slack, webhook) from contactRepo", async () => {
+    (worker as any).contactRepo.findActiveByUserIds = vi.fn().mockResolvedValue(
+      new Map([
+        [
+          "usr-1",
+          [
+            { channel: "slack", target: "U12345", enabled: true },
+            { channel: "webhook", target: "https://hook.site/test", enabled: true },
+          ],
+        ],
+      ]),
+    );
+
+    const msg = {
+      id: "msg-dynamic-channels",
+      event: {
+        id: "evt-dynamic-channels",
+        type: "notification.requested",
+        timestamp: new Date().toISOString(),
+        metadata: { traceId: "trace-dc" },
+        payload: {
+          projectId: "123e4567-e89b-12d3-a456-426614174000",
+          target: { type: "user", userId: "usr-1" },
+          channels: ["slack", "webhook"],
+          templateId: "welcome_alert",
+        },
+      },
+    };
+
+    await worker.process(msg as any);
+
+    expect(mockProducers.normal.publishBatch).toHaveBeenCalled();
+    const publishedEvents = mockProducers.normal.publishBatch.mock.calls[0][0];
+    const channels = publishedEvents.map((e: any) => e.payload.channel);
+    expect(channels).toContain("slack");
+    expect(channels).toContain("webhook");
+  });
 });
 
 describe("DeliveryWorker", () => {

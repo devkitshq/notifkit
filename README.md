@@ -175,8 +175,8 @@ await notifkit.syncTemplates({
   ],
 });
 
-// 2. Register a user
-await notifkit.addUser({ id: "usr_123", email: "alex@acme.com" });
+// 2. Register a user (supports id + contacts array or object)
+await notifkit.addUser("usr_123", [{ channel: "email", target: "alex@acme.com" }]);
 
 // 3. Dispatch
 await notifkit.notify({

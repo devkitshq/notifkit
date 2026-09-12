@@ -2,12 +2,29 @@ import type {
   AddUserInput,
   UpdateUserInput,
   AddContactInput,
+  UserContactInput,
   SyncTemplatesInput,
+  TemplateInput,
   NotifyRequestInput,
   TriggerWorkflowInput,
   CreateWorkflowInput,
   IngestEventInput,
   UpdateProjectInput,
+  Preferences,
+  UserContactResponse,
+  UserResponse,
+  UserDetailResponse,
+  UserProfileResponse,
+  WorkflowDefinitionRecord,
+  WorkflowInstanceRecord,
+  NotificationLogRecord,
+  TemplateRecordResponse,
+  SuppressionRecord,
+  ProjectRecord,
+  ProjectKeyRecord,
+  SystemHealthRecord,
+  SystemMetricsRecord,
+  DLQMessageRecord,
 } from "./contracts/sdk.js";
 
 export interface NotifkitClientOptions {
@@ -53,37 +70,86 @@ export class NotifkitClient {
     return data as T;
   }
 
-  /** Sync templates with the server. */
-  async syncTemplates(input: SyncTemplatesInput): Promise<{ synced: number }> {
-    return this.request("/v1/templates", "PUT", input);
+  /** Sync templates with the server. Accepts either { templates: [...] } or an array of templates directly. */
+  async syncTemplates(input: SyncTemplatesInput | TemplateInput[]): Promise<{ synced: number }> {
+    const payload = Array.isArray(input) ? { templates: input } : input;
+    return this.request("/v1/templates", "PUT", payload);
   }
 
-  /** Create/upsert a user profile and contacts. */
-  async addUser(input: AddUserInput): Promise<{ id: string }> {
-    return this.request("/v1/users", "POST", input);
+  /**
+   * Create/upsert a user profile and contacts.
+   * Can be called with (id, contacts, options) or (inputObject).
+   */
+  async addUser(
+    id: string,
+    contacts?: UserContactInput[],
+    options?: Omit<AddUserInput, "id" | "contacts">,
+  ): Promise<{ id: string }>;
+  async addUser(input: AddUserInput): Promise<{ id: string }>;
+  async addUser(
+    idOrInput: string | AddUserInput,
+    contacts?: UserContactInput[],
+    options?: Omit<AddUserInput, "id" | "contacts">,
+  ): Promise<{ id: string }> {
+    if (typeof idOrInput === "string") {
+      return this.request("/v1/users", "POST", {
+        id: idOrInput,
+        contacts: contacts ?? [],
+        ...options,
+      });
+    }
+    return this.request("/v1/users", "POST", idOrInput);
+  }
+
+  /**
+   * Convenient alias for `addUser` matching standard CDP/notification SDK conventions.
+   */
+  async identify(
+    id: string,
+    contacts?: UserContactInput[],
+    options?: Omit<AddUserInput, "id" | "contacts">,
+  ): Promise<{ id: string }>;
+  async identify(input: AddUserInput): Promise<{ id: string }>;
+  async identify(
+    idOrInput: string | AddUserInput,
+    contacts?: UserContactInput[],
+    options?: Omit<AddUserInput, "id" | "contacts">,
+  ): Promise<{ id: string }> {
+    return (this.addUser as any)(idOrInput, contacts, options);
   }
 
   /** Update user profile. */
   async updateUser(id: string, input: UpdateUserInput): Promise<{ id: string }> {
-    return this.request(`/v1/users/${id}`, "PATCH", input);
+    return this.request(`/v1/users/${encodeURIComponent(id)}`, "PATCH", input);
   }
 
   /** Delete user profile. */
   async deleteUser(id: string): Promise<void> {
-    return this.request(`/v1/users/${id}`, "DELETE");
+    return this.request(`/v1/users/${encodeURIComponent(id)}`, "DELETE");
   }
 
-  /** Add contact targets to user profile. */
+  /** Add contact target to user profile. */
   async addContact(
     userId: string,
     input: AddContactInput,
   ): Promise<{ userId: string; channel: string; target: string }> {
-    return this.request(`/v1/users/${userId}/contacts`, "POST", input);
+    return this.request(`/v1/users/${encodeURIComponent(userId)}/contacts`, "POST", input);
+  }
+
+  /** Add multiple contact targets to user profile in a batch. */
+  async addContacts(
+    userId: string,
+    contacts: AddContactInput[],
+  ): Promise<{ userId: string; contacts: Array<{ channel: string; target: string }> }> {
+    return this.request(`/v1/users/${encodeURIComponent(userId)}/contacts`, "POST", contacts);
   }
 
   /** Delete a specific contact channel target. */
   async deleteContact(userId: string, channel: string, target: string): Promise<void> {
-    return this.request(`/v1/users/${userId}/contacts/${channel}/${target}`, "DELETE");
+    return this.request(
+      `/v1/users/${encodeURIComponent(userId)}/contacts/${encodeURIComponent(channel)}/${encodeURIComponent(target)}`,
+      "DELETE",
+    );
   }
 
   /** Request a notification dispatch. */
@@ -124,7 +190,7 @@ export class NotifkitClient {
   async listWorkflows(options?: {
     limit?: number;
     search?: string;
-  }): Promise<{ workflows: any[] }> {
+  }): Promise<{ workflows: WorkflowDefinitionRecord[] }> {
     const params = new URLSearchParams();
     if (options?.limit) params.set("limit", options.limit.toString());
     if (options?.search) params.set("search", options.search);
@@ -133,13 +199,13 @@ export class NotifkitClient {
   }
 
   /** Get a workflow instance by ID. */
-  async getWorkflow(instanceId: string): Promise<any> {
-    return this.request(`/v1/workflows/instances/${instanceId}`, "GET");
+  async getWorkflow(instanceId: string): Promise<WorkflowInstanceRecord> {
+    return this.request(`/v1/workflows/instances/${encodeURIComponent(instanceId)}`, "GET");
   }
 
   /** Cancel a running/suspended workflow instance. */
   async cancelWorkflow(instanceId: string): Promise<void> {
-    return this.request(`/v1/workflows/instances/${instanceId}`, "DELETE");
+    return this.request(`/v1/workflows/instances/${encodeURIComponent(instanceId)}`, "DELETE");
   }
 
   /** Get notification logs for the project. */
@@ -153,7 +219,7 @@ export class NotifkitClient {
     taskId?: string;
     campaign?: string;
     search?: string;
-  }): Promise<{ logs: any[]; nextCursor: string | null }> {
+  }): Promise<{ logs: NotificationLogRecord[]; nextCursor: string | null }> {
     let url = "/v1/notifications/logs";
     if (options) {
       const params = new URLSearchParams();
@@ -182,7 +248,7 @@ export class NotifkitClient {
     language?: string;
     timezone?: string;
     channel?: string;
-  }): Promise<{ users: any[]; nextCursor: string | null }> {
+  }): Promise<{ users: UserProfileResponse[]; nextCursor: string | null }> {
     const params = new URLSearchParams();
     if (options?.limit) params.set("limit", options.limit.toString());
     if (options?.cursor) params.set("cursor", options.cursor);
@@ -197,45 +263,48 @@ export class NotifkitClient {
 
   /** Delete a template. */
   async deleteTemplate(id: string): Promise<void> {
-    return this.request(`/v1/templates/${id}`, "DELETE");
+    return this.request(`/v1/templates/${encodeURIComponent(id)}`, "DELETE");
   }
 
   /** Get a user's contacts. */
-  async getUserContacts(userId: string): Promise<{ contacts: any[] }> {
-    return this.request(`/v1/users/${userId}/contacts`, "GET");
+  async getUserContacts(userId: string): Promise<{ contacts: UserContactResponse[] }> {
+    return this.request(`/v1/users/${encodeURIComponent(userId)}/contacts`, "GET");
   }
 
   /** List projects (Admin only). */
-  async listProjects(): Promise<{ projects: any[] }> {
+  async listProjects(): Promise<{ projects: ProjectRecord[] }> {
     return this.request("/v1/projects", "GET");
   }
 
   /** Delete a project (Admin only). */
   async deleteProject(id: string): Promise<void> {
-    return this.request(`/v1/projects/${id}`, "DELETE");
+    return this.request(`/v1/projects/${encodeURIComponent(id)}`, "DELETE");
   }
 
   /** Create a new project API key (Admin only). */
   async createProjectKey(
     id: string,
     input?: { role?: "admin" | "read_only" },
-  ): Promise<{ id: string; apiKey: string; role: string }> {
-    return this.request(`/v1/projects/${id}/keys`, "POST", input || {});
+  ): Promise<ProjectKeyRecord> {
+    return this.request(`/v1/projects/${encodeURIComponent(id)}/keys`, "POST", input || {});
   }
 
   /** List project API keys (Admin only). */
-  async listProjectKeys(id: string): Promise<{ keys: any[] }> {
-    return this.request(`/v1/projects/${id}/keys`, "GET");
+  async listProjectKeys(id: string): Promise<{ keys: ProjectKeyRecord[] }> {
+    return this.request(`/v1/projects/${encodeURIComponent(id)}/keys`, "GET");
   }
 
   /** Delete a project API key (Admin only). */
   async deleteProjectKey(id: string, keyId: string): Promise<void> {
-    return this.request(`/v1/projects/${id}/keys/${keyId}`, "DELETE");
+    return this.request(
+      `/v1/projects/${encodeURIComponent(id)}/keys/${encodeURIComponent(keyId)}`,
+      "DELETE",
+    );
   }
 
   /** Update project settings (Admin only). */
   async updateProject(id: string, input: UpdateProjectInput): Promise<{ id: string }> {
-    return this.request(`/v1/projects/${id}`, "PATCH", input);
+    return this.request(`/v1/projects/${encodeURIComponent(id)}`, "PATCH", input);
   }
 
   /** List unique segment tags. */
@@ -302,7 +371,7 @@ export class NotifkitClient {
     channel?: string;
     reason?: string;
     target?: string;
-  }): Promise<{ suppressions: any[] }> {
+  }): Promise<{ suppressions: SuppressionRecord[] }> {
     const params = new URLSearchParams();
     if (options?.limit) params.set("limit", options.limit.toString());
     if (options?.channel) params.set("channel", options.channel);
@@ -332,7 +401,9 @@ export class NotifkitClient {
   // ─── Notification Status & Cancellation ─────────────────────────────────────
 
   /** Get real-time status and delivery logs for a specific notification task. */
-  async getNotificationStatus(taskId: string): Promise<{ status: string; logs: any[] }> {
+  async getNotificationStatus(
+    taskId: string,
+  ): Promise<{ status: string; logs: NotificationLogRecord[] }> {
     return this.request(`/v1/notifications/${encodeURIComponent(taskId)}`, "GET");
   }
 
@@ -349,54 +420,54 @@ export class NotifkitClient {
   // ─── User Profile & Preferences ─────────────────────────────────────────────
 
   /** Get user profile and contacts by ID. */
-  async getUser(id: string): Promise<any> {
+  async getUser(id: string): Promise<UserResponse> {
     return this.request(`/v1/users/${encodeURIComponent(id)}`, "GET");
   }
 
   /** Get user details including contacts and recent message logs. */
-  async getUserDetails(id: string): Promise<any> {
+  async getUserDetails(id: string): Promise<UserDetailResponse> {
     return this.request(`/v1/users/${encodeURIComponent(id)}/details`, "GET");
   }
 
   /** Get user preferences. */
-  async getUserPreferences(id: string): Promise<any> {
+  async getUserPreferences(id: string): Promise<Preferences> {
     return this.request(`/v1/users/${encodeURIComponent(id)}/preferences`, "GET");
   }
 
   /** Update user preferences. */
   async updateUserPreferences(
     id: string,
-    preferences: Record<string, any>,
-  ): Promise<{ id: string; preferences: any }> {
+    preferences: Preferences,
+  ): Promise<{ id: string; preferences: Preferences }> {
     return this.request(`/v1/users/${encodeURIComponent(id)}/preferences`, "PATCH", preferences);
   }
 
   // ─── Templates Querying ─────────────────────────────────────────────────────
 
   /** List all templates for the project. */
-  async listTemplates(): Promise<{ templates: any[] }> {
+  async listTemplates(): Promise<{ templates: TemplateRecordResponse[] }> {
     return this.request("/v1/templates", "GET");
   }
 
   /** Get a template by ID. */
-  async getTemplate(id: string): Promise<any> {
+  async getTemplate(id: string): Promise<TemplateRecordResponse> {
     return this.request(`/v1/templates/${encodeURIComponent(id)}`, "GET");
   }
 
   // ─── System Health, Metrics & DLQ ───────────────────────────────────────────
 
   /** Get system health and worker status. */
-  async getSystemHealth(): Promise<any> {
+  async getSystemHealth(): Promise<SystemHealthRecord> {
     return this.request("/v1/system/health", "GET");
   }
 
   /** Get system metrics and queue lengths. */
-  async getSystemMetrics(): Promise<any> {
+  async getSystemMetrics(): Promise<SystemMetricsRecord> {
     return this.request("/v1/system/metrics", "GET");
   }
 
   /** Get dead-letter queue messages. */
-  async getDLQMessages(): Promise<{ messages: any[] }> {
+  async getDLQMessages(): Promise<{ messages: DLQMessageRecord[] }> {
     return this.request("/v1/dlq", "GET");
   }
 

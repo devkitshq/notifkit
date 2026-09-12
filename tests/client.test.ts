@@ -121,13 +121,51 @@ describe("NotifkitClient", () => {
   });
 
   describe("users", () => {
-    it("addUser POSTs to /v1/users", async () => {
+    it("addUser POSTs to /v1/users with object input", async () => {
       const fetchMock = stubFetch({ id: "usr_1" });
       await client().addUser({ id: "usr_1" });
 
       const { url, init } = callArgs(fetchMock);
       expect(url).toBe("https://api.test/v1/users");
       expect(init.method).toBe("POST");
+    });
+
+    it("addUser POSTs to /v1/users with (id, contacts, options) signature", async () => {
+      const fetchMock = stubFetch({ id: "usr_1" });
+      await client().addUser(
+        "usr_1",
+        [
+          { channel: "email", target: "alice@example.com" },
+          { channel: "slack", target: "U12345" },
+        ],
+        { timezone: "America/New_York", segments: ["early-adopters"] },
+      );
+
+      const { url, init } = callArgs(fetchMock);
+      expect(url).toBe("https://api.test/v1/users");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual({
+        id: "usr_1",
+        contacts: [
+          { channel: "email", target: "alice@example.com" },
+          { channel: "slack", target: "U12345" },
+        ],
+        timezone: "America/New_York",
+        segments: ["early-adopters"],
+      });
+    });
+
+    it("identify aliases addUser", async () => {
+      const fetchMock = stubFetch({ id: "usr_1" });
+      await client().identify("usr_1", [{ channel: "sms", target: "+15551234567" }]);
+
+      const { url, init } = callArgs(fetchMock);
+      expect(url).toBe("https://api.test/v1/users");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual({
+        id: "usr_1",
+        contacts: [{ channel: "sms", target: "+15551234567" }],
+      });
     });
 
     it("updateUser PATCHes the user path", async () => {
@@ -178,12 +216,34 @@ describe("NotifkitClient", () => {
       expect(init.method).toBe("POST");
     });
 
-    it("deleteContact targets the specific channel and address", async () => {
-      const fetchMock = stubFetch(undefined, 204);
-      await client().deleteContact("usr_1", "email", "a@b.co");
+    it("addContacts POSTs batch of contacts to the contacts path", async () => {
+      const fetchMock = stubFetch({
+        userId: "usr_1",
+        contacts: [
+          { channel: "email", target: "a@b.co" },
+          { channel: "slack", target: "U123" },
+        ],
+      });
+      await client().addContacts("usr_1", [
+        { channel: "email", target: "a@b.co" },
+        { channel: "slack", target: "U123" },
+      ]);
 
       const { url, init } = callArgs(fetchMock);
-      expect(url).toBe("https://api.test/v1/users/usr_1/contacts/email/a@b.co");
+      expect(url).toBe("https://api.test/v1/users/usr_1/contacts");
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(init.body as string)).toEqual([
+        { channel: "email", target: "a@b.co" },
+        { channel: "slack", target: "U123" },
+      ]);
+    });
+
+    it("deleteContact targets the specific channel and URI-encoded address", async () => {
+      const fetchMock = stubFetch(undefined, 204);
+      await client().deleteContact("usr_1", "email", "a+tag@b.co");
+
+      const { url, init } = callArgs(fetchMock);
+      expect(url).toBe("https://api.test/v1/users/usr_1/contacts/email/a%2Btag%40b.co");
       expect(init.method).toBe("DELETE");
     });
   });

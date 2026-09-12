@@ -302,6 +302,68 @@ describe("API Handlers", () => {
     );
   });
 
+  it("addUser with dynamic contacts array", async () => {
+    const req = createMockReq({
+      id: "usr_dynamic",
+      contacts: [
+        { channel: "slack", target: "U999", label: "Work Slack" },
+        { channel: "discord", target: "888" },
+        { channel: "email", target: "slackuser@example.com" },
+      ],
+      segments: ["power-users"],
+    });
+    const res = createMockRes();
+
+    await handlers.addUser(req, res, {
+      projectId: "test_project_id",
+      params: {},
+      query: new URLSearchParams(),
+    } as any);
+
+    expect(res.statusCode).toBe(201);
+    expect(deps.userRepo.upsertManyFull).toHaveBeenCalledWith("test_project_id", [
+      expect.objectContaining({
+        userId: "usr_dynamic",
+        email: "slackuser@example.com", // falls back to email in contacts array
+        segments: ["power-users"],
+      }),
+    ]);
+    expect(deps.contactRepo.upsertMany).toHaveBeenCalledWith("test_project_id", [
+      expect.objectContaining({ userId: "usr_dynamic", channel: "slack", target: "U999" }),
+      expect.objectContaining({ userId: "usr_dynamic", channel: "discord", target: "888" }),
+      expect.objectContaining({
+        userId: "usr_dynamic",
+        channel: "email",
+        target: "slackuser@example.com",
+      }),
+    ]);
+  });
+
+  it("addContact batch support", async () => {
+    const req = createMockReq([
+      { channel: "webhook", target: "https://example.com/webhook" },
+      { channel: "telegram", target: "12345678" },
+    ]);
+    const res = createMockRes();
+    const ctx = { params: { id: "usr_456" }, query: new URLSearchParams() };
+
+    await handlers.addContact(req, res, { ...ctx, projectId: "test_project_id" } as any);
+
+    expect(res.statusCode).toBe(201);
+    expect(deps.contactRepo.upsertMany).toHaveBeenCalledWith("test_project_id", [
+      expect.objectContaining({
+        userId: "usr_456",
+        channel: "webhook",
+        target: "https://example.com/webhook",
+      }),
+      expect.objectContaining({
+        userId: "usr_456",
+        channel: "telegram",
+        target: "12345678",
+      }),
+    ]);
+  });
+
   it("deleteContact (deleteUserContact)", async () => {
     const req = createMockReq({});
     const res = createMockRes();

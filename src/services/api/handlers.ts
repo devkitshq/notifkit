@@ -15,10 +15,12 @@ import type { Preferences } from "@/contracts/index.js";
 import {
   AddUserSchema,
   UpdateUserSchema,
-  AddContactSchema,
+  BatchAddContactsSchema,
+  type UserContactInput,
   SyncTemplatesSchema,
   NotifyRequestSchema,
   ContactChannelSchema,
+  type ContactChannel,
   PreferencesSchema,
   type NotificationRequestedPayload,
   type NotificationTarget,
@@ -69,6 +71,7 @@ interface InlineUserLike {
   id: string;
   language?: string;
   timezone?: string;
+  contacts?: UserContactInput[];
   email?: string[];
   phone?: string[];
   pushToken?: string[];
@@ -76,25 +79,66 @@ interface InlineUserLike {
   preferences?: Preferences;
 }
 
-/** Map an inline user's contact arrays into (channel, target) pairs. */
-function contactsOf(user: InlineUserLike): { channel: "email" | "sms" | "push"; target: string }[] {
-  return [
-    ...(user.email ?? []).map((target) => ({ channel: "email" as const, target })),
-    ...(user.phone ?? []).map((target) => ({ channel: "sms" as const, target })),
-    ...(user.pushToken ?? []).map((target) => ({ channel: "push" as const, target })),
-  ];
+interface ResolvedContact {
+  channel: ContactChannel;
+  target: string;
+  label?: string;
+  isPrimary?: boolean;
+  enabled?: boolean;
+  preferences?: Preferences;
+}
+
+/** Map an inline or user input's contacts and legacy arrays into resolved contact records. */
+function contactsOf(user: InlineUserLike): ResolvedContact[] {
+  const list: ResolvedContact[] = [];
+
+  if (user.contacts && Array.isArray(user.contacts)) {
+    for (const c of user.contacts) {
+      list.push({
+        channel: c.channel,
+        target: c.target,
+        label: c.label,
+        isPrimary: c.isPrimary,
+        enabled: c.enabled,
+        preferences: c.preferences,
+      });
+    }
+  }
+
+  if (user.email) {
+    for (const target of user.email) {
+      list.push({ channel: "email", target });
+    }
+  }
+  if (user.phone) {
+    for (const target of user.phone) {
+      list.push({ channel: "sms", target });
+    }
+  }
+  if (user.pushToken) {
+    for (const target of user.pushToken) {
+      list.push({ channel: "push", target });
+    }
+  }
+
+  return list;
 }
 
 /** Persist user records + their contacts in bulk. Shared by addUser and inline notify. */
 async function persistUsers(deps: Deps, users: InlineUserLike[], projectId: string): Promise<void> {
-  const usersList = users.map((u) => ({
-    userId: u.id,
-    language: u.language ?? "en",
-    timezone: u.timezone ?? "UTC",
-    email: u.email?.[0] ?? null,
-    segments: u.segments ?? [],
-    preferences: u.preferences ?? {},
-  }));
+  const usersList = users.map((u) => {
+    const primaryEmail =
+      u.email?.[0] ?? u.contacts?.find((c) => c.channel === "email")?.target ?? null;
+
+    return {
+      userId: u.id,
+      language: u.language ?? "en",
+      timezone: u.timezone ?? "UTC",
+      email: primaryEmail,
+      segments: u.segments ?? [],
+      preferences: u.preferences ?? {},
+    };
+  });
 
   const contactsList: any[] = [];
   for (const u of users) {
@@ -103,7 +147,7 @@ async function persistUsers(deps: Deps, users: InlineUserLike[], projectId: stri
         userId: u.id,
         channel: c.channel,
         target: c.target,
-        preferences: {},
+        preferences: c.preferences ?? {},
       });
     }
   }
@@ -190,7 +234,7 @@ export function createHandlers(deps: Deps) {
     const updated = await deps.userRepo.updatePartial(ctx.projectId!, userId, {
       language: patch.language,
       timezone: patch.timezone,
-      email: patch.email?.[0],
+      email: patch.email?.[0] ?? patch.contacts?.find((c) => c.channel === "email")?.target,
       segments: patch.segments,
       preferences: patch.preferences,
     });
@@ -198,7 +242,11 @@ export function createHandlers(deps: Deps) {
 
     // New contact values in the patch are added (existing ones are kept).
     for (const c of contactsOf({ id: userId, ...patch })) {
-      await deps.contactRepo.upsert(ctx.projectId!, userId, c.channel, c.target);
+      if (c.preferences) {
+        await deps.contactRepo.upsert(ctx.projectId!, userId, c.channel, c.target, c.preferences);
+      } else {
+        await deps.contactRepo.upsert(ctx.projectId!, userId, c.channel, c.target);
+      }
     }
     logger.info({ userId }, "user updated");
     sendJson(res, 200, { id: userId });
@@ -217,28 +265,44 @@ export function createHandlers(deps: Deps) {
     sendNoContent(res);
   }
 
-  // ── POST /v1/users/:id/contacts — addUserContact ──────────────────────────
+  // ── POST /v1/users/:id/contacts — addUserContact / batch contacts ─────────
   async function addContact(
     req: IncomingMessage,
     res: ServerResponse,
     ctx: RouteContext,
   ): Promise<void> {
     const userId = ctx.params.id!;
-    const parsed = AddContactSchema.safeParse(await readJsonBody(req));
+    const body = await readJsonBody(req);
+    const parsed = BatchAddContactsSchema.safeParse(body);
     if (!parsed.success) return sendValidationError(res, parsed.error);
 
     const user = await deps.userRepo.findById(ctx.projectId!, userId);
     if (!user) return sendJson(res, 404, { error: "user_not_found", id: userId });
 
-    await deps.contactRepo.upsert(
-      ctx.projectId!,
-      userId,
-      parsed.data.channel,
-      parsed.data.target,
-      parsed.data.preferences ?? {},
-    );
-    logger.info({ userId, channel: parsed.data.channel }, "contact added");
-    sendJson(res, 201, { userId, channel: parsed.data.channel, target: parsed.data.target });
+    if (Array.isArray(parsed.data)) {
+      const contactsList = parsed.data.map((c) => ({
+        userId,
+        channel: c.channel,
+        target: c.target,
+        preferences: c.preferences ?? {},
+      }));
+      await deps.contactRepo.upsertMany(ctx.projectId!, contactsList);
+      logger.info({ userId, count: contactsList.length }, "contacts batch added");
+      sendJson(res, 201, {
+        userId,
+        contacts: contactsList.map((c) => ({ channel: c.channel, target: c.target })),
+      });
+    } else {
+      await deps.contactRepo.upsert(
+        ctx.projectId!,
+        userId,
+        parsed.data.channel,
+        parsed.data.target,
+        parsed.data.preferences ?? {},
+      );
+      logger.info({ userId, channel: parsed.data.channel }, "contact added");
+      sendJson(res, 201, { userId, channel: parsed.data.channel, target: parsed.data.target });
+    }
   }
 
   // ── DELETE /v1/users/:id/contacts/:channel/:target — deleteUserContact ────

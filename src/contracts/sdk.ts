@@ -28,6 +28,7 @@ export const ContactChannelSchema = z.enum([
   "sms",
   "push",
   "webhook",
+  "in-app",
   "telegram",
   "discord",
   "whatsapp",
@@ -40,16 +41,28 @@ const stringOrArray = z
   .union([z.string().min(1), z.array(z.string().min(1))])
   .transform((v) => (Array.isArray(v) ? v : [v]));
 
+export const UserContactInputSchema = z.object({
+  channel: ContactChannelSchema,
+  target: z.string().min(1),
+  label: z.string().optional(),
+  isPrimary: z.boolean().optional(),
+  enabled: z.boolean().optional(),
+  preferences: PreferencesSchema.optional(),
+});
+export type UserContactInput = z.infer<typeof UserContactInputSchema>;
+
 // ─── Users ────────────────────────────────────────────────────────────────────
 
 /**
- * addUser({ id, email, phone, pushToken, segments, preferences })
- * email / phone / pushToken accept a single string or an array.
+ * addUser({ id, contacts, email, phone, pushToken, segments, preferences })
+ * email / phone / pushToken accept a single string or an array for backwards compatibility.
+ * Prefer `contacts: [{ channel, target }]`.
  */
 export const AddUserSchema = z.object({
   id: z.string().min(1),
   language: z.string().optional(),
   timezone: z.string().optional(),
+  contacts: z.array(UserContactInputSchema).optional(),
   email: stringOrArray.optional(),
   phone: stringOrArray.optional(),
   pushToken: stringOrArray.optional(),
@@ -62,6 +75,7 @@ export type AddUserInput = z.input<typeof AddUserSchema>;
 export const UpdateUserSchema = z.object({
   language: z.string().optional(),
   timezone: z.string().optional(),
+  contacts: z.array(UserContactInputSchema).optional(),
   email: stringOrArray.optional(),
   phone: stringOrArray.optional(),
   pushToken: stringOrArray.optional(),
@@ -70,13 +84,19 @@ export const UpdateUserSchema = z.object({
 });
 export type UpdateUserInput = z.input<typeof UpdateUserSchema>;
 
-/** addUserContact(userId, channel, { target, preferences }) — channel carried in body. */
+/** addUserContact(userId, channel, { target, preferences, label, isPrimary, enabled }) */
 export const AddContactSchema = z.object({
   channel: ContactChannelSchema,
   target: z.string().min(1),
+  label: z.string().optional(),
+  isPrimary: z.boolean().optional(),
+  enabled: z.boolean().optional(),
   preferences: PreferencesSchema.optional(),
 });
 export type AddContactInput = z.infer<typeof AddContactSchema>;
+
+export const BatchAddContactsSchema = z.union([AddContactSchema, z.array(AddContactSchema).min(1)]);
+export type BatchAddContactsInput = z.infer<typeof BatchAddContactsSchema>;
 
 // ─── Templates ────────────────────────────────────────────────────────────────
 
@@ -104,6 +124,7 @@ export const InlineUserSchema = z.object({
   id: z.string().min(1),
   language: z.string().optional(),
   timezone: z.string().optional(),
+  contacts: z.array(UserContactInputSchema).optional(),
   email: stringOrArray.optional(),
   phone: stringOrArray.optional(),
   pushToken: stringOrArray.optional(),
@@ -240,3 +261,122 @@ export const UpdateProjectSchema = z.object({
   throttleWindowHours: z.number().nullable().optional(),
 });
 export type UpdateProjectInput = z.infer<typeof UpdateProjectSchema>;
+
+// ─── Response Entities ────────────────────────────────────────────────────────
+
+export interface UserContactResponse {
+  id: string;
+  userId: string;
+  channel: ContactChannel;
+  target: string;
+  label?: string | null;
+  isPrimary?: boolean;
+  active?: boolean;
+  enabled?: boolean;
+  preferences?: Preferences;
+}
+
+export interface UserProfileResponse {
+  userId: string;
+  language?: string;
+  timezone?: string;
+  email?: string | null;
+}
+
+export interface UserResponse extends UserProfileResponse {
+  segments: string[];
+  preferences: Preferences;
+  contacts?: UserContactResponse[];
+}
+
+export interface UserDetailResponse extends UserResponse {
+  contacts: UserContactResponse[];
+  recentLogs?: unknown[];
+}
+
+export interface WorkflowDefinitionRecord {
+  id: string;
+  name: string;
+  steps: unknown[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WorkflowInstanceRecord {
+  id: string;
+  name: string;
+  status: string;
+  currentStepIndex: number;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NotificationLogRecord {
+  id: string;
+  notificationId: string;
+  taskId?: string;
+  channel: string;
+  target?: string;
+  status: string;
+  templateId?: string;
+  campaign?: string;
+  createdAt: string;
+  dispatchedAt?: string;
+  error?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface TemplateRecordResponse {
+  id: string;
+  channel: string;
+  topics: string[];
+  content: Record<string, unknown>;
+  aiPrompts?: Record<string, string> | null;
+}
+
+export interface SuppressionRecord {
+  id: string;
+  channel: string;
+  target: string;
+  reason: string;
+  createdAt: string;
+}
+
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  rateLimitRpm?: number | null;
+  throttleLimit?: number | null;
+  throttleWindowHours?: number | null;
+  createdAt: string;
+}
+
+export interface ProjectKeyRecord {
+  id: string;
+  apiKey: string;
+  role: string;
+  createdAt: string;
+}
+
+export interface SystemHealthRecord {
+  status: string;
+  timestamp: string;
+  redis?: { status: string };
+  db?: { status: string };
+  workers?: Record<string, unknown>;
+}
+
+export interface SystemMetricsRecord {
+  queues: Record<string, number>;
+  throughput?: Record<string, unknown>;
+}
+
+export interface DLQMessageRecord {
+  id: string;
+  stream: string;
+  payload: Record<string, unknown>;
+  error?: string;
+  timestamp: string;
+}

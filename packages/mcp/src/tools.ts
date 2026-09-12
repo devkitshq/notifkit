@@ -891,6 +891,22 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
         "`segment` targeting matches on. Timezone drives quiet-hours maths, so set it when known.",
       inputSchema: {
         id: z.string().min(1).describe("Your own stable user id, e.g. 'usr_123'."),
+        contacts: z
+          .array(
+            z.object({
+              channel: z.enum(CHANNELS).describe("Contact delivery channel."),
+              target: z.string().min(1).describe("Destination address, phone, token, or URL."),
+              label: z.string().optional().describe("Friendly label for this contact."),
+              isPrimary: z
+                .boolean()
+                .optional()
+                .describe("Whether this is the primary contact for this channel."),
+            }),
+          )
+          .optional()
+          .describe(
+            "Array of user contacts across any supported channels (preferred over legacy email/phone/pushToken).",
+          ),
         email: z
           .union([z.string().min(1), z.array(z.string().min(1))])
           .optional()
@@ -948,6 +964,20 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
         "Partially update an existing user profile (e.g. language, timezone, segment tags, preferences, or append new contacts) without replacing unspecified fields.",
       inputSchema: {
         id: z.string().min(1).describe("User id."),
+        contacts: z
+          .array(
+            z.object({
+              channel: z.enum(CHANNELS).describe("Contact delivery channel."),
+              target: z.string().min(1).describe("Destination address, phone, token, or URL."),
+              label: z.string().optional().describe("Friendly label for this contact."),
+              isPrimary: z
+                .boolean()
+                .optional()
+                .describe("Whether this is the primary contact for this channel."),
+            }),
+          )
+          .optional()
+          .describe("Array of user contacts across any supported channels to append or update."),
         email: z
           .union([z.string().min(1), z.array(z.string().min(1))])
           .optional()
