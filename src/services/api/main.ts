@@ -11,11 +11,14 @@ import {
   ProjectRepository,
   WorkflowRepository,
   SegmentRepository,
+  AdminUserRepository,
 } from "@/repositories/index.js";
 import { STREAMS } from "@/contracts/index.js";
 import { readJsonBody, readRawBody, sendJson, HttpError } from "./http.js";
 import { Router } from "./router.js";
 import { createHandlers } from "./handlers.js";
+import { handleAdminRequest } from "./admin-static.js";
+import { getAdminSession, hashPassword } from "@/services/auth/index.js";
 import { projects, messageLogs, projectApiKeys, suppressions } from "@/db/schema.js";
 import { eq, inArray } from "drizzle-orm";
 import { randomBytes, timingSafeEqual, createHash } from "node:crypto";
@@ -177,6 +180,26 @@ export async function startApiServer() {
     events: new StreamProducer({ redis: redis.native, stream: STREAMS.EVENTS_INBOUND, logger }),
   };
 
+  const adminUserRepo = new AdminUserRepository(db);
+
+  if (config.ADMIN_EMAIL && config.ADMIN_PASSWORD) {
+    try {
+      const existing = await adminUserRepo.findByEmailOrUsername(config.ADMIN_EMAIL);
+      if (!existing) {
+        const passwordHash = await hashPassword(config.ADMIN_PASSWORD);
+        await adminUserRepo.create({
+          email: config.ADMIN_EMAIL,
+          username: config.ADMIN_USERNAME,
+          passwordHash,
+          role: "superadmin",
+        });
+        logger.info({ email: config.ADMIN_EMAIL }, "Bootstrapped initial admin user");
+      }
+    } catch (err) {
+      logger.error({ err }, "Failed to bootstrap default admin user");
+    }
+  }
+
   deps = {
     logger,
     redis,
@@ -187,12 +210,16 @@ export async function startApiServer() {
     projectRepo: new ProjectRepository(db),
     workflowRepo: new WorkflowRepository(db),
     segmentRepo: new SegmentRepository(db),
+    adminUserRepo,
     db,
   };
   h = createHandlers(deps);
 
   router = new Router();
   router
+    .post("/v1/auth/login", h.login)
+    .post("/v1/auth/logout", h.logout)
+    .get("/v1/auth/me", h.getMe)
     .put("/v1/templates", h.syncTemplates)
     .get("/v1/templates", h.listTemplates)
     .get("/v1/templates/:id", h.getTemplate)
@@ -269,6 +296,11 @@ export async function startApiServer() {
 
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
+    if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
+      const handled = await handleAdminRequest(req, res, url);
+      if (handled) return;
+    }
+
     let projectId: string | undefined = undefined;
     let projectRateLimitRpm = 600;
     let keyRole: "admin" | "read_only" = "admin";
@@ -280,8 +312,14 @@ export async function startApiServer() {
     // will. The signed token in the URL is the credential, and it authorises
     // exactly one action for one address.
     const isPublicUnsubscribe = url.pathname === "/v1/unsubscribe";
+    const isPublicAuth = url.pathname === "/v1/auth/login";
 
-    if (url.pathname.startsWith("/v1/") && !isProjectManagement && !isPublicUnsubscribe) {
+    if (
+      url.pathname.startsWith("/v1/") &&
+      !isProjectManagement &&
+      !isPublicUnsubscribe &&
+      !isPublicAuth
+    ) {
       let token = extractAuthToken(req);
       if (!token && url.searchParams.has("token")) {
         token = url.searchParams.get("token") || undefined;
@@ -293,7 +331,13 @@ export async function startApiServer() {
       }
 
       let isAdminToken = false;
-      if (config.ADMIN_API_KEY) {
+      if (token.startsWith("nk_sess_")) {
+        const session = await getAdminSession(redis.native, token);
+        if (session) {
+          isAdminToken = true;
+          keyRole = session.role === "superadmin" ? "admin" : (session.role as any);
+        }
+      } else if (config.ADMIN_API_KEY) {
         const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
         const providedBuffer = Buffer.from(token);
         if (
@@ -309,7 +353,11 @@ export async function startApiServer() {
           (req.headers["x-project-id"] as string | undefined) ||
           url.searchParams.get("projectId") ||
           undefined;
-        if (!headerProjectId) {
+        const isProjectAgnostic =
+          url.pathname.startsWith("/v1/auth/") ||
+          url.pathname.startsWith("/v1/system/") ||
+          url.pathname.startsWith("/v1/dlq");
+        if (!headerProjectId && !isProjectAgnostic) {
           sendJson(res, 400, {
             error: "bad_request",
             message: "x-project-id header or projectId query param required when using admin token",
@@ -318,7 +366,9 @@ export async function startApiServer() {
         }
         projectId = headerProjectId;
         projectRateLimitRpm = 6000;
-        keyRole = "admin";
+        if (!token.startsWith("nk_sess_")) {
+          keyRole = "admin";
+        }
       } else {
         const tokenHash = createHash("sha256").update(token).digest("hex");
         const cached = authCache.get(tokenHash);
@@ -374,7 +424,7 @@ export async function startApiServer() {
         end
         return -1
       `;
-      const rlKey = `rate-limit:api:req:${projectId}`;
+      const rlKey = `rate-limit:api:req:${projectId || "global"}`;
       const nowMs = Date.now();
       const count = (await redis.native.eval(
         LUA_LIMIT,
@@ -398,24 +448,27 @@ export async function startApiServer() {
     } else if (isProjectManagement) {
       const token = extractAuthToken(req);
 
-      if (!config.ADMIN_API_KEY) {
-        sendJson(res, 403, {
-          error: "forbidden",
-          message: "Project management disabled (no ADMIN_API_KEY set)",
-        });
-        return;
-      }
       if (!token) {
         sendJson(res, 401, { error: "unauthorized", message: "Missing admin token" });
         return;
       }
 
-      const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
-      const providedBuffer = Buffer.from(token);
-      if (
-        expectedBuffer.length !== providedBuffer.length ||
-        !timingSafeEqual(expectedBuffer, providedBuffer)
-      ) {
+      let authorized = false;
+      if (token.startsWith("nk_sess_")) {
+        const session = await getAdminSession(redis.native, token);
+        if (session) authorized = true;
+      } else if (config.ADMIN_API_KEY) {
+        const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
+        const providedBuffer = Buffer.from(token);
+        if (
+          expectedBuffer.length === providedBuffer.length &&
+          timingSafeEqual(expectedBuffer, providedBuffer)
+        ) {
+          authorized = true;
+        }
+      }
+
+      if (!authorized) {
         sendJson(res, 401, { error: "unauthorized", message: "Invalid admin token" });
         return;
       }

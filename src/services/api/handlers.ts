@@ -10,7 +10,14 @@ import type {
   ProjectRepository,
   WorkflowRepository,
   SegmentRepository,
+  AdminUserRepository,
 } from "@/repositories/index.js";
+import {
+  verifyPassword,
+  createAdminSession,
+  revokeAdminSession,
+  getAdminSession,
+} from "@/services/auth/index.js";
 import type { Preferences } from "@/contracts/index.js";
 import {
   AddUserSchema,
@@ -63,6 +70,7 @@ export interface Deps {
   projectRepo: ProjectRepository;
   workflowRepo: WorkflowRepository;
   segmentRepo: SegmentRepository;
+  adminUserRepo?: AdminUserRepository;
   db: Db;
 }
 
@@ -1747,7 +1755,100 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
     sendNoContent(res);
   }
 
+  // ── POST /v1/auth/login — login ───────────────────────────────────────────
+  async function login(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (!deps.adminUserRepo) {
+      sendJson(res, 500, {
+        error: "internal_error",
+        message: "Admin user repository not initialized",
+      });
+      return;
+    }
+
+    const body = await readJsonBody(req);
+    const parsed = z
+      .object({
+        identifier: z.string().min(1, "Identifier (email or username) is required"),
+        password: z.string().min(1, "Password is required"),
+      })
+      .safeParse(body);
+
+    if (!parsed.success) {
+      sendValidationError(res, parsed.error);
+      return;
+    }
+
+    const { identifier, password } = parsed.data;
+    const user = await deps.adminUserRepo.findByEmailOrUsername(identifier);
+    if (!user) {
+      sendJson(res, 401, { error: "unauthorized", message: "Invalid credentials" });
+      return;
+    }
+
+    const isValid = await verifyPassword(password, user.passwordHash);
+    if (!isValid) {
+      sendJson(res, 401, { error: "unauthorized", message: "Invalid credentials" });
+      return;
+    }
+
+    const session = await createAdminSession(deps.redis.native, user);
+    sendJson(res, 200, {
+      token: session.token,
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        role: user.role,
+      },
+      expiresAt: session.expiresAt,
+    });
+  }
+
+  // ── POST /v1/auth/logout — logout ─────────────────────────────────────────
+  async function logout(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const authHeader = req.headers["authorization"];
+    let token: string | undefined;
+    if (typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")) {
+      token = authHeader.slice(7).trim();
+    }
+    if (token) {
+      await revokeAdminSession(deps.redis.native, token);
+    }
+    sendJson(res, 200, { message: "Logged out successfully" });
+  }
+
+  // ── GET /v1/auth/me — getMe ───────────────────────────────────────────────
+  async function getMe(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const authHeader = req.headers["authorization"];
+    let token: string | undefined;
+    if (typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")) {
+      token = authHeader.slice(7).trim();
+    }
+    if (!token) {
+      sendJson(res, 401, { error: "unauthorized", message: "Missing token" });
+      return;
+    }
+
+    const session = await getAdminSession(deps.redis.native, token);
+    if (!session) {
+      sendJson(res, 401, { error: "unauthorized", message: "Invalid or expired session" });
+      return;
+    }
+
+    sendJson(res, 200, {
+      user: {
+        id: session.adminId,
+        email: session.email,
+        username: session.username,
+        role: session.role,
+      },
+    });
+  }
+
   return {
+    login,
+    logout,
+    getMe,
     syncTemplates,
     addUser,
     updateUser,

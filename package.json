@@ -59,6 +59,8 @@
     "build": "tsdown",
     "dev": "tsdown --watch",
     "create-project": "node scripts/create-project.mjs",
+    "create-admin": "node scripts/create-admin.mjs",
+    "build:dashboard": "npm --prefix dashboard run build",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
     "lint": "eslint . --fix",
