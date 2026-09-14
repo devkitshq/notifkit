@@ -41,7 +41,7 @@ export default function UsersPage() {
   const fetchUsers = useCallback(async (apiKey: string, projectId: string) => {
     setLoading(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/users`, {
         headers: {
           Authorization: `Bearer ${apiKey}`,
@@ -75,7 +75,7 @@ export default function UsersPage() {
     if (!id) return;
     setLoadingDetail(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/users/${encodeURIComponent(id)}/details`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,

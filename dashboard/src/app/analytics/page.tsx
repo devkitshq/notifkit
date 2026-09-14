@@ -26,7 +26,7 @@ export default function AnalyticsPage() {
   const fetchMetrics = useCallback(async () => {
     setIsLoading(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/system/metrics`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,

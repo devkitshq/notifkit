@@ -30,9 +30,9 @@ export default function RealTimeFeed({
     if (!projectApiKey || !selectedProjectId) return;
     setIsConnected(false);
 
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
     const es = new EventSource(
-      `${apiUrl}/v1/events/stream?token=${projectApiKey}&projectId=${selectedProjectId}`,
+      `${apiUrl}/v1/events/stream?token=${encodeURIComponent(projectApiKey)}&projectId=${encodeURIComponent(selectedProjectId)}`,
     );
 
     es.onopen = () => {

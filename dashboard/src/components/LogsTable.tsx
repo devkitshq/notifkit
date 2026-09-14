@@ -60,7 +60,7 @@ export default function LogsTable() {
     async (apiKey: string, projectId: string, cursor?: string | null) => {
       setIsLoading(true);
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
         const query = new URLSearchParams({ limit: "25" });
         if (cursor) query.set("cursor", cursor);
         if (search) query.set("search", search);
@@ -104,7 +104,7 @@ export default function LogsTable() {
   useEffect(() => {
     if (selectedLog && projectApiKey && selectedProjectId) {
       setLoadingLifecycle(true);
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       fetch(`${apiUrl}/v1/notifications/${selectedLog.taskId}`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,

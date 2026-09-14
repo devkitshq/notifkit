@@ -50,7 +50,7 @@ export default function WorkflowsPage() {
   const fetchWorkflows = useCallback(async () => {
     setIsLoading(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/workflows`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,
@@ -76,7 +76,7 @@ export default function WorkflowsPage() {
 
   const handleTrigger = async (name: string) => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/workflows/trigger`, {
         method: "POST",
         headers: {
@@ -103,7 +103,7 @@ export default function WorkflowsPage() {
     if (!targetId) return;
     setSearchingInstance(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/workflows/instances/${encodeURIComponent(targetId)}`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,

@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { FolderKey, Plus, Copy, Trash2, AlertCircle, Eye, EyeOff } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
 
 interface Project {
   id: string;
@@ -21,6 +22,7 @@ interface ApiKey {
 }
 
 export default function ProjectsPage() {
+  const { apiUrl, token: adminKey } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [newProjectName, setNewProjectName] = useState("");
@@ -29,9 +31,6 @@ export default function ProjectsPage() {
 
   const [newlyGeneratedKey, setNewlyGeneratedKey] = useState<string | null>(null);
   const [showKey, setShowKey] = useState(false);
-
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
-  const adminKey = process.env.NEXT_PUBLIC_ADMIN_KEY || "nk_live_1234567890abcdef1234567890abcdef";
 
   const fetchProjects = async () => {
     try {

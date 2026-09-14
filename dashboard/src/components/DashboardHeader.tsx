@@ -4,16 +4,17 @@ import { useEffect, useState } from "react";
 import { Activity, Bell, FolderKey, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useProject } from "@/hooks/useProjectKey";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function DashboardHeader({ isConnected }: { isConnected: boolean }) {
   const { projects, selectedProjectId, setSelectedProjectId, projectApiKey } = useProject();
+  const { apiUrl } = useAuth();
   const [highBackpressure, setHighBackpressure] = useState(false);
 
   useEffect(() => {
     if (!projectApiKey || !selectedProjectId) return;
     const checkMetrics = async () => {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
         const res = await fetch(`${apiUrl}/v1/system/metrics`, {
           headers: {
             Authorization: `Bearer ${projectApiKey}`,
@@ -34,7 +35,7 @@ export default function DashboardHeader({ isConnected }: { isConnected: boolean 
     void checkMetrics();
     const interval = setInterval(() => void checkMetrics(), 10000);
     return () => clearInterval(interval);
-  }, [projectApiKey, selectedProjectId]);
+  }, [apiUrl, projectApiKey, selectedProjectId]);
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -74,20 +75,30 @@ export default function DashboardHeader({ isConnected }: { isConnected: boolean 
             </div>
           )}
 
-          <Badge
-            variant={isConnected ? "default" : "destructive"}
-            className="flex items-center gap-1.5 px-3 py-1 shadow-sm transition-all"
-          >
-            {isConnected ? (
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-              </span>
-            ) : (
-              <Activity className="h-3.5 w-3.5" />
-            )}
-            {isConnected ? "Live Stream Active" : "Disconnected"}
-          </Badge>
+          {projects.length === 0 ? (
+            <Badge
+              variant="outline"
+              className="flex items-center gap-1.5 px-3 py-1 shadow-sm text-muted-foreground border-dashed border-border"
+            >
+              <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+              No Project Created
+            </Badge>
+          ) : (
+            <Badge
+              variant={isConnected ? "default" : "destructive"}
+              className="flex items-center gap-1.5 px-3 py-1 shadow-sm transition-all"
+            >
+              {isConnected ? (
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                </span>
+              ) : (
+                <Activity className="h-3.5 w-3.5" />
+              )}
+              {isConnected ? "Live Stream Active" : "Disconnected"}
+            </Badge>
+          )}
         </div>
       </div>
     </header>

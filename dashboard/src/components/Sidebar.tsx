@@ -14,8 +14,11 @@ import {
   Clock,
   GitFork,
   FileCode2,
+  LogOut,
+  UserCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/useAuth";
 
 const navigation = [
   { name: "Live Feed", href: "/", icon: Activity },
@@ -32,6 +35,16 @@ const navigation = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { user, logout, isAuthenticated } = useAuth();
+
+  const isLoginPage =
+    pathname === "/login" ||
+    pathname === "/login/" ||
+    pathname?.endsWith("/login") ||
+    pathname?.endsWith("/login/");
+  if (isLoginPage || !isAuthenticated) {
+    return null;
+  }
 
   return (
     <div className="flex flex-col w-64 border-r border-border bg-card/30 backdrop-blur-md h-full shrink-0">
@@ -39,12 +52,17 @@ export default function Sidebar() {
         <div className="bg-primary/20 p-2 rounded-lg">
           <LayoutDashboard className="w-6 h-6 text-primary" />
         </div>
-        <h1 className="font-bold text-lg tracking-tight bg-gradient-to-br from-foreground to-foreground/70 bg-clip-text text-transparent">
-          Notifkit
-        </h1>
+        <div>
+          <h1 className="font-bold text-lg tracking-tight bg-gradient-to-br from-foreground to-foreground/70 bg-clip-text text-transparent">
+            Notifkit
+          </h1>
+          <span className="text-[10px] uppercase font-semibold tracking-wider text-muted-foreground">
+            Admin Console
+          </span>
+        </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto p-4 space-y-2">
+      <nav className="flex-1 overflow-y-auto p-4 space-y-1.5">
         {navigation.map((item) => {
           const isActive = pathname === item.href;
           return (
@@ -73,8 +91,28 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="p-4 border-t border-border/50">
-        <div className="text-xs text-muted-foreground text-center">Notifkit Observability v1.0</div>
+      {/* Admin User info and logout */}
+      <div className="p-4 border-t border-border/50 bg-muted/20 space-y-3">
+        {user && (
+          <div className="flex items-center gap-2.5 px-2 py-1.5">
+            <div className="h-7 w-7 rounded-full bg-primary/20 flex items-center justify-center shrink-0 border border-primary/30">
+              <UserCheck className="h-3.5 w-3.5 text-primary" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-foreground truncate">
+                {user.username || user.email}
+              </p>
+              <p className="text-[10px] text-muted-foreground capitalize">{user.role}</p>
+            </div>
+          </div>
+        )}
+        <button
+          onClick={() => void logout()}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium text-muted-foreground hover:text-destructive hover:bg-destructive/10 border border-transparent hover:border-destructive/20 transition-all cursor-pointer"
+        >
+          <LogOut className="h-3.5 w-3.5" />
+          <span>Sign Out</span>
+        </button>
       </div>
     </div>
   );

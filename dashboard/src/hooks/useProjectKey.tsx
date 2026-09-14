@@ -1,7 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { createContext, useContext, useState, useEffect } from "react";
+import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { useAuth } from "./useAuth";
 
 interface ProjectContextType {
   projects: any[];
@@ -9,41 +10,58 @@ interface ProjectContextType {
   setSelectedProjectId: (id: string) => void;
   projectApiKey: string | null;
   isLoadingProjects: boolean;
+  refreshProjects: () => Promise<void>;
 }
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
+  const { token, apiUrl, isAuthenticated } = useAuth();
   const [projects, setProjects] = useState<any[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-  const [projectApiKey, setProjectApiKey] = useState<string | null>(null);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
-  const adminKey = process.env.NEXT_PUBLIC_ADMIN_KEY || "test_admin_key";
+  const fetchProjects = useCallback(async () => {
+    if (!token) {
+      setProjects([]);
+      setSelectedProjectId("");
+      setIsLoadingProjects(false);
+      return;
+    }
 
-  useEffect(() => {
-    fetch(`${apiUrl}/v1/projects`, { headers: { Authorization: `Bearer ${adminKey}` } })
-      .then((res) => res.json())
-      .then((data) => {
+    try {
+      setIsLoadingProjects(true);
+      const res = await fetch(`${apiUrl}/v1/projects`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
         const projs = data.projects || [];
         setProjects(projs);
         if (projs.length > 0) {
-          setSelectedProjectId(projs[0].id);
+          setSelectedProjectId((prev) =>
+            projs.some((p: any) => p.id === prev) ? prev : projs[0].id,
+          );
+        } else {
+          setSelectedProjectId("");
         }
-        setIsLoadingProjects(false);
-      })
-      .catch((err) => {
-        console.error(err);
-        setIsLoadingProjects(false);
-      });
-  }, [apiUrl, adminKey]);
+      }
+    } catch (err) {
+      console.error("Failed to load projects:", err);
+    } finally {
+      setIsLoadingProjects(false);
+    }
+  }, [apiUrl, token]);
 
   useEffect(() => {
-    // With Admin token, we no longer need the project's API key.
-    // We just use the Admin token and pass x-project-id.
-    setProjectApiKey(adminKey);
-  }, [adminKey]);
+    if (isAuthenticated && token) {
+      void fetchProjects();
+    } else {
+      setProjects([]);
+      setSelectedProjectId("");
+      setIsLoadingProjects(false);
+    }
+  }, [isAuthenticated, token, fetchProjects]);
 
   return (
     <ProjectContext.Provider
@@ -51,8 +69,9 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         projects,
         selectedProjectId,
         setSelectedProjectId,
-        projectApiKey,
+        projectApiKey: token,
         isLoadingProjects,
+        refreshProjects: fetchProjects,
       }}
     >
       {children}

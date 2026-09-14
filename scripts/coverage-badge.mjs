@@ -15,7 +15,17 @@ const SUMMARY = "coverage/coverage-summary.json";
 
 /** Shields renders whatever colour we hand it, so the thresholds live here. */
 const colorFor = (pct) =>
-  pct >= 90 ? "brightgreen" : pct >= 80 ? "green" : pct >= 70 ? "yellowgreen" : pct >= 60 ? "yellow" : pct >= 50 ? "orange" : "red";
+  pct >= 90
+    ? "brightgreen"
+    : pct >= 80
+      ? "green"
+      : pct >= 70
+        ? "yellowgreen"
+        : pct >= 60
+          ? "yellow"
+          : pct >= 50
+            ? "orange"
+            : "red";
 
 const arg = (flag, fallback) => {
   const i = process.argv.indexOf(flag);
@@ -50,7 +60,11 @@ const pct = Math.round(total * 10) / 10;
 await mkdir(dirname(out), { recursive: true });
 await writeFile(
   out,
-  JSON.stringify({ schemaVersion: 1, label: "coverage", message: `${pct}%`, color: colorFor(pct) }, null, 2) + "\n",
+  JSON.stringify(
+    { schemaVersion: 1, label: "coverage", message: `${pct}%`, color: colorFor(pct) },
+    null,
+    2,
+  ) + "\n",
 );
 
 // The workflow reads this line to label the badge commit.

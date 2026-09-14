@@ -34,7 +34,7 @@ export default function DeadLetterQueuePage() {
   const fetchDLQ = useCallback(async () => {
     setIsLoading(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/dlq`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,
@@ -60,7 +60,7 @@ export default function DeadLetterQueuePage() {
 
   const handleReplay = async (id: string) => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/dlq/replay`, {
         method: "POST",
         headers: {
@@ -80,7 +80,7 @@ export default function DeadLetterQueuePage() {
 
   const handleDelete = async (id: string) => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/dlq/${id}`, {
         method: "DELETE",
         headers: {

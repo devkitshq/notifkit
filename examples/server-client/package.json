@@ -1,0 +1,10 @@
+{
+  "name": "notifkit-server-client-example",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Full server and client SDK example for Notifkit",
+  "scripts": {
+    "start:server": "node server.js",
+    "start:client": "node client.js"
+  }
+}

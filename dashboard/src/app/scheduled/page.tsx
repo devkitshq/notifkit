@@ -31,7 +31,7 @@ export default function ScheduledMessagesPage() {
   const fetchScheduled = useCallback(async () => {
     setIsLoading(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/notifications/scheduled`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,
@@ -57,7 +57,7 @@ export default function ScheduledMessagesPage() {
 
   const handleCancel = async (taskId: string) => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/notifications/${taskId}`, {
         method: "DELETE",
         headers: {

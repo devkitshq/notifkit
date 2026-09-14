@@ -36,7 +36,7 @@ export default function TemplatesPage() {
   const fetchTemplates = useCallback(async () => {
     setIsLoading(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/templates`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,
@@ -62,7 +62,7 @@ export default function TemplatesPage() {
 
   const handleDelete = async (id: string) => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000";
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/templates/${id}`, {
         method: "DELETE",
         headers: {
