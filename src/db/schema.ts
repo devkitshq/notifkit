@@ -367,7 +367,20 @@ export const scheduledPayloads = pgTable("scheduled_payloads", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+export const adminUsers = pgTable("admin_users", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: varchar("email").notNull().unique(),
+  username: varchar("username").unique(),
+  passwordHash: varchar("password_hash").notNull(),
+  role: varchar("role").notNull().default("admin"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 // ─── Generated Zod Schemas ──────────────────────────────────────────────────
+
+export const insertAdminUserSchema = createInsertSchema(adminUsers);
+export const selectAdminUserSchema = createSelectSchema(adminUsers);
 
 export const insertProjectSchema = createInsertSchema(projects);
 export const selectProjectSchema = createSelectSchema(projects);

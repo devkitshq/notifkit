@@ -43,6 +43,9 @@ export const baseConfigSchema = z.object({
   // Windows puts a trailing space in the variable, which otherwise turns every
   // admin request into a 401 that reads like a wrong key.
   ADMIN_API_KEY: z.string().trim().optional(),
+  ADMIN_EMAIL: z.string().trim().email().optional(),
+  ADMIN_PASSWORD: z.string().trim().min(6).optional(),
+  ADMIN_USERNAME: z.string().trim().optional(),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).default(10),
   QUEUE_MAX_LEN: z.coerce.number().int().min(1).default(10000000),
   DB_MAX_CONNECTIONS: z.coerce.number().int().min(1).default(2),
