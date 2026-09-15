@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState, useCallback } from "react";
 import DashboardHeader from "@/components/DashboardHeader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,9 +11,11 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { GitFork, RefreshCcw, Play, Search, Eye, Layers } from "lucide-react";
 import { toast } from "sonner";
 import { useProject } from "@/hooks/useProjectKey";
+import { useAuth } from "@/hooks/useAuth";
 
 interface WorkflowDef {
   id: string;
@@ -46,11 +46,11 @@ export default function WorkflowsPage() {
   const [searchingInstance, setSearchingInstance] = useState(false);
 
   const { projectApiKey, selectedProjectId } = useProject();
+  const { apiUrl } = useAuth();
 
   const fetchWorkflows = useCallback(async () => {
     setIsLoading(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/workflows`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,
@@ -66,7 +66,7 @@ export default function WorkflowsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [projectApiKey, selectedProjectId]);
+  }, [apiUrl, projectApiKey, selectedProjectId]);
 
   useEffect(() => {
     if (projectApiKey && selectedProjectId) {
@@ -76,7 +76,6 @@ export default function WorkflowsPage() {
 
   const handleTrigger = async (name: string) => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/workflows/trigger`, {
         method: "POST",
         headers: {
@@ -103,7 +102,6 @@ export default function WorkflowsPage() {
     if (!targetId) return;
     setSearchingInstance(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/workflows/instances/${encodeURIComponent(targetId)}`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,
@@ -129,7 +127,7 @@ export default function WorkflowsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <GitFork className="h-6 w-6 text-indigo-400" />
+              <GitFork className="h-6 w-6 text-foreground" />
               Workflows & Event Orchestration
             </h1>
             <p className="text-muted-foreground text-sm">
@@ -142,7 +140,6 @@ export default function WorkflowsPage() {
             size="sm"
             onClick={() => void fetchWorkflows()}
             disabled={isLoading}
-            className="border-border/50 hover:bg-muted/50"
           >
             <RefreshCcw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
             Refresh
@@ -150,10 +147,10 @@ export default function WorkflowsPage() {
         </div>
 
         {/* Workflow Instance Tracing Search */}
-        <Card className="border-border/50 bg-card/40 backdrop-blur-md">
+        <Card className="border-border bg-card">
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-semibold flex items-center gap-2 text-indigo-400">
-              <Search className="h-4 w-4" />
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <Search className="h-4 w-4 text-muted-foreground" />
               Workflow Instance Lookup & Step Execution Visualizer
             </CardTitle>
             <CardDescription className="text-xs">
@@ -162,12 +159,12 @@ export default function WorkflowsPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex gap-2 max-w-lg">
-              <input
+              <Input
                 type="text"
                 placeholder="Enter Workflow Instance ID..."
                 value={instanceSearchId}
                 onChange={(e) => setInstanceSearchId(e.target.value)}
-                className="flex-1 px-3 py-1.5 bg-muted/30 border border-border/40 rounded-lg text-xs font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                className="text-xs font-mono"
               />
               <Button
                 variant="secondary"
@@ -181,7 +178,7 @@ export default function WorkflowsPage() {
             </div>
 
             {searchedInstance && (
-              <div className="p-4 rounded-xl bg-muted/20 border border-border/30 space-y-3">
+              <div className="p-4 rounded-lg bg-muted/40 border border-border space-y-3">
                 <div className="flex items-center justify-between text-xs">
                   <div>
                     <span className="text-muted-foreground">Instance ID:</span>{" "}
@@ -209,16 +206,16 @@ export default function WorkflowsPage() {
           </CardContent>
         </Card>
 
-        {/* Registered Workflows Grid / Table */}
-        <Card className="border-border/50 bg-card/40 backdrop-blur-md">
+        {/* Registered Workflows Table */}
+        <Card className="border-border bg-card">
           <CardHeader>
             <CardTitle className="text-lg">Registered Workflows ({workflows.length})</CardTitle>
             <CardDescription>Definitions registered for background execution</CardDescription>
           </CardHeader>
           <CardContent className="p-0 overflow-auto">
             <Table>
-              <TableHeader className="bg-muted/30">
-                <TableRow className="border-border/20">
+              <TableHeader className="bg-muted/50">
+                <TableRow>
                   <TableHead>Created At</TableHead>
                   <TableHead>Workflow Name</TableHead>
                   <TableHead>Steps Count</TableHead>
@@ -235,7 +232,7 @@ export default function WorkflowsPage() {
                   </TableRow>
                 ) : (
                   workflows.map((wf) => (
-                    <TableRow key={wf.id} className="border-border/10 hover:bg-muted/20">
+                    <TableRow key={wf.id} className="hover:bg-muted/50">
                       <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
                         {new Date(wf.createdAt).toLocaleString()}
                       </TableCell>
@@ -263,7 +260,7 @@ export default function WorkflowsPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          className="h-8 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/10"
+                          className="h-8"
                           onClick={() => void handleTrigger(wf.name)}
                         >
                           <Play className="h-3.5 w-3.5 mr-1" />
@@ -281,11 +278,13 @@ export default function WorkflowsPage() {
 
       {/* Visual Step Execution Graph Modal */}
       {selectedWorkflow && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex justify-end">
-          <div className="w-full max-w-xl bg-card border-l border-border/40 p-6 overflow-y-auto space-y-6">
-            <div className="flex items-center justify-between border-b border-border/40 pb-3">
+        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-xs flex justify-end">
+          <div className="w-full max-w-xl bg-card border-l border-border p-6 overflow-y-auto space-y-6">
+            <div className="flex items-center justify-between border-b border-border pb-3">
               <div>
-                <h2 className="text-lg font-bold">Workflow Diagram: {selectedWorkflow.name}</h2>
+                <h2 className="text-lg font-bold text-foreground">
+                  Workflow Diagram: {selectedWorkflow.name}
+                </h2>
                 <p className="text-xs text-muted-foreground font-mono">ID: {selectedWorkflow.id}</p>
               </div>
               <Button variant="ghost" size="sm" onClick={() => setSelectedWorkflow(null)}>
@@ -295,18 +294,18 @@ export default function WorkflowsPage() {
 
             <div className="space-y-4">
               <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                <Layers className="h-4 w-4 text-indigo-400" />
+                <Layers className="h-4 w-4 text-foreground" />
                 Execution Step Graph Flow
               </h3>
 
-              <div className="space-y-3 relative pl-4 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-0.5 before:bg-indigo-500/30">
+              <div className="space-y-3 relative pl-4 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-px before:bg-border">
                 {(selectedWorkflow.steps || []).map((step: any, idx: number) => (
                   <div
                     key={idx}
-                    className="p-3 rounded-lg bg-muted/20 border border-border/30 text-xs space-y-1"
+                    className="p-3 rounded-lg bg-muted/40 border border-border text-xs space-y-1"
                   >
-                    <div className="flex items-center justify-between font-bold">
-                      <span className="text-indigo-400">
+                    <div className="flex items-center justify-between font-semibold">
+                      <span className="text-foreground">
                         Step {idx + 1}: {step.type || step.name || "Action"}
                       </span>
                       <Badge variant="outline" className="text-[10px] font-mono">

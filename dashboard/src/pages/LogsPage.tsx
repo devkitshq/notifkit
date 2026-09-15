@@ -1,5 +1,3 @@
-"use client";
-
 import DashboardHeader from "@/components/DashboardHeader";
 import LogsTable from "@/components/LogsTable";
 

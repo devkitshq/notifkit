@@ -1,9 +1,8 @@
-"use client";
-
 import { useEffect, useState } from "react";
 import DashboardHeader from "@/components/DashboardHeader";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { FolderKey, Plus, Copy, Trash2, AlertCircle, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
@@ -166,13 +165,13 @@ export default function ProjectsPage() {
       <main className="flex-1 container mx-auto p-4 md:p-6">
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-2xl font-bold flex items-center gap-2">
-            <FolderKey className="w-6 h-6 text-primary" />
+            <FolderKey className="w-6 h-6 text-foreground" />
             Projects & API Keys
           </h1>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <Card className="lg:col-span-1 bg-card/50 backdrop-blur-sm border-border/50 h-fit">
+          <Card className="lg:col-span-1 bg-card border-border h-fit">
             <CardHeader>
               <CardTitle>Create Project</CardTitle>
               <CardDescription>Add a new tenant to Notifkit</CardDescription>
@@ -188,12 +187,11 @@ export default function ProjectsPage() {
                   <label htmlFor="name" className="text-sm font-medium">
                     Project Name
                   </label>
-                  <input
+                  <Input
                     id="name"
                     type="text"
                     value={newProjectName}
                     onChange={(e) => setNewProjectName(e.target.value)}
-                    className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                     placeholder="My Project"
                   />
                 </div>
@@ -205,7 +203,7 @@ export default function ProjectsPage() {
             </CardContent>
           </Card>
 
-          <Card className="lg:col-span-2 bg-card/50 backdrop-blur-sm border-border/50">
+          <Card className="lg:col-span-2 bg-card border-border">
             <CardHeader>
               <CardTitle>Existing Projects</CardTitle>
             </CardHeader>
@@ -217,8 +215,8 @@ export default function ProjectsPage() {
                   No projects found. Create one to get started.
                 </div>
               ) : (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-3 text-xs font-semibold text-muted-foreground uppercase pb-2 border-b border-border/50">
+                <div className="space-y-3">
+                  <div className="grid grid-cols-3 text-xs font-semibold text-muted-foreground uppercase pb-2 border-b border-border">
                     <div>Name</div>
                     <div>Rate Limit</div>
                     <div>Created</div>
@@ -226,9 +224,9 @@ export default function ProjectsPage() {
                   {projects.map((p) => (
                     <div
                       key={p.id}
-                      className={`grid grid-cols-3 text-sm py-2 px-3 -mx-3 rounded-md cursor-pointer transition-colors ${
+                      className={`grid grid-cols-3 text-sm py-2 px-3 rounded-md cursor-pointer transition-colors ${
                         selectedProjectId === p.id
-                          ? "bg-primary/10 border border-primary/20"
+                          ? "bg-muted text-foreground border border-border"
                           : "hover:bg-muted/50"
                       }`}
                       onClick={() => setSelectedProjectId(p.id)}
@@ -236,28 +234,13 @@ export default function ProjectsPage() {
                       <div className="font-medium text-foreground flex items-center gap-2">
                         {p.name}
                         {selectedProjectId === p.id && (
-                          <span className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_6px_#10b981]" />
+                          <span className="h-1.5 w-1.5 rounded-full bg-foreground" />
                         )}
                       </div>
                       <div className="text-muted-foreground font-mono text-xs flex flex-col gap-1 justify-center">
-                        <div className="flex justify-between items-center pr-2">
-                          <span>
-                            {p.rateLimitRpm ? `${p.rateLimitRpm} RPM Quota` : "600 RPM (Default)"}
-                          </span>
-                          <span className="text-[10px] text-emerald-400 font-bold">
-                            Sliding Window Active
-                          </span>
-                        </div>
-                        <div className="w-32 h-1.5 rounded-full bg-muted overflow-hidden">
-                          <div
-                            className="h-full bg-emerald-400 rounded-full transition-all duration-300"
-                            style={{
-                              width: `${Math.min(100, Math.max(12, ((p.rateLimitRpm || 600) / 1000) * 100))}%`,
-                            }}
-                          />
-                        </div>
+                        <span>{p.rateLimitRpm ? `${p.rateLimitRpm} RPM` : "600 RPM"}</span>
                       </div>
-                      <div className="text-muted-foreground">
+                      <div className="text-muted-foreground text-xs">
                         {new Date(p.createdAt).toLocaleDateString()}
                       </div>
                     </div>
@@ -266,9 +249,9 @@ export default function ProjectsPage() {
               )}
 
               {selectedProjectId && (
-                <div className="mt-8 pt-6 border-t border-border/50 animate-in fade-in slide-in-from-top-2">
+                <div className="mt-8 pt-6 border-t border-border">
                   <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-semibold text-lg">API Keys</h3>
+                    <h3 className="font-semibold text-base">API Keys</h3>
                     <Button
                       variant="outline"
                       size="sm"
@@ -281,21 +264,21 @@ export default function ProjectsPage() {
                   </div>
 
                   {newlyGeneratedKey && (
-                    <div className="mb-6 p-4 rounded-lg bg-primary/10 border border-primary/20 text-primary-foreground space-y-3">
+                    <div className="mb-6 p-4 rounded-lg bg-muted border border-border space-y-3">
                       <div className="flex items-start gap-2">
-                        <AlertCircle className="w-5 h-5 mt-0.5 text-primary" />
+                        <AlertCircle className="w-4 h-4 mt-0.5 text-foreground" />
                         <div>
-                          <p className="font-medium text-sm text-primary">
+                          <p className="font-medium text-sm text-foreground">
                             Please copy your new API key
                           </p>
-                          <p className="text-xs text-primary/80 mt-1">
+                          <p className="text-xs text-muted-foreground mt-1">
                             For security reasons, this key will not be shown again. Make sure to
                             copy it now.
                           </p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 bg-background/50 rounded p-2 border border-border/50">
-                        <code className="flex-1 text-sm font-mono break-all text-foreground">
+                      <div className="flex items-center gap-2 bg-background rounded-md p-2 border border-border">
+                        <code className="flex-1 text-xs font-mono break-all text-foreground">
                           {showKey
                             ? newlyGeneratedKey
                             : newlyGeneratedKey.replace(
@@ -306,7 +289,7 @@ export default function ProjectsPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 shrink-0 hover:bg-background/80"
+                          className="h-8 w-8 shrink-0"
                           onClick={() => setShowKey(!showKey)}
                         >
                           {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -314,7 +297,7 @@ export default function ProjectsPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-8 w-8 shrink-0 hover:bg-background/80"
+                          className="h-8 w-8 shrink-0"
                           onClick={() => {
                             void navigator.clipboard.writeText(newlyGeneratedKey);
                             toast.success("Copied to clipboard!");
@@ -342,10 +325,10 @@ export default function ProjectsPage() {
                           key={k.id}
                           className="grid grid-cols-4 text-sm py-2 items-center group"
                         >
-                          <div className="col-span-2 font-mono text-muted-foreground truncate pr-4">
+                          <div className="col-span-2 font-mono text-muted-foreground truncate pr-4 text-xs">
                             {k.id}
                           </div>
-                          <div className="capitalize text-muted-foreground">{k.role}</div>
+                          <div className="capitalize text-muted-foreground text-xs">{k.role}</div>
                           <div className="text-right">
                             <Button
                               variant="ghost"

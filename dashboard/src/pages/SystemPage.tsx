@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState, useCallback } from "react";
 import DashboardHeader from "@/components/DashboardHeader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,17 +12,22 @@ import {
   CheckCircle2,
   AlertCircle,
   XCircle,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useProject } from "@/hooks/useProjectKey";
+import { useAuth } from "@/hooks/useAuth";
 
 interface WorkerHealth {
+  service?: string;
   state?: string;
   status?: string;
   redis?: boolean;
   activeTasks?: number;
   lastHeartbeat?: number;
+  updatedAt?: string;
   error?: string;
+  message?: string;
 }
 
 interface SystemHealthData {
@@ -34,21 +37,27 @@ interface SystemHealthData {
   workers: Record<string, WorkerHealth>;
 }
 
-export default function SystemHealthPage() {
+export default function SystemPage() {
   const [data, setData] = useState<SystemHealthData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const { projectApiKey, selectedProjectId } = useProject();
+  const { apiUrl, token } = useAuth();
 
   const fetchHealth = useCallback(async () => {
-    setIsLoading(true);
+    const authKey = projectApiKey || token;
+    if (!authKey) {
+      setIsLoading(false);
+      return;
+    }
+
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${apiUrl}/v1/system/health`, {
-        headers: {
-          Authorization: `Bearer ${projectApiKey}`,
-          "x-project-id": selectedProjectId,
-        },
-      });
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${authKey}`,
+      };
+      if (selectedProjectId) {
+        headers["x-project-id"] = selectedProjectId;
+      }
+      const res = await fetch(`${apiUrl}/v1/system/health`, { headers });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const healthData = await res.json();
       setData(healthData);
@@ -58,15 +67,16 @@ export default function SystemHealthPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [projectApiKey, selectedProjectId]);
+  }, [apiUrl, projectApiKey, selectedProjectId, token]);
 
   useEffect(() => {
-    if (projectApiKey && selectedProjectId) {
+    const authKey = projectApiKey || token;
+    if (authKey) {
       void fetchHealth();
       const interval = setInterval(() => void fetchHealth(), 5000);
       return () => clearInterval(interval);
     }
-  }, [projectApiKey, selectedProjectId, fetchHealth]);
+  }, [projectApiKey, token, fetchHealth]);
 
   const workerNames = ["enricher", "engine", "scheduler", "delivery", "ai", "workflow", "events"];
 
@@ -78,7 +88,7 @@ export default function SystemHealthPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <HeartPulse className="h-6 w-6 text-emerald-400" />
+              <HeartPulse className="h-6 w-6 text-foreground" />
               System Infrastructure & Worker Health
             </h1>
             <p className="text-muted-foreground text-sm">
@@ -88,9 +98,11 @@ export default function SystemHealthPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void fetchHealth()}
+            onClick={() => {
+              setIsLoading(true);
+              void fetchHealth();
+            }}
             disabled={isLoading}
-            className="border-border/50 hover:bg-muted/50"
           >
             <RefreshCcw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
             Refresh
@@ -99,58 +111,78 @@ export default function SystemHealthPage() {
 
         {/* Top KPI Cards: Redis & DB latency */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card className="border-border/50 bg-card/40 backdrop-blur-md">
+          <Card className="border-border bg-card">
             <CardHeader className="pb-2 flex flex-row items-center justify-between">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Redis Connection
               </CardTitle>
-              <Server className="h-4 w-4 text-rose-400" />
+              <Server className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold">{data?.redis?.latencyMs ?? 0} ms</span>
-                <Badge variant={data?.redis?.ok ? "default" : "destructive"}>
-                  {data?.redis?.ok ? "Connected" : "Disconnected"}
-                </Badge>
-              </div>
+              {isLoading && !data ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Checking...
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <span className="text-2xl font-bold">{data?.redis?.latencyMs ?? 0} ms</span>
+                  <Badge variant={data?.redis?.ok ? "default" : "destructive"}>
+                    {data?.redis?.ok ? "Connected" : "Disconnected"}
+                  </Badge>
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          <Card className="border-border/50 bg-card/40 backdrop-blur-md">
+          <Card className="border-border bg-card">
             <CardHeader className="pb-2 flex flex-row items-center justify-between">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 PostgreSQL Database
               </CardTitle>
-              <Database className="h-4 w-4 text-blue-400" />
+              <Database className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold">{data?.db?.latencyMs ?? 0} ms</span>
-                <Badge variant={data?.db?.ok ? "default" : "destructive"}>
-                  {data?.db?.ok ? "Healthy" : "Unreachable"}
-                </Badge>
-              </div>
+              {isLoading && !data ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Checking...
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <span className="text-2xl font-bold">{data?.db?.latencyMs ?? 0} ms</span>
+                  <Badge variant={data?.db?.ok ? "default" : "destructive"}>
+                    {data?.db?.ok ? "Healthy" : "Unreachable"}
+                  </Badge>
+                </div>
+              )}
             </CardContent>
           </Card>
 
-          <Card className="border-border/50 bg-card/40 backdrop-blur-md">
+          <Card className="border-border bg-card">
             <CardHeader className="pb-2 flex flex-row items-center justify-between">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Overall Cluster State
               </CardTitle>
-              <Cpu className="h-4 w-4 text-purple-400" />
+              <Cpu className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="flex items-center justify-between">
-                <span className="text-2xl font-bold capitalize">{data?.status ?? "Unknown"}</span>
-                <StatusIcon status={data?.status} />
-              </div>
+              {isLoading && !data ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Checking...
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <span className="text-2xl font-bold capitalize">
+                    {data?.status ?? "Checking"}
+                  </span>
+                  <StatusIcon status={data?.status} />
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
 
         {/* Worker Microservices Grid */}
-        <Card className="border-border/50 bg-card/40 backdrop-blur-md">
+        <Card className="border-border bg-card">
           <CardHeader>
             <CardTitle className="text-lg">Worker Heartbeats & Concurrency</CardTitle>
             <CardDescription>Monitored active workers in the event pipeline</CardDescription>
@@ -159,18 +191,31 @@ export default function SystemHealthPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               {workerNames.map((wName) => {
                 const wInfo = data?.workers?.[wName];
-                const isAlive = wInfo && wInfo.status !== "error" && wInfo.status !== "unknown";
+                const isAlive = Boolean(
+                  wInfo &&
+                  wInfo.status !== "error" &&
+                  wInfo.status !== "unknown" &&
+                  (wInfo.redis !== false ||
+                    wInfo.status === "active" ||
+                    wInfo.status === "healthy" ||
+                    wInfo.state),
+                );
+
+                const displayState =
+                  wInfo?.state ||
+                  (wInfo?.status && wInfo.status !== "unknown" ? wInfo.status : null) ||
+                  (wInfo?.redis ? "Active" : "Idle / Standby");
 
                 return (
                   <div
                     key={wName}
-                    className="p-4 rounded-xl border border-border/30 bg-muted/20 flex flex-col justify-between space-y-3 hover:border-border/60 transition-colors"
+                    className="p-4 rounded-lg border border-border bg-muted/40 flex flex-col justify-between space-y-3 hover:border-border transition-colors"
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-semibold text-sm capitalize">{wName} Worker</span>
                       <span
                         className={`h-2.5 w-2.5 rounded-full ${
-                          isAlive ? "bg-emerald-500 shadow-[0_0_8px_#10b981]" : "bg-rose-500"
+                          isAlive ? "bg-foreground" : "bg-muted-foreground/40"
                         }`}
                       />
                     </div>
@@ -179,7 +224,7 @@ export default function SystemHealthPage() {
                       <div className="flex justify-between">
                         <span>Status:</span>
                         <span className="font-medium text-foreground capitalize">
-                          {wInfo?.state || wInfo?.status || "Idle / Standing By"}
+                          {displayState}
                         </span>
                       </div>
                       <div className="flex justify-between">
@@ -201,7 +246,7 @@ export default function SystemHealthPage() {
 }
 
 function StatusIcon({ status }: { status?: string }) {
-  if (status === "healthy") return <CheckCircle2 className="h-6 w-6 text-emerald-400" />;
-  if (status === "degraded") return <AlertCircle className="h-6 w-6 text-amber-400" />;
-  return <XCircle className="h-6 w-6 text-rose-400" />;
+  if (status === "healthy") return <CheckCircle2 className="h-5 w-5 text-foreground" />;
+  if (status === "degraded") return <AlertCircle className="h-5 w-5 text-muted-foreground" />;
+  return <XCircle className="h-5 w-5 text-destructive" />;
 }

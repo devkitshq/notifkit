@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState, useCallback } from "react";
 import DashboardHeader from "@/components/DashboardHeader";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -7,7 +5,16 @@ import { toast } from "sonner";
 import { Users, Clock, Mail, History, Eye } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { useProject } from "@/hooks/useProjectKey";
+import { useAuth } from "@/hooks/useAuth";
 
 interface User {
   id?: string;
@@ -35,32 +42,34 @@ export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserDetail | null>(null);
-  const [_loadingDetail, setLoadingDetail] = useState(false);
   const { projects, selectedProjectId, projectApiKey, isLoadingProjects } = useProject();
+  const { apiUrl } = useAuth();
 
-  const fetchUsers = useCallback(async (apiKey: string, projectId: string) => {
-    setLoading(true);
-    try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-      const res = await fetch(`${apiUrl}/v1/users`, {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "x-project-id": projectId,
-        },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setUsers(data.users || []);
-      } else {
+  const fetchUsers = useCallback(
+    async (apiKey: string, projectId: string) => {
+      setLoading(true);
+      try {
+        const res = await fetch(`${apiUrl}/v1/users`, {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "x-project-id": projectId,
+          },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setUsers(data.users || []);
+        } else {
+          toast.error("Failed to load users");
+        }
+      } catch (err) {
+        console.error(err);
         toast.error("Failed to load users");
+      } finally {
+        setLoading(false);
       }
-    } catch (err) {
-      console.error(err);
-      toast.error("Failed to load users");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    },
+    [apiUrl],
+  );
 
   useEffect(() => {
     if (projectApiKey && selectedProjectId) {
@@ -73,9 +82,7 @@ export default function UsersPage() {
   const handleOpenDetail = async (u: User) => {
     const id = u.externalId || u.userId || u.id;
     if (!id) return;
-    setLoadingDetail(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/users/${encodeURIComponent(id)}/details`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,
@@ -90,8 +97,6 @@ export default function UsersPage() {
       }
     } catch {
       setSelectedUser({ ...u, contacts: [], logs: [] });
-    } finally {
-      setLoadingDetail(false);
     }
   };
 
@@ -102,19 +107,19 @@ export default function UsersPage() {
       <main className="flex-1 container mx-auto p-4 md:p-6 space-y-6">
         <div className="flex justify-between items-center">
           <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Users className="w-6 h-6 text-primary" />
+            <Users className="w-6 h-6 text-foreground" />
             User Directory & Contact Preferences
           </h1>
         </div>
 
-        <Card className="bg-card/50 backdrop-blur-sm border-border/50">
+        <Card className="bg-card border-border">
           <CardHeader>
             <CardTitle>Registered End-Users</CardTitle>
             <CardDescription>
               Recipient profiles, channel addresses, and preference overrides
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-0 overflow-auto">
             {isLoadingProjects ? (
               <div className="flex flex-col items-center justify-center h-40 text-muted-foreground gap-3">
                 <Clock className="h-8 w-8 opacity-50" />
@@ -131,62 +136,59 @@ export default function UsersPage() {
                 <p className="text-sm">No API key found for this project.</p>
               </div>
             ) : loading ? (
-              <div className="text-muted-foreground text-sm py-4">Loading users...</div>
+              <div className="text-muted-foreground text-sm p-6 text-center">Loading users...</div>
             ) : users.length === 0 ? (
-              <div className="text-muted-foreground text-sm text-center py-8">No users found.</div>
+              <div className="text-muted-foreground text-sm text-center p-8">No users found.</div>
             ) : (
-              <div className="rounded-md border border-border/50 overflow-hidden">
-                <table className="w-full text-sm text-left">
-                  <thead className="text-xs text-muted-foreground uppercase bg-muted/50">
-                    <tr>
-                      <th className="px-6 py-3 font-medium">External User ID</th>
-                      <th className="px-6 py-3 font-medium">Primary Contact</th>
-                      <th className="px-6 py-3 font-medium">Created At</th>
-                      <th className="px-6 py-3 font-medium text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/50">
-                    {users.map((user, index) => {
-                      const displayId =
-                        user.externalId || user.userId || user.id || `user-${index}`;
-                      return (
-                        <tr
-                          key={displayId}
-                          className="hover:bg-muted/30 transition-colors cursor-pointer"
-                          onClick={() => void handleOpenDetail(user)}
-                        >
-                          <td className="px-6 py-4 font-mono font-bold text-foreground">
-                            {displayId}
-                          </td>
-                          <td className="px-6 py-4 text-muted-foreground">
-                            {user.email ? (
-                              user.email
-                            ) : (
-                              <span className="italic opacity-50">Not provided</span>
-                            )}
-                          </td>
-                          <td className="px-6 py-4 text-muted-foreground text-xs">
-                            {new Date(user.createdAt).toLocaleDateString()}
-                          </td>
-                          <td className="px-6 py-4 text-right">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 border-primary/30 text-primary hover:bg-primary/10"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                void handleOpenDetail(user);
-                              }}
-                            >
-                              <Eye className="h-3.5 w-3.5 mr-1" /> View Profile
-                            </Button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <Table>
+                <TableHeader className="bg-muted/50">
+                  <TableRow>
+                    <TableHead>External User ID</TableHead>
+                    <TableHead>Primary Contact</TableHead>
+                    <TableHead>Created At</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {users.map((user, index) => {
+                    const displayId = user.externalId || user.userId || user.id || `user-${index}`;
+                    return (
+                      <TableRow
+                        key={displayId}
+                        className="hover:bg-muted/50 transition-colors cursor-pointer"
+                        onClick={() => void handleOpenDetail(user)}
+                      >
+                        <TableCell className="font-mono font-bold text-foreground">
+                          {displayId}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {user.email ? (
+                            user.email
+                          ) : (
+                            <span className="italic opacity-50">Not provided</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-muted-foreground text-xs">
+                          {new Date(user.createdAt).toLocaleDateString()}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleOpenDetail(user);
+                            }}
+                          >
+                            <Eye className="h-3.5 w-3.5 mr-1" /> View Profile
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             )}
           </CardContent>
         </Card>
@@ -194,9 +196,9 @@ export default function UsersPage() {
 
       {/* User Profile Deep-Dive Modal */}
       {selectedUser && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex justify-end">
-          <div className="w-full max-w-xl bg-card border-l border-border/40 p-6 overflow-y-auto space-y-6">
-            <div className="flex items-center justify-between border-b border-border/40 pb-3">
+        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-xs flex justify-end">
+          <div className="w-full max-w-xl bg-card border-l border-border p-6 overflow-y-auto space-y-6">
+            <div className="flex items-center justify-between border-b border-border pb-3">
               <div>
                 <h2 className="text-xl font-bold font-mono text-foreground">
                   User: {selectedUser.externalId || selectedUser.userId || selectedUser.id}
@@ -212,8 +214,8 @@ export default function UsersPage() {
 
             {/* Registered Channels */}
             <div className="space-y-3">
-              <h3 className="text-sm font-semibold flex items-center gap-2">
-                <Mail className="h-4 w-4 text-blue-400" />
+              <h3 className="text-sm font-semibold flex items-center gap-2 text-foreground">
+                <Mail className="h-4 w-4 text-muted-foreground" />
                 Contact Channels ({selectedUser.contacts?.length ?? 0})
               </h3>
               {!selectedUser.contacts || selectedUser.contacts.length === 0 ? (
@@ -225,7 +227,7 @@ export default function UsersPage() {
                   {selectedUser.contacts.map((c) => (
                     <div
                       key={c.id}
-                      className="p-3 rounded-lg bg-muted/20 border border-border/30 flex items-center justify-between text-xs"
+                      className="p-3 rounded-md bg-muted/40 border border-border flex items-center justify-between text-xs"
                     >
                       <div className="flex items-center gap-2">
                         <Badge variant="outline" className="capitalize font-mono text-[10px]">
@@ -244,8 +246,8 @@ export default function UsersPage() {
 
             {/* Recent Notifications for User */}
             <div className="space-y-3">
-              <h3 className="text-sm font-semibold flex items-center gap-2">
-                <History className="h-4 w-4 text-emerald-400" />
+              <h3 className="text-sm font-semibold flex items-center gap-2 text-foreground">
+                <History className="h-4 w-4 text-muted-foreground" />
                 Per-User Delivery Audit Trail
               </h3>
               {!selectedUser.logs || selectedUser.logs.length === 0 ? (
@@ -257,7 +259,7 @@ export default function UsersPage() {
                   {selectedUser.logs.map((log) => (
                     <div
                       key={log.id}
-                      className="p-2.5 rounded-lg bg-muted/20 border border-border/30 flex items-center justify-between text-xs"
+                      className="p-2.5 rounded-md bg-muted/40 border border-border flex items-center justify-between text-xs"
                     >
                       <div>
                         <span className="font-mono text-foreground font-semibold">

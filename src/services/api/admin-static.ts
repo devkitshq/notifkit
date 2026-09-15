@@ -25,6 +25,7 @@ const MIME_TYPES: Record<string, string> = {
 
 // Possible output directories where built dashboard static files might reside
 const POSSIBLE_DASHBOARD_DIRS = [
+  resolve(process.cwd(), "dashboard", "dist"),
   resolve(process.cwd(), "dashboard", "out"),
   resolve(process.cwd(), "dist", "admin"),
   resolve(process.cwd(), "dist", "dashboard"),
@@ -40,7 +41,7 @@ function getDashboardDir(): string | null {
 }
 
 /**
- * Proxies request to Next.js dev server if running.
+ * Proxies request to frontend dev server if running.
  */
 function proxyToDevServer(
   req: IncomingMessage,
@@ -78,8 +79,8 @@ function proxyToDevServer(
 
 /**
  * Handles incoming HTTP requests for `/admin` and `/admin/*`.
- * Serves static exported assets from Next.js with SPA fallback,
- * or proxies to Next dev server if running in development mode.
+ * Serves static exported assets from Vite SPA build with index.html fallback,
+ * or proxies to Vite dev server if running in development mode.
  */
 export async function handleAdminRequest(
   req: IncomingMessage,
@@ -97,10 +98,11 @@ export async function handleAdminRequest(
     return true;
   }
 
-  // In development, attempt to proxy to local Next.js dev server on port 3001 if active
+  // In development, attempt to proxy to local Vite dev server on port 5173 (or VITE_DEV_URL) if active
   if (process.env.NODE_ENV !== "production") {
-    const devProxyUrl = process.env.NEXT_DEV_URL;
-    const targetPort = devProxyUrl ? parseInt(new URL(devProxyUrl).port, 10) : 3001;
+    const devProxyUrl =
+      process.env.VITE_DEV_URL || process.env.ADMIN_DEV_URL || process.env.NEXT_DEV_URL;
+    const targetPort = devProxyUrl ? parseInt(new URL(devProxyUrl).port, 10) : 5173;
     const targetHost = devProxyUrl ? new URL(devProxyUrl).hostname : "127.0.0.1";
 
     const proxied = await proxyToDevServer(req, res, targetHost, targetPort);

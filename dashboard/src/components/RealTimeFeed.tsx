@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +5,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { CheckCircle2, XCircle, Clock, Settings2 } from "lucide-react";
 import { toast } from "sonner";
 import { useProject } from "@/hooks/useProjectKey";
+import { useAuth } from "@/hooks/useAuth";
 
 interface DeliveryEvent {
   id: string;
@@ -25,12 +24,12 @@ export default function RealTimeFeed({
 }) {
   const [events, setEvents] = useState<DeliveryEvent[]>([]);
   const { projects, selectedProjectId, projectApiKey, isLoadingProjects } = useProject();
+  const { apiUrl } = useAuth();
 
   useEffect(() => {
     if (!projectApiKey || !selectedProjectId) return;
     setIsConnected(false);
 
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
     const es = new EventSource(
       `${apiUrl}/v1/events/stream?token=${encodeURIComponent(projectApiKey)}&projectId=${encodeURIComponent(selectedProjectId)}`,
     );
@@ -86,11 +85,11 @@ export default function RealTimeFeed({
       es.removeEventListener("delivery:failed", handleFailed);
       es.close();
     };
-  }, [projectApiKey, selectedProjectId, setIsConnected]);
+  }, [apiUrl, projectApiKey, selectedProjectId, setIsConnected]);
 
   return (
-    <Card className="h-full flex flex-col border-border/50 shadow-sm bg-card/50 backdrop-blur-sm">
-      <CardHeader className="pb-3 border-b border-border/20 flex flex-row items-center justify-between">
+    <Card className="h-full flex flex-col border-border bg-card">
+      <CardHeader className="pb-3 border-b border-border flex flex-row items-center justify-between">
         <div>
           <CardTitle className="text-xl flex items-center gap-2">
             <ActivityPulse />
@@ -100,9 +99,9 @@ export default function RealTimeFeed({
             Real-time delivery events from the notification pipeline
           </CardDescription>
         </div>
-        <div className="flex items-center gap-2 text-sm bg-muted/50 p-1.5 rounded-lg border border-border/50 px-3">
+        <div className="flex items-center gap-2 text-sm bg-muted p-1.5 rounded-md border border-border px-3">
           <Settings2 className="w-4 h-4 text-muted-foreground" />
-          <span className="text-sm font-medium text-foreground">Instant Mode</span>
+          <span className="text-xs font-medium text-foreground">Instant Stream</span>
         </div>
       </CardHeader>
       <CardContent className="flex-1 p-0 overflow-hidden">
@@ -132,14 +131,14 @@ export default function RealTimeFeed({
               {events.map((event) => (
                 <div
                   key={event.id}
-                  className="animate-in fade-in slide-in-from-top-4 duration-500 rounded-lg border border-border/40 p-4 bg-background/40 hover:bg-background/80 transition-colors shadow-sm"
+                  className="rounded-lg border border-border p-4 bg-card hover:bg-muted/50 transition-colors shadow-xs"
                 >
                   <div className="flex justify-between items-start mb-2">
                     <div className="flex items-center gap-2">
                       {event.type === "delivered" ? (
-                        <CheckCircle2 className="h-5 w-5 text-green-500" />
+                        <CheckCircle2 className="h-4 w-4 text-foreground" />
                       ) : (
-                        <XCircle className="h-5 w-5 text-red-500" />
+                        <XCircle className="h-4 w-4 text-destructive" />
                       )}
                       <span className="font-semibold text-sm capitalize">{event.type}</span>
                     </div>
@@ -150,25 +149,28 @@ export default function RealTimeFeed({
 
                   <div className="grid grid-cols-2 gap-2 text-sm mt-3">
                     <div className="flex flex-col">
-                      <span className="text-xs text-muted-foreground uppercase tracking-wider">
+                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">
                         Channel
                       </span>
-                      <Badge variant="outline" className="w-fit mt-1">
+                      <Badge
+                        variant="secondary"
+                        className="w-fit mt-1 text-xs capitalize font-normal"
+                      >
                         {event.channel}
                       </Badge>
                     </div>
                     <div className="flex flex-col">
-                      <span className="text-xs text-muted-foreground uppercase tracking-wider">
+                      <span className="text-[10px] text-muted-foreground uppercase tracking-wider">
                         Task ID
                       </span>
-                      <span className="font-mono text-xs truncate mt-1 text-foreground/80">
+                      <span className="font-mono text-xs truncate mt-1 text-foreground">
                         {event.taskId}
                       </span>
                     </div>
                   </div>
 
                   {event.error && (
-                    <div className="mt-3 text-xs bg-red-500/10 text-red-400 p-2 rounded border border-red-500/20">
+                    <div className="mt-3 text-xs bg-destructive/10 text-destructive p-2.5 rounded-md border border-destructive/20 font-mono">
                       {event.error}
                     </div>
                   )}
@@ -184,9 +186,9 @@ export default function RealTimeFeed({
 
 function ActivityPulse() {
   return (
-    <div className="relative flex h-3 w-3">
+    <div className="relative flex h-2.5 w-2.5">
       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
-      <span className="relative inline-flex rounded-full h-3 w-3 bg-primary"></span>
+      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-primary"></span>
     </div>
   );
 }

@@ -1,10 +1,8 @@
-"use client";
-
 import { useState } from "react";
 import DashboardHeader from "@/components/DashboardHeader";
 import RealTimeFeed from "@/components/RealTimeFeed";
 
-export default function Home() {
+export default function HomePage() {
   const [isConnected, setIsConnected] = useState(false);
 
   return (

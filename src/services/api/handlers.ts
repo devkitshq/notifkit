@@ -1115,19 +1115,35 @@ export function createHandlers(deps: Deps) {
       }
     }
 
-    // Scoped to the caller's project: an unscoped count reports every tenant's
-    // traffic to whoever asks.
-    const totalTasksRes = await deps.db
-      .select({ count: sql<number>`count(distinct ${messageLogs.taskId})` })
-      .from(messageLogs)
-      .where(eq(messageLogs.projectId, ctx.projectId!));
-    const deliveredTasksRes = await deps.db
-      .select({ count: sql<number>`count(distinct ${messageLogs.taskId})` })
-      .from(messageLogs)
-      .where(and(eq(messageLogs.projectId, ctx.projectId!), eq(messageLogs.status, "delivered")));
+    // Scoped to the caller's project if provided, otherwise aggregate across all projects
+    let total = 0;
+    let delivered = 0;
 
-    const total = Number(totalTasksRes[0]?.count ?? 0);
-    const delivered = Number(deliveredTasksRes[0]?.count ?? 0);
+    if (ctx.projectId) {
+      const totalTasksRes = await deps.db
+        .select({ count: sql<number>`count(distinct ${messageLogs.taskId})` })
+        .from(messageLogs)
+        .where(eq(messageLogs.projectId, ctx.projectId));
+      const deliveredTasksRes = await deps.db
+        .select({ count: sql<number>`count(distinct ${messageLogs.taskId})` })
+        .from(messageLogs)
+        .where(and(eq(messageLogs.projectId, ctx.projectId), eq(messageLogs.status, "delivered")));
+
+      total = Number(totalTasksRes[0]?.count ?? 0);
+      delivered = Number(deliveredTasksRes[0]?.count ?? 0);
+    } else {
+      const totalTasksRes = await deps.db
+        .select({ count: sql<number>`count(distinct ${messageLogs.taskId})` })
+        .from(messageLogs);
+      const deliveredTasksRes = await deps.db
+        .select({ count: sql<number>`count(distinct ${messageLogs.taskId})` })
+        .from(messageLogs)
+        .where(eq(messageLogs.status, "delivered"));
+
+      total = Number(totalTasksRes[0]?.count ?? 0);
+      delivered = Number(deliveredTasksRes[0]?.count ?? 0);
+    }
+
     const failed = streamDepths.DEAD_LETTER || 0;
     const successRate = total > 0 ? Number(((delivered / total) * 100).toFixed(2)) : 100;
 

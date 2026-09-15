@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState } from "react";
 import { Activity, Bell, FolderKey, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -8,19 +6,21 @@ import { useAuth } from "@/hooks/useAuth";
 
 export default function DashboardHeader({ isConnected }: { isConnected: boolean }) {
   const { projects, selectedProjectId, setSelectedProjectId, projectApiKey } = useProject();
-  const { apiUrl } = useAuth();
+  const { apiUrl, token } = useAuth();
   const [highBackpressure, setHighBackpressure] = useState(false);
 
   useEffect(() => {
-    if (!projectApiKey || !selectedProjectId) return;
+    const authKey = projectApiKey || token;
+    if (!authKey) return;
     const checkMetrics = async () => {
       try {
-        const res = await fetch(`${apiUrl}/v1/system/metrics`, {
-          headers: {
-            Authorization: `Bearer ${projectApiKey}`,
-            "x-project-id": selectedProjectId,
-          },
-        });
+        const headers: Record<string, string> = {
+          Authorization: `Bearer ${authKey}`,
+        };
+        if (selectedProjectId) {
+          headers["x-project-id"] = selectedProjectId;
+        }
+        const res = await fetch(`${apiUrl}/v1/system/metrics`, { headers });
         if (res.ok) {
           const data = await res.json();
           const streams = data.streams || {};
@@ -35,24 +35,21 @@ export default function DashboardHeader({ isConnected }: { isConnected: boolean 
     void checkMetrics();
     const interval = setInterval(() => void checkMetrics(), 10000);
     return () => clearInterval(interval);
-  }, [apiUrl, projectApiKey, selectedProjectId]);
+  }, [apiUrl, projectApiKey, selectedProjectId, token]);
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <header className="sticky top-0 z-40 w-full border-b border-border bg-background">
       <div className="container mx-auto flex h-14 items-center justify-between px-4">
         <div className="flex items-center gap-2 font-bold text-lg tracking-tight">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-            <Bell className="h-5 w-5 text-primary" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-muted text-foreground border border-border">
+            <Bell className="h-4 w-4 text-foreground" />
           </div>
           Notifkit <span className="text-muted-foreground font-normal">Observability</span>
         </div>
 
         <div className="flex items-center gap-4">
           {highBackpressure && (
-            <Badge
-              variant="destructive"
-              className="flex items-center gap-1.5 px-2.5 py-1 text-xs animate-bounce"
-            >
+            <Badge variant="destructive" className="flex items-center gap-1.5 px-2.5 py-1 text-xs">
               <AlertTriangle className="h-3.5 w-3.5" />
               Queue Backpressure Warning (&gt;80% Cap)
             </Badge>
@@ -62,7 +59,7 @@ export default function DashboardHeader({ isConnected }: { isConnected: boolean 
             <div className="flex items-center gap-2">
               <FolderKey className="h-4 w-4 text-muted-foreground" />
               <select
-                className="bg-muted/50 border border-border/50 text-sm rounded-lg p-1.5 outline-none cursor-pointer text-foreground max-w-[200px] truncate"
+                className="bg-muted border border-border text-sm rounded-md px-2.5 py-1.5 outline-none cursor-pointer text-foreground max-w-[200px] truncate"
                 value={selectedProjectId}
                 onChange={(e) => setSelectedProjectId(e.target.value)}
               >
@@ -75,30 +72,13 @@ export default function DashboardHeader({ isConnected }: { isConnected: boolean 
             </div>
           )}
 
-          {projects.length === 0 ? (
-            <Badge
-              variant="outline"
-              className="flex items-center gap-1.5 px-3 py-1 shadow-sm text-muted-foreground border-dashed border-border"
-            >
-              <Activity className="h-3.5 w-3.5 text-muted-foreground" />
-              No Project Created
-            </Badge>
-          ) : (
-            <Badge
-              variant={isConnected ? "default" : "destructive"}
-              className="flex items-center gap-1.5 px-3 py-1 shadow-sm transition-all"
-            >
-              {isConnected ? (
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                </span>
-              ) : (
-                <Activity className="h-3.5 w-3.5" />
-              )}
-              {isConnected ? "Live Stream Active" : "Disconnected"}
-            </Badge>
-          )}
+          <Badge
+            variant={isConnected ? "default" : "destructive"}
+            className="flex items-center gap-1.5 px-3 py-1"
+          >
+            <Activity className="h-3.5 w-3.5" />
+            {isConnected ? "Live Stream Active" : "Disconnected"}
+          </Badge>
         </div>
       </div>
     </header>

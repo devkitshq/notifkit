@@ -1,8 +1,6 @@
-"use client";
-
 import type { ReactNode } from "react";
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
-import { useRouter, usePathname } from "next/navigation";
+import { useNavigate, useLocation } from "react-router-dom";
 
 export interface AdminUser {
   id: string;
@@ -27,13 +25,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AdminUser | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const router = useRouter();
-  const pathname = usePathname();
+  const navigate = useNavigate();
+  const location = useLocation();
 
-  // If NEXT_PUBLIC_API_URL is configured, use it. Otherwise, use empty string for same-origin calls.
+  // If VITE_API_URL is configured, use it. Otherwise, use empty string for same-origin calls.
   const apiUrl =
-    process.env.NEXT_PUBLIC_API_URL !== undefined && process.env.NEXT_PUBLIC_API_URL !== ""
-      ? process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "")
+    import.meta.env.VITE_API_URL !== undefined && import.meta.env.VITE_API_URL !== ""
+      ? String(import.meta.env.VITE_API_URL).replace(/\/$/, "")
       : "";
 
   const logout = useCallback(async () => {
@@ -56,8 +54,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     setUser(null);
     setToken(null);
-    router.push("/login/");
-  }, [apiUrl, token, router]);
+    void navigate("/login");
+  }, [apiUrl, token, navigate]);
 
   const verifySession = useCallback(
     async (existingToken: string) => {
@@ -137,7 +135,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.setItem("notifkit_admin_user", JSON.stringify(data.user));
       }
 
-      router.push("/");
+      void navigate("/");
       return { success: true };
     } catch (err: unknown) {
       return {
@@ -147,22 +145,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const isLoginPage =
-    pathname === "/login" ||
-    pathname === "/login/" ||
-    pathname?.endsWith("/login") ||
-    pathname?.endsWith("/login/");
+  const isLoginPage = location.pathname === "/login" || location.pathname === "/login/";
 
   // Route protection
   useEffect(() => {
     if (!isLoading) {
       if (!token && !isLoginPage) {
-        router.push("/login/");
+        void navigate("/login");
       } else if (token && isLoginPage) {
-        router.push("/");
+        void navigate("/");
       }
     }
-  }, [isLoading, token, isLoginPage, router]);
+  }, [isLoading, token, isLoginPage, navigate]);
 
   return (
     <AuthContext.Provider

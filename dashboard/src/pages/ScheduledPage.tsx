@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState, useCallback } from "react";
 import DashboardHeader from "@/components/DashboardHeader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Clock, RefreshCcw, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useProject } from "@/hooks/useProjectKey";
+import { useAuth } from "@/hooks/useAuth";
 
 interface ScheduledItem {
   taskId: string;
@@ -23,15 +22,15 @@ interface ScheduledItem {
   createdAt: string;
 }
 
-export default function ScheduledMessagesPage() {
+export default function ScheduledPage() {
   const [items, setItems] = useState<ScheduledItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const { projectApiKey, selectedProjectId } = useProject();
+  const { apiUrl } = useAuth();
 
   const fetchScheduled = useCallback(async () => {
     setIsLoading(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/notifications/scheduled`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,
@@ -47,7 +46,7 @@ export default function ScheduledMessagesPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [projectApiKey, selectedProjectId]);
+  }, [apiUrl, projectApiKey, selectedProjectId]);
 
   useEffect(() => {
     if (projectApiKey && selectedProjectId) {
@@ -57,7 +56,6 @@ export default function ScheduledMessagesPage() {
 
   const handleCancel = async (taskId: string) => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       const res = await fetch(`${apiUrl}/v1/notifications/${taskId}`, {
         method: "DELETE",
         headers: {
@@ -81,7 +79,7 @@ export default function ScheduledMessagesPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Clock className="h-6 w-6 text-amber-400" />
+              <Clock className="h-6 w-6 text-foreground" />
               Scheduled & Deferred Notification Pipeline
             </h1>
             <p className="text-muted-foreground text-sm">
@@ -93,14 +91,13 @@ export default function ScheduledMessagesPage() {
             size="sm"
             onClick={() => void fetchScheduled()}
             disabled={isLoading}
-            className="border-border/50 hover:bg-muted/50"
           >
             <RefreshCcw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
             Refresh
           </Button>
         </div>
 
-        <Card className="border-border/50 bg-card/40 backdrop-blur-md">
+        <Card className="border-border bg-card">
           <CardHeader>
             <CardTitle className="text-lg">Pending Scheduled Messages ({items.length})</CardTitle>
             <CardDescription>
@@ -109,8 +106,8 @@ export default function ScheduledMessagesPage() {
           </CardHeader>
           <CardContent className="p-0 overflow-auto">
             <Table>
-              <TableHeader className="bg-muted/30">
-                <TableRow className="border-border/20">
+              <TableHeader className="bg-muted/50">
+                <TableRow>
                   <TableHead>Created At</TableHead>
                   <TableHead>Task ID</TableHead>
                   <TableHead>Template</TableHead>
@@ -136,7 +133,7 @@ export default function ScheduledMessagesPage() {
                         ? JSON.stringify(item.payload?.target)
                         : String(item.payload?.target || "N/A"));
                     return (
-                      <TableRow key={item.taskId} className="border-border/10 hover:bg-muted/20">
+                      <TableRow key={item.taskId} className="hover:bg-muted/50">
                         <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
                           {new Date(item.createdAt).toLocaleString()}
                         </TableCell>
@@ -153,10 +150,7 @@ export default function ScheduledMessagesPage() {
                           {recipientId}
                         </TableCell>
                         <TableCell>
-                          <Badge
-                            variant="outline"
-                            className="font-mono text-[11px] border-amber-500/30 text-amber-400"
-                          >
+                          <Badge variant="outline" className="font-mono text-[11px]">
                             {sendAt ? new Date(sendAt).toLocaleString() : "Pending Dispatch"}
                           </Badge>
                         </TableCell>
@@ -164,7 +158,7 @@ export default function ScheduledMessagesPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-8 text-rose-400 hover:bg-rose-500/10"
+                            className="h-8 text-destructive hover:bg-destructive/10"
                             onClick={() => void handleCancel(item.taskId)}
                           >
                             <XCircle className="h-4 w-4 mr-1" />

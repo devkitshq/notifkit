@@ -1,11 +1,16 @@
-"use client";
-
 import type { ReactNode } from "react";
 import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { useAuth } from "./useAuth";
 
+export interface ProjectItem {
+  id: string;
+  name: string;
+  rateLimitRpm?: number | null;
+  createdAt: string;
+}
+
 interface ProjectContextType {
-  projects: any[];
+  projects: ProjectItem[];
   selectedProjectId: string;
   setSelectedProjectId: (id: string) => void;
   projectApiKey: string | null;
@@ -17,7 +22,7 @@ const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const { token, apiUrl, isAuthenticated } = useAuth();
-  const [projects, setProjects] = useState<any[]>([]);
+  const [projects, setProjects] = useState<ProjectItem[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
 
@@ -36,12 +41,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       });
       if (res.ok) {
         const data = await res.json();
-        const projs = data.projects || [];
+        const projs: ProjectItem[] = data.projects || [];
         setProjects(projs);
         if (projs.length > 0) {
-          setSelectedProjectId((prev) =>
-            projs.some((p: any) => p.id === prev) ? prev : projs[0].id,
-          );
+          setSelectedProjectId((prev) => (projs.some((p) => p.id === prev) ? prev : projs[0]!.id));
         } else {
           setSelectedProjectId("");
         }

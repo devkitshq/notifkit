@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -12,6 +10,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   RefreshCcw,
   Database,
@@ -26,6 +25,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useProject } from "@/hooks/useProjectKey";
+import { useAuth } from "@/hooks/useAuth";
 
 interface LogEntry {
   id: string;
@@ -55,12 +55,12 @@ export default function LogsTable() {
   const [loadingLifecycle, setLoadingLifecycle] = useState(false);
 
   const { projects, selectedProjectId, projectApiKey, isLoadingProjects } = useProject();
+  const { apiUrl } = useAuth();
 
   const fetchLogs = useCallback(
     async (apiKey: string, projectId: string, cursor?: string | null) => {
       setIsLoading(true);
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
         const query = new URLSearchParams({ limit: "25" });
         if (cursor) query.set("cursor", cursor);
         if (search) query.set("search", search);
@@ -88,7 +88,7 @@ export default function LogsTable() {
         setIsLoading(false);
       }
     },
-    [search, channelFilter, statusFilter],
+    [apiUrl, search, channelFilter, statusFilter],
   );
 
   useEffect(() => {
@@ -104,7 +104,6 @@ export default function LogsTable() {
   useEffect(() => {
     if (selectedLog && projectApiKey && selectedProjectId) {
       setLoadingLifecycle(true);
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
       fetch(`${apiUrl}/v1/notifications/${selectedLog.taskId}`, {
         headers: {
           Authorization: `Bearer ${projectApiKey}`,
@@ -114,7 +113,6 @@ export default function LogsTable() {
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
           if (data && data.logs) {
-            // Sort ascending by timestamp for chronological lifecycle timeline
             const sorted = [...data.logs].sort(
               (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
             );
@@ -128,7 +126,7 @@ export default function LogsTable() {
     } else {
       setTaskLifecycle([]);
     }
-  }, [selectedLog, projectApiKey, selectedProjectId]);
+  }, [apiUrl, selectedLog, projectApiKey, selectedProjectId]);
 
   const handleNextPage = () => {
     if (nextCursor && projectApiKey && selectedProjectId) {
@@ -148,12 +146,12 @@ export default function LogsTable() {
   };
 
   return (
-    <Card className="h-full flex flex-col border-border/50 shadow-sm bg-card/50 backdrop-blur-sm">
-      <CardHeader className="pb-3 border-b border-border/20 space-y-3">
+    <Card className="h-full flex flex-col border-border bg-card">
+      <CardHeader className="pb-3 border-b border-border space-y-3">
         <div className="flex flex-row items-center justify-between">
           <div>
             <CardTitle className="text-xl flex items-center gap-2">
-              <Database className="h-5 w-5 text-primary" />
+              <Database className="h-5 w-5 text-foreground" />
               Historical Dispatches & Audit Logs
             </CardTitle>
             <CardDescription>
@@ -168,7 +166,7 @@ export default function LogsTable() {
                 void fetchLogs(projectApiKey, selectedProjectId, cursorHistory[pageIndex]);
             }}
             disabled={isLoading || !projectApiKey || !selectedProjectId}
-            className="h-8 w-8 rounded-full border-border/50 hover:bg-primary/10 hover:text-primary transition-colors"
+            className="h-8 w-8 rounded-md border-border"
           >
             <RefreshCcw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
           </Button>
@@ -178,19 +176,19 @@ export default function LogsTable() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2">
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <input
+            <Input
               type="text"
               placeholder="Search Task ID or Template..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-1.5 bg-muted/30 border border-border/40 rounded-lg text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+              className="pl-9 text-xs font-mono"
             />
           </div>
 
           <select
             value={channelFilter}
             onChange={(e) => setChannelFilter(e.target.value)}
-            className="px-3 py-1.5 bg-muted/30 border border-border/40 rounded-lg text-xs bg-card focus:outline-none focus:ring-1 focus:ring-primary"
+            className="px-3 py-1.5 bg-background border border-input rounded-md text-xs focus:outline-none focus:ring-1 focus:ring-ring text-foreground"
           >
             <option value="">All Channels</option>
             <option value="email">Email</option>
@@ -201,7 +199,7 @@ export default function LogsTable() {
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="px-3 py-1.5 bg-muted/30 border border-border/40 rounded-lg text-xs bg-card focus:outline-none focus:ring-1 focus:ring-primary"
+            className="px-3 py-1.5 bg-background border border-input rounded-md text-xs focus:outline-none focus:ring-1 focus:ring-ring text-foreground"
           >
             <option value="">All Statuses</option>
             <option value="delivered">Delivered</option>
@@ -214,8 +212,8 @@ export default function LogsTable() {
 
       <CardContent className="flex-1 p-0 overflow-auto">
         <Table>
-          <TableHeader className="bg-muted/30 sticky top-0 backdrop-blur-md">
-            <TableRow className="border-border/20">
+          <TableHeader className="bg-muted/50 sticky top-0">
+            <TableRow>
               <TableHead className="font-medium">Timestamp</TableHead>
               <TableHead className="font-medium">Task ID</TableHead>
               <TableHead className="font-medium">Template</TableHead>
@@ -261,7 +259,7 @@ export default function LogsTable() {
               ).map((log) => (
                 <TableRow
                   key={log.id}
-                  className="border-border/10 hover:bg-muted/20 transition-colors cursor-pointer"
+                  className="hover:bg-muted/50 transition-colors cursor-pointer"
                   onClick={() => setSelectedLog(log)}
                 >
                   <TableCell className="text-muted-foreground whitespace-nowrap text-xs">
@@ -272,10 +270,7 @@ export default function LogsTable() {
                   </TableCell>
                   <TableCell className="font-medium text-xs">{log.templateId}</TableCell>
                   <TableCell>
-                    <Badge
-                      variant="secondary"
-                      className="capitalize font-normal text-xs bg-secondary/50"
-                    >
+                    <Badge variant="secondary" className="capitalize font-normal text-xs">
                       {log.channel}
                     </Badge>
                   </TableCell>
@@ -295,7 +290,7 @@ export default function LogsTable() {
       </CardContent>
 
       {/* Pagination Footer */}
-      <div className="p-3 border-t border-border/20 flex items-center justify-between text-xs text-muted-foreground bg-muted/10">
+      <div className="p-3 border-t border-border flex items-center justify-between text-xs text-muted-foreground bg-muted/20">
         <span>Page {pageIndex + 1}</span>
         <div className="flex items-center gap-2">
           <Button
@@ -303,7 +298,7 @@ export default function LogsTable() {
             size="sm"
             onClick={handlePrevPage}
             disabled={pageIndex === 0 || isLoading}
-            className="h-7 text-xs border-border/40"
+            className="h-7 text-xs border-border"
           >
             <ChevronLeft className="h-3.5 w-3.5 mr-1" /> Previous
           </Button>
@@ -312,7 +307,7 @@ export default function LogsTable() {
             size="sm"
             onClick={handleNextPage}
             disabled={!nextCursor || isLoading}
-            className="h-7 text-xs border-border/40"
+            className="h-7 text-xs border-border"
           >
             Next <ChevronRight className="h-3.5 w-3.5 ml-1" />
           </Button>
@@ -321,11 +316,11 @@ export default function LogsTable() {
 
       {/* JSON Log Detail & Event Lifecycle Timeline Drawer */}
       {selectedLog && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex justify-end">
-          <div className="w-full max-w-xl bg-card border-l border-border/40 p-6 overflow-y-auto space-y-6">
-            <div className="flex items-center justify-between border-b border-border/40 pb-3">
+        <div className="fixed inset-0 z-50 bg-background/80 backdrop-blur-xs flex justify-end">
+          <div className="w-full max-w-xl bg-card border-l border-border p-6 overflow-y-auto space-y-6">
+            <div className="flex items-center justify-between border-b border-border pb-3">
               <div>
-                <h2 className="text-lg font-bold">Event Lifecycle & Detail</h2>
+                <h2 className="text-lg font-bold text-foreground">Event Lifecycle & Detail</h2>
                 <p className="text-xs text-muted-foreground font-mono">
                   Task ID: {selectedLog.taskId}
                 </p>
@@ -338,39 +333,38 @@ export default function LogsTable() {
             {/* Complete Lifecycle Timeline */}
             <div className="space-y-3">
               <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-1.5">
-                <GitCommit className="h-4 w-4 text-primary" />
-                Notification Event Lifecycle (Dispatched &rarr; Delivered)
+                <GitCommit className="h-4 w-4 text-foreground" />
+                Notification Event Lifecycle
               </h3>
 
               {loadingLifecycle ? (
-                <div className="p-4 rounded-lg bg-muted/20 text-xs text-muted-foreground animate-pulse">
+                <div className="p-4 rounded-lg bg-muted text-xs text-muted-foreground animate-pulse">
                   Loading complete event lifecycle logs...
                 </div>
               ) : taskLifecycle.length === 0 ? (
-                <div className="p-4 rounded-lg bg-muted/20 text-xs text-muted-foreground">
+                <div className="p-4 rounded-lg bg-muted text-xs text-muted-foreground">
                   No lifecycle history recorded.
                 </div>
               ) : (
-                <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-border/60">
-                  {taskLifecycle.map((item, _idx) => {
+                <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-px before:bg-border">
+                  {taskLifecycle.map((item) => {
                     const firstTime = new Date(taskLifecycle[0]!.timestamp).getTime();
                     const itemTime = new Date(item.timestamp).getTime();
                     const deltaMs = itemTime - firstTime;
 
                     return (
                       <div key={item.id} className="relative group">
-                        {/* Timeline Node Icon */}
-                        <div className="absolute -left-6 top-0.5 h-5 w-5 rounded-full bg-background border-2 border-primary flex items-center justify-center">
+                        <div className="absolute -left-6 top-0.5 h-5 w-5 rounded-full bg-background border border-border flex items-center justify-center">
                           {item.status === "delivered" ? (
-                            <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+                            <CheckCircle2 className="h-3 w-3 text-foreground" />
                           ) : item.status === "failed" ? (
-                            <AlertCircle className="h-3 w-3 text-rose-400" />
+                            <AlertCircle className="h-3 w-3 text-destructive" />
                           ) : (
-                            <Send className="h-2.5 w-2.5 text-blue-400" />
+                            <Send className="h-2.5 w-2.5 text-muted-foreground" />
                           )}
                         </div>
 
-                        <div className="p-3 rounded-lg bg-muted/20 border border-border/30 text-xs space-y-1.5">
+                        <div className="p-3 rounded-lg bg-muted/40 border border-border text-xs space-y-1.5">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-2">
                               <StatusBadge status={item.status} />
@@ -408,11 +402,11 @@ export default function LogsTable() {
             </div>
 
             {/* Selected Record Details */}
-            <div className="space-y-2 text-xs border-t border-border/40 pt-4">
+            <div className="space-y-2 text-xs border-t border-border pt-4">
               <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
                 Selected Log Record Metadata
               </h3>
-              <div className="grid grid-cols-2 gap-2 p-3 rounded-lg bg-muted/20 border border-border/30">
+              <div className="grid grid-cols-2 gap-2 p-3 rounded-lg bg-muted/40 border border-border">
                 <div>
                   <span className="text-muted-foreground">Log UUID:</span>
                   <div className="font-mono text-foreground truncate">{selectedLog.id}</div>
@@ -440,7 +434,7 @@ export default function LogsTable() {
               <label className="text-xs font-semibold text-muted-foreground">
                 Full JSON Context
               </label>
-              <pre className="mt-1 p-4 rounded-lg bg-muted/30 border border-border/30 text-xs font-mono overflow-x-auto text-emerald-400">
+              <pre className="mt-1 p-4 rounded-lg bg-muted border border-border text-xs font-mono overflow-x-auto text-foreground">
                 {JSON.stringify(selectedLog, null, 2)}
               </pre>
             </div>
@@ -452,30 +446,28 @@ export default function LogsTable() {
 }
 
 function StatusBadge({ status }: { status: LogEntry["status"] }) {
-  let colorClass = "bg-gray-500/10 text-gray-400 border-gray-500/20";
+  let variant: "default" | "secondary" | "destructive" | "outline" = "outline";
 
   switch (status) {
     case "delivered":
-      colorClass = "bg-green-500/10 text-green-400 border-green-500/20";
+      variant = "default";
       break;
     case "failed":
-      colorClass = "bg-red-500/10 text-red-400 border-red-500/20";
+      variant = "destructive";
       break;
     case "pending":
     case "dispatched":
-      colorClass = "bg-blue-500/10 text-blue-400 border-blue-500/20";
+      variant = "secondary";
       break;
     case "canceled":
     case "skipped":
-      colorClass = "bg-orange-500/10 text-orange-400 border-orange-500/20";
+      variant = "outline";
       break;
   }
 
   return (
-    <span
-      className={`px-2 py-0.5 rounded-full text-[10px] uppercase font-bold tracking-wider border ${colorClass}`}
-    >
+    <Badge variant={variant} className="capitalize text-[10px] font-medium">
       {status}
-    </span>
+    </Badge>
   );
 }
