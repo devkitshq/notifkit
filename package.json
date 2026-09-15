@@ -1,6 +1,6 @@
 {
   "name": "notifkit",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Self-hosted notification infrastructure. One call delivers to email, SMS, push, and webhook — routed by preference, quiet hours, and consent.",
   "license": "MIT",
   "author": "devkitshq",
@@ -48,12 +48,15 @@
     "dist",
     "src",
     "drizzle",
+    "dashboard/dist",
     "scripts/create-project.mjs",
+    "scripts/create-admin.mjs",
     "README.md",
     "LICENSE"
   ],
   "bin": {
-    "notifkit-create-project": "./scripts/create-project.mjs"
+    "notifkit-create-project": "./scripts/create-project.mjs",
+    "notifkit-create-admin": "./scripts/create-admin.mjs"
   },
   "scripts": {
     "build": "tsdown",
@@ -66,7 +69,7 @@
     "lint": "eslint . --fix",
     "typecheck": "tsc --noEmit",
     "prepare": "husky",
-    "prepublishOnly": "npm run typecheck && npm run build"
+    "prepublishOnly": "npm run typecheck && npm run build && npm run build:dashboard"
   },
   "dependencies": {
     "ai": "^7.0.37",
