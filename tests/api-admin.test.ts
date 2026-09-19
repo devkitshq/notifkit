@@ -503,14 +503,29 @@ describe("API operational handlers", () => {
 
   describe("getUserDetails", () => {
     it("merges the profile with its contacts and recent logs", async () => {
-      selectRows = [[{ taskId: "t1" }]];
+      deps.contactRepo.findByUserId.mockResolvedValue([
+        { channel: "email", target: "alice@example.com" },
+      ]);
+      selectRows = [[{ taskId: "t1" }], [{ taskId: "t1" }]];
       const res = createMockRes();
       await handlers.getUserDetails(createMockReq(), res, ctx({ params: { id: "usr_1" } }));
 
       expect(parse(res)).toMatchObject({
         id: "usr_1",
-        contacts: [{ channel: "email" }],
+        contacts: [{ channel: "email", target: "alice@example.com" }],
         logs: [{ taskId: "t1" }],
+      });
+    });
+
+    it("returns empty logs when user has no contacts", async () => {
+      deps.contactRepo.findByUserId.mockResolvedValue([]);
+      const res = createMockRes();
+      await handlers.getUserDetails(createMockReq(), res, ctx({ params: { id: "usr_1" } }));
+
+      expect(parse(res)).toMatchObject({
+        id: "usr_1",
+        contacts: [],
+        logs: [],
       });
     });
 

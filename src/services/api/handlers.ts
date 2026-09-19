@@ -42,7 +42,7 @@ import { readJsonBody, sendJson, sendNoContent, sendValidationError } from "./ht
 import type { RouteContext } from "./router.js";
 import { globalEmitter, getPriorityBucket, normaliseTarget } from "@/shared/index.js";
 import { metrics } from "@/metrics/index.js";
-import { eq, desc, and, lt, lte, gte, sql, like, or, isNotNull } from "drizzle-orm";
+import { eq, desc, and, lt, lte, gte, sql, like, or, isNotNull, inArray } from "drizzle-orm";
 import {
   messageLogs,
   workflowDefinitions,
@@ -50,6 +50,7 @@ import {
   suppressions,
   users as dbUsers,
   userTopicPreferences,
+  deliveryOutbox,
 } from "@/db/schema.js";
 import { readBaseConfig } from "@/config/index.js";
 import { verifyUnsubscribeToken } from "@/unsubscribe/index.js";
@@ -1360,12 +1361,25 @@ export function createHandlers(deps: Deps) {
     if (!user) return sendJson(res, 404, { error: "user_not_found", id: userId });
 
     const contacts = await deps.contactRepo.findByUserId(ctx.projectId!, userId);
-    const logs = await deps.db
-      .select()
-      .from(messageLogs)
-      .where(eq(messageLogs.projectId, ctx.projectId!))
-      .orderBy(desc(messageLogs.timestamp))
-      .limit(50);
+    const contactTargets = contacts.map((c) => c.target);
+    let logs: any[] = [];
+    if (contactTargets.length > 0) {
+      const outboxRows = await deps.db
+        .select({ taskId: deliveryOutbox.taskId })
+        .from(deliveryOutbox)
+        .where(inArray(deliveryOutbox.destination, contactTargets));
+      const taskIds = Array.from(new Set(outboxRows.map((r: any) => r.taskId)));
+      if (taskIds.length > 0) {
+        logs = await deps.db
+          .select()
+          .from(messageLogs)
+          .where(
+            and(eq(messageLogs.projectId, ctx.projectId!), inArray(messageLogs.taskId, taskIds)),
+          )
+          .orderBy(desc(messageLogs.timestamp))
+          .limit(50);
+      }
+    }
 
     sendJson(res, 200, { ...user, contacts, logs });
   }
