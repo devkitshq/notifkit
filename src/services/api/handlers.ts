@@ -1203,7 +1203,7 @@ export function createHandlers(deps: Deps) {
       const messages = ctx.projectId
         ? allMessages.filter((m) => {
             const pId = m.payload?.projectId ?? m.payload?.project_id ?? (m as any).projectId;
-            return !pId || pId === ctx.projectId;
+            return pId === ctx.projectId;
           })
         : allMessages;
 
@@ -1249,7 +1249,7 @@ export function createHandlers(deps: Deps) {
 
       if (ctx.projectId) {
         const pId = payload?.projectId ?? payload?.project_id ?? (fieldMap as any).projectId;
-        if (pId && pId !== ctx.projectId) {
+        if (pId !== ctx.projectId) {
           sendJson(res, 404, { error: "dlq_message_not_found" });
           return;
         }
@@ -1289,23 +1289,25 @@ export function createHandlers(deps: Deps) {
           messageId,
           messageId,
         );
-        if (rawEntries && rawEntries.length > 0 && rawEntries[0]) {
-          const fields = rawEntries[0][1];
-          const fieldMap: Record<string, string> = {};
-          for (let i = 0; i < fields.length; i += 2) {
-            fieldMap[fields[i]!] = fields[i + 1]!;
-          }
-          let payload: any = null;
-          if (fieldMap.payload) {
-            try {
-              payload = JSON.parse(fieldMap.payload);
-            } catch {}
-          }
-          const pId = payload?.projectId ?? payload?.project_id ?? (fieldMap as any).projectId;
-          if (pId && pId !== ctx.projectId) {
-            sendJson(res, 404, { error: "dlq_message_not_found" });
-            return;
-          }
+        if (!rawEntries || rawEntries.length === 0 || !rawEntries[0]) {
+          sendJson(res, 404, { error: "dlq_message_not_found" });
+          return;
+        }
+        const fields = rawEntries[0][1];
+        const fieldMap: Record<string, string> = {};
+        for (let i = 0; i < fields.length; i += 2) {
+          fieldMap[fields[i]!] = fields[i + 1]!;
+        }
+        let payload: any = null;
+        if (fieldMap.payload) {
+          try {
+            payload = JSON.parse(fieldMap.payload);
+          } catch {}
+        }
+        const pId = payload?.projectId ?? payload?.project_id ?? (fieldMap as any).projectId;
+        if (pId !== ctx.projectId) {
+          sendJson(res, 404, { error: "dlq_message_not_found" });
+          return;
         }
       }
 

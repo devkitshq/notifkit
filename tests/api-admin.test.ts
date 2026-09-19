@@ -364,9 +364,39 @@ describe("API operational handlers", () => {
       expect(parse(res).error).toBe("dlq_message_not_found");
     });
 
+    it("replay 404s when the entry has no projectId for project-scoped caller", async () => {
+      deps.redis.native.xrange.mockResolvedValue([
+        ["1-0", ["priority", "normal", "payload", "{}"]],
+      ]);
+      const res = createMockRes();
+      await handlers.replayDLQMessage(
+        createMockReq({ id: "1-0" }),
+        res,
+        ctx({ projectId: "proj_1" }),
+      );
+
+      expect(res.statusCode).toBe(404);
+      expect(parse(res).error).toBe("dlq_message_not_found");
+    });
+
+    it("delete 404s when the entry has no projectId for project-scoped caller", async () => {
+      deps.redis.native.xrange.mockResolvedValue([
+        ["1-0", ["priority", "normal", "payload", "{}"]],
+      ]);
+      const res = createMockRes();
+      await handlers.deleteDLQMessage(
+        createMockReq(),
+        res,
+        ctx({ projectId: "proj_1", params: { id: "1-0" } }),
+      );
+
+      expect(res.statusCode).toBe(404);
+      expect(parse(res).error).toBe("dlq_message_not_found");
+    });
+
     it("replay re-publishes onto the priority stream and drops the DLQ entry", async () => {
       deps.redis.native.xrange.mockResolvedValue([
-        ["1-0", ["priority", "critical", "payload", "{}"]],
+        ["1-0", ["priority", "critical", "payload", JSON.stringify({ projectId: "proj_1" })]],
       ]);
       const res = createMockRes();
       await handlers.replayDLQMessage(
@@ -383,13 +413,15 @@ describe("API operational handlers", () => {
         "priority",
         "critical",
         "payload",
-        "{}",
+        JSON.stringify({ projectId: "proj_1" }),
       );
       expect(deps.redis.native.xdel).toHaveBeenCalledWith(STREAMS.DEAD_LETTER, "1-0");
     });
 
     it("replay defaults to the normal stream when no priority is recorded", async () => {
-      deps.redis.native.xrange.mockResolvedValue([["1-0", ["payload", "{}"]]]);
+      deps.redis.native.xrange.mockResolvedValue([
+        ["1-0", ["payload", JSON.stringify({ projectId: "proj_1" })]],
+      ]);
       const res = createMockRes();
       await handlers.replayDLQMessage(createMockReq({ id: "1-0" }), res, ctx());
 
@@ -397,7 +429,7 @@ describe("API operational handlers", () => {
         STREAMS.INBOUND_NORMAL,
         "*",
         "payload",
-        "{}",
+        JSON.stringify({ projectId: "proj_1" }),
       );
     });
 
@@ -411,6 +443,9 @@ describe("API operational handlers", () => {
     });
 
     it("delete removes the entry", async () => {
+      deps.redis.native.xrange.mockResolvedValue([
+        ["1-0", ["payload", JSON.stringify({ projectId: "proj_1" })]],
+      ]);
       const res = createMockRes();
       await handlers.deleteDLQMessage(createMockReq(), res, ctx({ params: { id: "1-0" } }));
 
@@ -427,6 +462,9 @@ describe("API operational handlers", () => {
     });
 
     it("delete surfaces a redis failure as a 500", async () => {
+      deps.redis.native.xrange.mockResolvedValue([
+        ["1-0", ["payload", JSON.stringify({ projectId: "proj_1" })]],
+      ]);
       deps.redis.native.xdel.mockRejectedValue(new Error("redis gone"));
       const res = createMockRes();
       await handlers.deleteDLQMessage(createMockReq(), res, ctx({ params: { id: "1-0" } }));
