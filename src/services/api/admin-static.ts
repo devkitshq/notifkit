@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolve, extname, join } from "node:path";
+import { resolve, extname, join, relative, isAbsolute } from "node:path";
 import { existsSync, statSync, createReadStream } from "node:fs";
 import { request as httpRequest } from "node:http";
 
@@ -155,7 +155,8 @@ export async function handleAdminRequest(
   let filePath = resolve(dashboardDir, subPath);
 
   // Security check: ensure filePath is inside dashboardDir
-  if (!filePath.startsWith(dashboardDir)) {
+  const rel = relative(dashboardDir, filePath);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
     res.writeHead(403, { "Content-Type": "text/plain" });
     res.end("Forbidden");
     return true;

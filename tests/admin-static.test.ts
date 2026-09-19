@@ -1,5 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { handleAdminRequest } from "@/services/api/admin-static.js";
+import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 
 function createMockReq(url: string, method = "GET") {
   return {
@@ -39,6 +41,19 @@ function createMockRes() {
 }
 
 describe("Admin Static Server", () => {
+  const testDir = resolve(process.cwd(), "dist", "admin");
+
+  beforeAll(() => {
+    mkdirSync(testDir, { recursive: true });
+    writeFileSync(resolve(testDir, "index.html"), "<html>Admin</html>", "utf8");
+  });
+
+  afterAll(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
   it("ignores non-admin requests", async () => {
     const req = createMockReq("/v1/notify");
     const res = createMockRes();
@@ -66,5 +81,16 @@ describe("Admin Static Server", () => {
     const handled = await handleAdminRequest(req, res, url);
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
+  });
+
+  it("blocks directory traversal attempts outside dashboardDir", async () => {
+    const req = createMockReq("/admin/assets/../../admin_secret/config.json");
+    const res = createMockRes();
+    const url = new URL("http://localhost:3000/admin/assets/../../admin_secret/config.json");
+    Object.defineProperty(url, "pathname", { value: "/admin/../admin_secret/config.json" });
+
+    const handled = await handleAdminRequest(req, res, url);
+    expect(handled).toBe(true);
+    expect(res.writeHead).toHaveBeenCalledWith(403, { "Content-Type": "text/plain" });
   });
 });
