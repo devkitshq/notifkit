@@ -12,3 +12,4 @@ badge/
 .env
 .codegraph/
 .agents/
+skills-lock.json
