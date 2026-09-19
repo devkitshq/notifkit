@@ -1107,12 +1107,14 @@ export function createHandlers(deps: Deps) {
     };
 
     const streamDepths: Record<string, number> = {};
-    for (const [key, realRedisKey] of Object.entries(streamMap)) {
-      try {
-        const len = await deps.redis.native.xlen(realRedisKey);
-        streamDepths[key] = len;
-      } catch {
-        streamDepths[key] = 0;
+    if (ctx.isAdmin !== false) {
+      for (const [key, realRedisKey] of Object.entries(streamMap)) {
+        try {
+          const len = await deps.redis.native.xlen(realRedisKey);
+          streamDepths[key] = len;
+        } catch {
+          streamDepths[key] = 0;
+        }
       }
     }
 
@@ -1145,7 +1147,9 @@ export function createHandlers(deps: Deps) {
       delivered = Number(deliveredTasksRes[0]?.count ?? 0);
     }
 
-    const failed = streamDepths.DEAD_LETTER || 0;
+    // Project-scoped calls compute failure against their own task count;
+    // cluster-wide administrative calls read the global dead letter queue length.
+    const failed = ctx.projectId ? Math.max(0, total - delivered) : streamDepths.DEAD_LETTER || 0;
     const successRate = total > 0 ? Number(((delivered / total) * 100).toFixed(2)) : 100;
 
     sendJson(res, 200, {

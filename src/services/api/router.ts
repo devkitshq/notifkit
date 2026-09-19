@@ -5,6 +5,7 @@ export interface RouteContext {
   query: URLSearchParams;
   projectId?: string;
   role?: "admin" | "read_only";
+  isAdmin?: boolean;
 }
 
 export type RouteHandler = (

@@ -199,6 +199,34 @@ describe("API operational handlers", () => {
 
       expect(parse(res).deliveryStats).toMatchObject({ total: 0, successRate: 100 });
     });
+
+    it("computes project-scoped failures without exposing global dead letter count", async () => {
+      selectRows = [[{ count: 20 }], [{ count: 18 }]];
+      // Global DEAD_LETTER depth is 3 in mock, but project failure is 20 - 18 = 2
+      const res = createMockRes();
+      await handlers.getSystemMetrics(createMockReq(), res, ctx({ projectId: "proj_1" }));
+
+      const body = parse(res);
+      expect(body.deliveryStats.failed).toBe(2);
+      expect(body.deliveryStats.delivered).toBe(18);
+      expect(body.deliveryStats.total).toBe(20);
+    });
+
+    it("omits global stream queue depths when called by a non-admin tenant key", async () => {
+      selectRows = [[{ count: 10 }], [{ count: 10 }]];
+      const res = createMockRes();
+      await handlers.getSystemMetrics(
+        createMockReq(),
+        res,
+        ctx({ projectId: "proj_1", isAdmin: false }),
+      );
+
+      const body = parse(res);
+      expect(body.streams).toEqual({});
+      expect(body.deliveryStats.total).toBe(10);
+      expect(body.deliveryStats.delivered).toBe(10);
+      expect(body.deliveryStats.failed).toBe(0);
+    });
   });
 
   describe("DLQ", () => {

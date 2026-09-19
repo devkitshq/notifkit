@@ -304,6 +304,7 @@ export async function startApiServer() {
     let projectId: string | undefined = undefined;
     let projectRateLimitRpm = 600;
     let keyRole: "admin" | "read_only" = "admin";
+    let isAdminToken = false;
 
     const isProjectManagement =
       url.pathname === "/v1/projects" || url.pathname.startsWith("/v1/projects/");
@@ -330,7 +331,6 @@ export async function startApiServer() {
         return;
       }
 
-      let isAdminToken = false;
       if (token.startsWith("nk_sess_")) {
         const session = await getAdminSession(redis.native, token);
         if (session) {
@@ -472,6 +472,7 @@ export async function startApiServer() {
         sendJson(res, 401, { error: "unauthorized", message: "Invalid admin token" });
         return;
       }
+      isAdminToken = true;
     }
 
     // The unsubscribe routes skip the block above, and with it the per-project
@@ -530,7 +531,13 @@ export async function startApiServer() {
       return;
     }
 
-    const ctx = { params: route.params, query: url.searchParams, projectId, role: keyRole };
+    const ctx = {
+      params: route.params,
+      query: url.searchParams,
+      projectId,
+      role: keyRole,
+      isAdmin: isAdminToken,
+    };
 
     void Promise.resolve(route.handler(req, res, ctx)).catch((err: unknown) => {
       if (err instanceof HttpError) {
