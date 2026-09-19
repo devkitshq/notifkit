@@ -4,7 +4,7 @@
 
 **You shouldn't have to build a notification system.**
 
-Self-hosted notification infrastructure for product notifications. One API call handles email, SMS, push, and webhooks, with preferences, quiet hours, retries, fallback, scheduling, workflows, and delivery logs built in.
+Self-hosted notification infrastructure for product notifications. One API call handles email, SMS, push, and webhooks, with preferences, quiet hours, retries, fallback, scheduling, workflows, an admin dashboard, and delivery logs built in.
 
 [![npm version](https://img.shields.io/npm/v/notifkit.svg?style=flat-square&color=6366f1)](https://www.npmjs.com/package/notifkit) [![npm downloads](https://img.shields.io/npm/dm/notifkit.svg?style=flat-square&color=6366f1)](https://www.npmjs.com/package/notifkit) [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/devkitshq/notifkit/badges/coverage.json&style=flat-square)](https://github.com/devkitshq/notifkit/actions/workflows/ci.yml) [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178c6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Node.js](https://img.shields.io/badge/node-%3E%3D22.0.0-339933.svg?style=flat-square)](https://nodejs.org) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 
@@ -45,11 +45,12 @@ notifkit is an orchestration engine and a typed SDK.
 
 ```mermaid
 flowchart TD
-    App["Your Application / AI Agent<br/>Typed SDK · REST API · MCP Server"]
+    App["Your Application / AI Agent / Browser<br/>Typed SDK · REST API · MCP Server · Admin Dashboard"]
 
     App -->|"HTTP POST /v1/notify"| API
+    App -->|"HTTP GET /admin"| API
 
-    API["Notifkit API Server<br/>Schema Validation · Auth · Multi-Tenancy<br/>Idempotency Gate · Priority Queue Ingestion"]
+    API["Notifkit API Server<br/>Schema Validation · Auth · Multi-Tenancy<br/>Admin SPA · Priority Queue Ingestion"]
 
     API --> PG
     API --> REDIS
@@ -63,13 +64,12 @@ flowchart TD
         ENGINE --> SCHED["Scheduler<br/>(sendAt / QH)"]
         SCHED --> DELIVER
     end
-
     REDIS -->|"consume"| ENRICH
     ENRICH -.->|"read / write state"| PG
     DELIVER -.->|"delivery logs"| PG
     DELIVER -->|"Dispatch"| PROVIDERS
 
-    PROVIDERS["Provider Transports<br/>Email: Resend · Push: Firebase (FCM) · SMS: Twilio<br/>Chat: Slack, Telegram, Discord, WhatsApp<br/>Webhooks: Custom HTTP"]
+    PROVIDERS["Provider Transports<br/>Email: Resend · Push: Firebase (FCM) · SMS: Twilio<br/>Chat: Slack, Telegram, Discord, WhatsApp<br/>Webhooks: Custom HTTP · Local: Console"]
 
     classDef entry stroke:#6366f1,stroke-width:2px
     classDef store stroke:#0ea5e9,stroke-width:2px
@@ -79,7 +79,7 @@ flowchart TD
     class ENRICH,ENGINE,DELIVER,SCHED work
 ```
 
-`NotifkitServer` runs the HTTP REST API router (`/v1/notify`, `/health`, `/metrics`) and the background worker pipelines: enricher, decision engine, scheduler, and delivery. `NotifkitClient` is the lightweight client your application uses to trigger notifications, sync templates, and manage users over HTTP.
+`NotifkitServer` runs the HTTP REST API router (`/v1/notify`, `/health`, `/metrics`), the built-in admin dashboard (`/admin`), and the background worker pipelines: enricher, decision engine, scheduler, and delivery. `NotifkitClient` is the lightweight client your application uses to trigger notifications, sync templates, and manage users over HTTP.
 
 ### Topologies
 
@@ -94,23 +94,28 @@ npm install notifkit @notifkit/provider-resend
 npm install -D tsx @testcontainers/postgresql @testcontainers/redis
 ```
 
-The two `@testcontainers/*` packages are what notifkit uses to start throwaway PostgreSQL and Redis containers in development. They are imported lazily, only when the server is given neither a `databaseUrl`/`redisUrl` option nor a `DATABASE_URL`/`REDIS_URL` environment variable, so `devDependencies` is the right place for them.
+The `@testcontainers/*` packages start throwaway PostgreSQL and Redis containers for local development when `DATABASE_URL` and `REDIS_URL` are not set.
 
 > [!WARNING]
-> Those containers are for local development only. They are thrown away when the process exits, taking every user, template, delivery log, and queued notification with them. Before you deploy, point notifkit at a real PostgreSQL and Redis — set `DATABASE_URL` and `REDIS_URL` (or pass `databaseUrl` and `redisUrl`) and run with `NODE_ENV=production`, which refuses to start a container and fails loudly if either is missing.
+> In production, point notifkit at real PostgreSQL and Redis instances via `DATABASE_URL` and `REDIS_URL`, and run with `NODE_ENV=production`.
 
 ### 2. Run the engine
 
 `server.ts` starts the API and the worker pipelines. In development it auto-starts those containers, so Docker is the only prerequisite.
 
 ```ts
-// server.ts
 import { NotifkitServer } from "notifkit";
 import { ResendTransport } from "@notifkit/provider-resend";
 
 const server = new NotifkitServer({
-  services: ["all"], // API + enricher + engine + scheduler + delivery
+  services: ["all"],
   port: 3000,
+  databaseUrl: process.env.DATABASE_URL,
+  redisUrl: process.env.REDIS_URL,
+  adminUser: {
+    email: "admin@example.com",
+    password: "supersecretpassword123",
+  },
   providers: [
     new ResendTransport({
       apiKey: process.env.RESEND_API_KEY!,
@@ -125,18 +130,17 @@ console.log("notifkit listening on http://localhost:3000");
 
 `from` is required on `ResendTransport` — it is the sender for any template that does not name its own, and it has to be an address on a domain you have verified in Resend. A template can override it with its own `from`, so one transport can serve both `no-reply@` receipts and `marketing@` campaigns.
 
-`ADMIN_API_KEY` is the root credential. It is read from the environment, it is what mints project API keys in the next step, and without it the project-management routes answer `403`. Any string works locally:
+`adminUser` (or `ADMIN_EMAIL` and `ADMIN_PASSWORD` in the environment) seeds your initial dashboard login credentials in PostgreSQL on startup.
+
+`ADMIN_API_KEY` is the root credential that mints project API keys. In production, use a long random string (`openssl rand -hex 32`). Locally, any string works:
 
 ```bash
 ADMIN_API_KEY=supersecretkey RESEND_API_KEY=re_xxx npx tsx server.ts
 ```
 
-> [!WARNING]
-> `supersecretkey` is a local placeholder. In production this one value can mint keys for every project, so use a long random string kept in your secret store — `openssl rand -hex 32` is enough.
-
 ### 3. Create a project and its API key
 
-Every `/v1/*` route requires a project API key, and only the admin credential can mint one, so this is the single bootstrap step between a running server and your first notification:
+Every `/v1/*` route requires a project API key, and only the admin credential can mint one. You can create projects via the CLI helper or in the admin dashboard under **Projects & API Keys** (`/admin/projects`):
 
 ```bash
 ADMIN_API_KEY=supersecretkey npx notifkit-create-project "my-app"
@@ -149,7 +153,7 @@ NOTIFKIT_PROJECT_ID=1ce67fa1-b4a9-4985-8046-ef6018912b2a
 NOTIFKIT_API_KEY=nk_live_f57c57b76d795cef89e2dbf6b6f352a36…
 ```
 
-The server stores only a SHA-256 hash of the key, so the `nk_live_…` value is printed once and never again — put it in your app's `.env` now. Point the script at another host with `NOTIFKIT_URL`, and mint further keys later with `POST /v1/projects/:id/keys` (`role: "read_only"` there gets you a key that can read but not send).
+The server stores only a SHA-256 hash of the key, so the `nk_live_…` value is printed once and never again — put it in your app's `.env` now. Point the script at another host with `NOTIFKIT_URL`, and mint further keys later with `POST /v1/projects/:id/keys` (`role: "read_only"` there gets you a key that can read but not send) or directly in the web dashboard.
 
 ### 4. Dispatch your first notification
 
@@ -217,47 +221,13 @@ Locally, Docker is the only prerequisite: in development notifkit starts throwaw
 
 notifkit runs in production at my own company, delivering 100K+ notifications a day across email, push, and OTPs. I built it because I needed it and didn't want to spend months rebuilding distributed notification plumbing or pay a SaaS per alert. It runs on your servers, with your provider accounts and your data.
 
-### Reliability and failure testing
+### Reliability and resilience
 
-Every component of the pipeline is tested against failure:
+Every component is tested against failure using real testcontainers:
 
-```mermaid
-flowchart LR
-    S1["Redis Streams"] -->|"Kill Worker (SIGKILL)"| M1["Auto-Claim and Replay"] --> O1["Zero Lost Messages"]
-    S2["Connection Loss"] -->|"Drop DB / Redis"| M2["Auto-Reconnect / Retry"] --> O2["In-Flight State Intact"]
-    S3["10k+ Messages"] -->|"Burst"| M3["Concurrency and Limits"] --> O3["Flat Memory, No Leaks"]
-
-    classDef fault stroke:#ef4444,stroke-width:2px
-    classDef guard stroke:#6366f1,stroke-width:2px
-    classDef result stroke:#22c55e,stroke-width:2px
-    class S1,S2,S3 fault
-    class M1,M2,M3 guard
-    class O1,O2,O3 result
-```
-
-- Crash testing (`tests/chaos/crash.test.ts`): background worker processes are killed with `SIGKILL` during high-throughput message streaming. Consumer group Pending Entries List (PEL) re-claims mean no messages are lost and another worker takes over.
-- Infrastructure recovery (`tests/chaos/recovery.test.ts`): PostgreSQL and Redis connections are severed and restored under live traffic, verifying client reconnection, worker backpressure, and durable state resumption.
-- Load testing (`tests/chaos/load.test.ts`): bursts of 10,000+ notifications across parallel worker pools, checking queue drain speed, sliding-window rate limiters, and memory use over time.
-- Race conditions and concurrency (`tests/race-conditions.test.ts`, `tests/idempotency.test.ts`): concurrent duplicate dispatches, overlapping quiet-hour boundary evaluations, atomic user updates, and 24-hour idempotency key deduplication.
-- Real containers, no mocks: unit, integration, and chaos suites all run against real PostgreSQL and Redis containers via [Testcontainers](https://testcontainers.com).
-
-## What you get
-
-| The problem you don't want to build                  | How notifkit solves it                                               |
-| :--------------------------------------------------- | :------------------------------------------------------------------- |
-| "Should this user receive it?"                       | User preferences, topic opt-outs, and consent gates                  |
-| "Is this a bad time to send?"                        | Timezone-aware quiet hours that defer non-urgent sends               |
-| "What if push fails?"                                | Ordered multi-channel fallback (`push`, then `email`, then `sms`)    |
-| "What if my worker crashes?"                         | Redis Streams consumer groups, retries, and durable idempotency      |
-| "What if an event fires twice?"                      | 24-hour deduplication via idempotency keys                           |
-| "Can I send this later?"                             | Priority scheduling with `sendAt` and cancellation before dispatch   |
-| "Can I send this 3 days after signup?"               | Stateful multi-step workflows with `wait` and `waitForEvent`         |
-| "How do I know what happened?"                       | Queryable delivery logs, Prometheus metrics, and campaign reporting  |
-| "What happens when a provider goes down?"            | Circuit breakers, exponential backoff, and DLQ replay                |
-| "What about bounces and spam complaints?"            | RFC 8058 one-click unsubscribe and automatic hard-bounce suppression |
-| "What if I don't want another SaaS holding my data?" | Fully self-hosted on your PostgreSQL and Redis                       |
-
-You decide what to say. notifkit gets it there.
+- **Crash recovery**: Worker processes killed with `SIGKILL` mid-stream lose zero messages. Redis Streams consumer groups (PEL) auto-reclaim and replay in-flight work.
+- **Connection resilience**: Disconnections from PostgreSQL or Redis trigger automatic backpressure and reconnects without dropping state.
+- **High throughput & concurrency**: 10,000+ notification bursts with sliding-window rate limiters, flat memory profiles, and 24-hour idempotency deduplication.
 
 ## Scope
 
@@ -315,22 +285,23 @@ It can read notifkit's API from there, find ad-hoc notification code in your rep
 
 ## Feature matrix
 
-|                     |                                                                                        |
-| :------------------ | :------------------------------------------------------------------------------------- |
-| **Channels**        | `email`, `sms`, `push`, `webhook`, `telegram`, `discord`, `whatsapp`, `slack`          |
-| **Targeting**       | A user, a list of users, a segment, or a topic                                         |
-| **Priorities**      | `low`, `normal`, `high`, `critical`, on separate stream lanes                          |
-| **Scheduling**      | Future sends with `sendAt`, quiet-hours deferral, cancellation                         |
-| **Preferences**     | Per-user channel and topic opt-outs, quiet hours, contact-level overrides              |
-| **Workflows**       | Multi-step sequences with `wait`, `waitForEvent`, and `notify` steps                   |
-| **Reliability**     | Redis Streams, 24h idempotency, retries, DLQ, provider circuit breakers                |
-| **Templates**       | `{{var}}` interpolation with destination-aware escaping                                |
-| **AI**              | Optional LLM augmentation before render via the Vercel AI SDK                          |
-| **Multi-tenancy**   | Projects with isolated keys, data, and rate limits                                     |
-| **Consent**         | RFC 8058 one-click unsubscribe; complaints and hard bounces suppress automatically     |
-| **Reporting**       | Campaign labels with delivery and engagement totals                                    |
-| **Agent operation** | MCP server for sending, triage, campaigns, templates, workflows, and system operations |
-| **Observability**   | Prometheus `/metrics`, `/health`, `/live`, `/ready`, and queryable delivery logs       |
+| Feature             | Capabilities                                                                             |
+| :------------------ | :--------------------------------------------------------------------------------------- |
+| **Channels**        | `email`, `sms`, `push`, `webhook`, `telegram`, `discord`, `whatsapp`, `slack`, `console` |
+| **Admin Dashboard** | Built-in SPA at `/admin` for live feeds, DLQ triage, queue metrics, workflows, templates |
+| **Targeting**       | A user, a list of users, a segment, or a topic                                           |
+| **Priorities**      | `low`, `normal`, `high`, `critical`, on separate stream lanes                            |
+| **Scheduling**      | Future sends with `sendAt`, quiet-hours deferral, cancellation                           |
+| **Preferences**     | Per-user channel and topic opt-outs, quiet hours, contact-level overrides                |
+| **Workflows**       | Multi-step sequences with `wait`, `waitForEvent`, and `notify` steps                     |
+| **Reliability**     | Redis Streams, 24h idempotency, retries, DLQ, provider circuit breakers                  |
+| **Templates**       | `{{var}}` interpolation with destination-aware escaping                                  |
+| **AI**              | Optional LLM augmentation before render via the Vercel AI SDK                            |
+| **Multi-tenancy**   | Projects with isolated keys, data, and rate limits                                       |
+| **Consent**         | RFC 8058 one-click unsubscribe; complaints and hard bounces suppress automatically       |
+| **Reporting**       | Campaign labels with delivery and engagement totals                                      |
+| **Agent operation** | MCP server for sending, triage, campaigns, templates, workflows, and system operations   |
+| **Observability**   | Prometheus `/metrics`, `/health`, `/live`, `/ready`, and queryable delivery logs         |
 
 ## Providers
 
@@ -343,6 +314,7 @@ Bring your own provider accounts. First-party packages:
 - [`@notifkit/provider-telegram`](./packages/provider-telegram): messages via a Telegram bot
 - [`@notifkit/provider-discord`](./packages/provider-discord): messages via a Discord webhook
 - [`@notifkit/provider-whatsapp`](./packages/provider-whatsapp): messages via Meta's WhatsApp Cloud API
+- [`@notifkit/provider-console`](./packages/provider-console): console transport for local development and testing
 
 For anything else, implement a `Transport`:
 
@@ -357,11 +329,32 @@ class MyTransport implements Transport {
 
 The keys, the billing, and the deliverability stay yours.
 
+## Admin dashboard
+
+notifkit includes a web console served directly at `/admin` for operational management:
+
+- **Live activity feed & logs**: Real-time SSE stream for worker transitions, delivery histories, and error diagnostics.
+- **Queue analytics & DLQ triage**: Redis Streams lane gauges (`low`, `normal`, `high`, `critical`), message replay, and dead-letter queue management.
+- **Workflows & template studio**: Visual multi-step sequence viewer (`wait`, `waitForEvent`, `notify`) with execution step tracing and live template previews.
+- **Users, projects & API keys**: Manage recipient preferences, quiet hours, projects, and scoped API keys (`admin` or `read_only`).
+
+### Accessing and running the dashboard
+
+Once the server is running, visit `http://localhost:3000/admin` and sign in with the admin credentials you configured.
+
+You can also create or update admin users at any time via the CLI:
+
+```bash
+npx notifkit-create-admin admin@example.com supersecretpassword123
+```
+
+In production, the pre-built dashboard bundle in `dashboard/dist` is served automatically. In development, run `npm --prefix dashboard run dev` to start the Vite development server with hot module replacement (the API server automatically proxies `/admin` requests to port 5173).
+
 ## Documentation
 
 Everything lives at [**notifkit.dev/docs**](https://notifkit.dev/docs/).
 
-|                                                                                |                                                          |
+| Guide                                                                          | Description                                              |
 | :----------------------------------------------------------------------------- | :------------------------------------------------------- |
 | [Quickstart](https://notifkit.dev/docs/quickstart.html)                        | Install to first delivered notification                  |
 | [How it works](https://notifkit.dev/docs/concepts.html)                        | Core concepts and the notification pipeline              |
@@ -388,6 +381,7 @@ Issues and pull requests are welcome. Stars help other people find the project.
 ```bash
 npm install
 npm run build
+npm run build:dashboard
 npm test
 ```
 

@@ -10,6 +10,11 @@ export interface NotifkitOptions {
   port?: number;
   logLevel?: "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
   nodeEnv?: "development" | "test" | "production";
+  adminUser?: {
+    email: string;
+    password: string;
+    username?: string;
+  };
   services: (
     "api" | "delivery" | "engine" | "enricher" | "scheduler" | "ai" | "workflow" | "events" | "all"
   )[];
@@ -69,6 +74,11 @@ export class NotifkitServer extends EventEmitter {
     if (this.options.port) process.env.PORT = String(this.options.port);
     if (this.options.logLevel) process.env.LOG_LEVEL = this.options.logLevel;
     if (this.options.nodeEnv) process.env.NODE_ENV = this.options.nodeEnv;
+    if (this.options.adminUser?.email) process.env.ADMIN_EMAIL = this.options.adminUser.email;
+    if (this.options.adminUser?.password)
+      process.env.ADMIN_PASSWORD = this.options.adminUser.password;
+    if (this.options.adminUser?.username)
+      process.env.ADMIN_USERNAME = this.options.adminUser.username;
     if (this.options.workerConcurrency)
       process.env.WORKER_CONCURRENCY = String(this.options.workerConcurrency);
     if (this.options.redisOptions?.maxQueueLength)
