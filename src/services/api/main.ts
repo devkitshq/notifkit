@@ -216,6 +216,15 @@ let server: ReturnType<typeof createServer>;
 
 export async function startApiServer() {
   logger = createLogger({ name: "api", level: config.LOG_LEVEL });
+
+  if (config.NODE_ENV === "production" && !config.UNSUBSCRIBE_SECRET) {
+    logger.fatal(
+      "UNSUBSCRIBE_SECRET is required in production. Without it, all unsubscribe links " +
+        "return 400 and opt-outs are silently dropped. Set a random string of 32+ characters and restart.",
+    );
+    process.exit(1);
+  }
+
   redis = new RedisClient({ url: config.REDIS_URL, name: "api", logger });
   const dbData = createDatabase({ url: config.DATABASE_URL, applicationName: "api", logger });
   sql = dbData.sql;
