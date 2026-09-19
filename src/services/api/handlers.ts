@@ -1162,7 +1162,7 @@ export function createHandlers(deps: Deps) {
   async function getDLQMessages(
     _req: IncomingMessage,
     res: ServerResponse,
-    _ctx: RouteContext,
+    ctx: RouteContext,
   ): Promise<void> {
     try {
       const rawEntries = await deps.redis.native.xrevrange(
@@ -1170,22 +1170,38 @@ export function createHandlers(deps: Deps) {
         "+",
         "-",
         "COUNT",
-        "50",
+        "100",
       );
-      const messages = (rawEntries || []).map(([id, fields]: [string, string[]]) => {
+      const allMessages = (rawEntries || []).map(([id, fields]: [string, string[]]) => {
         const fieldMap: Record<string, string> = {};
         for (let i = 0; i < fields.length; i += 2) {
           fieldMap[fields[i]!] = fields[i + 1]!;
         }
+        let payload: any = fieldMap;
+        if (fieldMap.payload) {
+          try {
+            payload = JSON.parse(fieldMap.payload);
+          } catch {
+            payload = fieldMap.payload;
+          }
+        }
         return {
           id,
           eventType: fieldMap.eventType || fieldMap.event_type || "unknown",
-          payload: fieldMap.payload ? JSON.parse(fieldMap.payload) : fieldMap,
+          payload,
           error: fieldMap.error || fieldMap.reason || "Dead letter payload",
           timestamp: fieldMap.timestamp || new Date().toISOString(),
         };
       });
-      sendJson(res, 200, { messages });
+
+      const messages = ctx.projectId
+        ? allMessages.filter((m) => {
+            const pId = m.payload?.projectId ?? m.payload?.project_id ?? (m as any).projectId;
+            return !pId || pId === ctx.projectId;
+          })
+        : allMessages;
+
+      sendJson(res, 200, { messages: messages.slice(0, 50) });
     } catch {
       sendJson(res, 200, { messages: [] });
     }
@@ -1195,7 +1211,7 @@ export function createHandlers(deps: Deps) {
   async function replayDLQMessage(
     req: IncomingMessage,
     res: ServerResponse,
-    _ctx: RouteContext,
+    ctx: RouteContext,
   ): Promise<void> {
     const body = (await readJsonBody(req).catch(() => ({}))) as any;
     const messageId = body?.id;
@@ -1216,6 +1232,21 @@ export function createHandlers(deps: Deps) {
       const fieldMap: Record<string, string> = {};
       for (let i = 0; i < fields.length; i += 2) {
         fieldMap[fields[i]!] = fields[i + 1]!;
+      }
+
+      let payload: any = null;
+      if (fieldMap.payload) {
+        try {
+          payload = JSON.parse(fieldMap.payload);
+        } catch {}
+      }
+
+      if (ctx.projectId) {
+        const pId = payload?.projectId ?? payload?.project_id ?? (fieldMap as any).projectId;
+        if (pId && pId !== ctx.projectId) {
+          sendJson(res, 404, { error: "dlq_message_not_found" });
+          return;
+        }
       }
 
       const priority = fieldMap.priority || "normal";
@@ -1246,6 +1277,32 @@ export function createHandlers(deps: Deps) {
     if (!messageId) return sendJson(res, 400, { error: "missing_id" });
 
     try {
+      if (ctx.projectId) {
+        const rawEntries = await deps.redis.native.xrange(
+          STREAMS.DEAD_LETTER,
+          messageId,
+          messageId,
+        );
+        if (rawEntries && rawEntries.length > 0 && rawEntries[0]) {
+          const fields = rawEntries[0][1];
+          const fieldMap: Record<string, string> = {};
+          for (let i = 0; i < fields.length; i += 2) {
+            fieldMap[fields[i]!] = fields[i + 1]!;
+          }
+          let payload: any = null;
+          if (fieldMap.payload) {
+            try {
+              payload = JSON.parse(fieldMap.payload);
+            } catch {}
+          }
+          const pId = payload?.projectId ?? payload?.project_id ?? (fieldMap as any).projectId;
+          if (pId && pId !== ctx.projectId) {
+            sendJson(res, 404, { error: "dlq_message_not_found" });
+            return;
+          }
+        }
+      }
+
       await deps.redis.native.xdel(STREAMS.DEAD_LETTER, messageId);
       sendJson(res, 200, { success: true });
     } catch (err: any) {

@@ -219,7 +219,7 @@ describe("API operational handlers", () => {
         ],
       ]);
       const res = createMockRes();
-      await handlers.getDLQMessages(createMockReq(), res, ctx());
+      await handlers.getDLQMessages(createMockReq(), res, ctx({ projectId: undefined }));
 
       expect(parse(res).messages[0]).toEqual({
         id: "1-0",
@@ -230,9 +230,46 @@ describe("API operational handlers", () => {
       });
     });
 
+    it("filters out DLQ messages belonging to other projects", async () => {
+      deps.redis.native.xrevrange.mockResolvedValue([
+        [
+          "1-0",
+          [
+            "eventType",
+            "notification.requested",
+            "payload",
+            JSON.stringify({ projectId: "proj_1", text: "mine" }),
+            "error",
+            "boom",
+            "timestamp",
+            "2026-01-01T00:00:00.000Z",
+          ],
+        ],
+        [
+          "2-0",
+          [
+            "eventType",
+            "notification.requested",
+            "payload",
+            JSON.stringify({ projectId: "proj_other", text: "other" }),
+            "error",
+            "boom",
+            "timestamp",
+            "2026-01-01T00:00:00.000Z",
+          ],
+        ],
+      ]);
+      const res = createMockRes();
+      await handlers.getDLQMessages(createMockReq(), res, ctx({ projectId: "proj_1" }));
+
+      const msgs = parse(res).messages;
+      expect(msgs).toHaveLength(1);
+      expect(msgs[0].id).toBe("1-0");
+    });
+
     it("falls back across the alternate field names", async () => {
       deps.redis.native.xrevrange.mockResolvedValue([
-        ["2-0", ["event_type", "legacy.event", "reason", "legacy reason"]],
+        ["2-0", ["event_type", "legacy.event", "reason", "legacy reason", "projectId", "proj_1"]],
       ]);
       const res = createMockRes();
       await handlers.getDLQMessages(createMockReq(), res, ctx());
@@ -269,12 +306,46 @@ describe("API operational handlers", () => {
       expect(parse(res).error).toBe("dlq_message_not_found");
     });
 
+    it("replay 404s when the entry belongs to a different project", async () => {
+      deps.redis.native.xrange.mockResolvedValue([
+        ["1-0", ["priority", "normal", "payload", JSON.stringify({ projectId: "proj_other" })]],
+      ]);
+      const res = createMockRes();
+      await handlers.replayDLQMessage(
+        createMockReq({ id: "1-0" }),
+        res,
+        ctx({ projectId: "proj_1" }),
+      );
+
+      expect(res.statusCode).toBe(404);
+      expect(parse(res).error).toBe("dlq_message_not_found");
+    });
+
+    it("delete 404s when the entry belongs to a different project", async () => {
+      deps.redis.native.xrange.mockResolvedValue([
+        ["1-0", ["priority", "normal", "payload", JSON.stringify({ projectId: "proj_other" })]],
+      ]);
+      const res = createMockRes();
+      await handlers.deleteDLQMessage(
+        createMockReq(),
+        res,
+        ctx({ projectId: "proj_1", params: { id: "1-0" } }),
+      );
+
+      expect(res.statusCode).toBe(404);
+      expect(parse(res).error).toBe("dlq_message_not_found");
+    });
+
     it("replay re-publishes onto the priority stream and drops the DLQ entry", async () => {
       deps.redis.native.xrange.mockResolvedValue([
         ["1-0", ["priority", "critical", "payload", "{}"]],
       ]);
       const res = createMockRes();
-      await handlers.replayDLQMessage(createMockReq({ id: "1-0" }), res, ctx());
+      await handlers.replayDLQMessage(
+        createMockReq({ id: "1-0" }),
+        res,
+        ctx({ projectId: "proj_1" }),
+      );
 
       expect(res.statusCode).toBe(200);
       expect(parse(res)).toEqual({ success: true, replayedId: "1-0" });
