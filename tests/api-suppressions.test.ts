@@ -272,6 +272,18 @@ describe("API compliance handlers", () => {
       expect(mockDb.deletes[0]!.table).toBe(suppressions);
     });
 
+    it("handles targets with special characters correctly", async () => {
+      const res = createMockRes();
+      await handlers.deleteSuppression(
+        createMockReq(),
+        res,
+        ctx({ params: { channel: "email", target: "alice+tag@example.com" } }),
+      );
+
+      expect(res.statusCode).toBe(204);
+      expect(mockDb.deletes).toHaveLength(1);
+    });
+
     it("400s when the channel or target segment is missing", async () => {
       const res = createMockRes();
       await handlers.deleteSuppression(createMockReq(), res, ctx({ params: { channel: "email" } }));

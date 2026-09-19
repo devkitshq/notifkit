@@ -1840,7 +1840,7 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
         and(
           eq(suppressions.projectId, ctx.projectId!),
           eq(suppressions.channel, channel as any),
-          eq(suppressions.target, normaliseTarget(decodeURIComponent(target))),
+          eq(suppressions.target, normaliseTarget(target)),
         ),
       );
 
