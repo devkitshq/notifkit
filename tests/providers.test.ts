@@ -1369,6 +1369,25 @@ describe("DiscordTransport (Discord Provider)", () => {
     });
   });
 
+  it.each([
+    ["http://169.254.169.254/latest/meta-data"],
+    ["http://localhost:6379/"],
+    ["https://attacker.example.com/api/webhooks/123/token"],
+    ["https://discord.com/api/users/@me"],
+  ])(
+    "rejects invalid webhook URL %s without dispatching fetch (SSRF protection)",
+    async (badUrl) => {
+      const fetchMock = stubDiscord({ id: "m-evil" });
+
+      const result = await new DiscordTransport().send(discordTask({ destination: badUrl }));
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result.invalidToken).toBe(true);
+      expect(result.error).toContain("Invalid Discord webhook URL");
+    },
+  );
+
   it("returns an empty provider id when the response carries no JSON", async () => {
     const fn = vi.fn().mockResolvedValue({
       status: 200,

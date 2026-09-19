@@ -17,6 +17,21 @@ export interface DiscordTransportOptions {
   limits?: { limit: number; windowSeconds: number };
 }
 
+const ALLOWED_DISCORD_HOSTS = new Set([
+  "discord.com",
+  "discordapp.com",
+  "ptb.discord.com",
+  "canary.discord.com",
+]);
+
+export function isValidDiscordWebhookUrl(url: URL): boolean {
+  if (url.protocol !== "https:") return false;
+  const hostname = url.hostname.toLowerCase();
+  if (!ALLOWED_DISCORD_HOSTS.has(hostname)) return false;
+  if (!url.pathname.startsWith("/api/webhooks/")) return false;
+  return true;
+}
+
 export class DiscordTransport implements Transport {
   readonly channel = "discord" as const;
   readonly limits?: { limit: number; windowSeconds: number };
@@ -69,6 +84,19 @@ export class DiscordTransport implements Transport {
       // no providerMessageId to record in the delivery log.
       const url = new URL(webhookUrl);
       url.searchParams.set("wait", "true");
+
+      if (!isValidDiscordWebhookUrl(url)) {
+        this.logger?.warn(
+          { taskId: task.taskId, destination: webhookUrl },
+          "Invalid Discord webhook URL rejected (SSRF protection)",
+        );
+        return {
+          success: false,
+          invalidToken: true,
+          error:
+            "Invalid Discord webhook URL: destination must be an https://discord.com/api/webhooks/ URL",
+        };
+      }
 
       const res = await fetch(url, {
         method: "POST",
