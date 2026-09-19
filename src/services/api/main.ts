@@ -61,6 +61,20 @@ export function extractAuthToken(req: Pick<IncomingMessage, "headers">): string 
   return undefined;
 }
 
+/**
+ * Resolves client IP address, respecting reverse proxy headers only when TRUST_PROXY is enabled.
+ */
+export function getClientIp(req: IncomingMessage, trustProxy: boolean): string {
+  if (trustProxy) {
+    const forwarded = req.headers["x-forwarded-for"];
+    if (typeof forwarded === "string") {
+      const first = forwarded.split(",")[0]?.trim();
+      if (first) return first;
+    }
+  }
+  return req.socket.remoteAddress || "unknown";
+}
+
 async function handleCreateProject(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const parsed = z.object({ name: z.string().min(1) }).safeParse(await readJsonBody(req));
   if (!parsed.success) {
@@ -130,7 +144,42 @@ async function handleHealth(_req: IncomingMessage, res: ServerResponse): Promise
   sendJson(res, statusCode, response);
 }
 
-async function handleMetrics(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleMetrics(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const remoteIp = req.socket.remoteAddress ?? "";
+  const isLoopback =
+    remoteIp === "127.0.0.1" ||
+    remoteIp === "::1" ||
+    remoteIp === "::ffff:127.0.0.1" ||
+    remoteIp === "localhost";
+
+  let authorized = isLoopback;
+  if (!authorized) {
+    const token = extractAuthToken(req);
+    if (token) {
+      if (token.startsWith("nk_sess_") && redis?.native) {
+        const session = await getAdminSession(redis.native, token);
+        if (session) authorized = true;
+      } else if (config.ADMIN_API_KEY) {
+        const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
+        const providedBuffer = Buffer.from(token);
+        if (
+          expectedBuffer.length === providedBuffer.length &&
+          timingSafeEqual(expectedBuffer, providedBuffer)
+        ) {
+          authorized = true;
+        }
+      }
+    }
+  }
+
+  if (!authorized) {
+    sendJson(res, 401, {
+      error: "unauthorized",
+      message: "Metrics endpoint requires admin credentials",
+    });
+    return;
+  }
+
   const registry = getMetricsRegistry();
   res.writeHead(200, { "Content-Type": registry.contentType });
   res.end(await registry.metrics());
@@ -480,10 +529,7 @@ export async function startApiServer() {
     // an open endpoint cannot be used to hammer the process. Generous, because
     // a shared corporate egress IP can legitimately produce a burst.
     if (isPublicUnsubscribe) {
-      const clientIp =
-        (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ||
-        req.socket.remoteAddress ||
-        "unknown";
+      const clientIp = getClientIp(req, Boolean(config.TRUST_PROXY));
       try {
         const key = `rate-limit:api:unsub:${clientIp}`;
         const count = await redis.native.incr(key);
@@ -503,10 +549,7 @@ export async function startApiServer() {
     // The login route is unauthenticated and CPU-intensive due to password hashing (scrypt).
     // Throttle login attempts per IP to prevent credential brute-forcing and CPU exhaustion.
     if (isPublicAuth) {
-      const clientIp =
-        (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ||
-        req.socket.remoteAddress ||
-        "unknown";
+      const clientIp = getClientIp(req, Boolean(config.TRUST_PROXY));
       try {
         const key = `rate-limit:api:auth:${clientIp}`;
         const count = await redis.native.incr(key);

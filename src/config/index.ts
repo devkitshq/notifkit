@@ -65,6 +65,11 @@ export const baseConfigSchema = z.object({
    * instead, which costs far more than the key ever protected.
    */
   UNSUBSCRIBE_SECRET: z.string().min(16).optional(),
+  /**
+   * When true, trusts X-Forwarded-For headers from reverse proxies for client IP resolution.
+   * Defaults to false to prevent client-spoofed headers from bypassing rate limits.
+   */
+  TRUST_PROXY: z.coerce.boolean().default(false),
 });
 
 export type BaseConfig = z.infer<typeof baseConfigSchema>;

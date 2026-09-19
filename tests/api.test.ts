@@ -35,7 +35,7 @@ function createMockRes() {
   return res;
 }
 
-import { extractAuthToken } from "@/services/api/main.js";
+import { extractAuthToken, getClientIp } from "@/services/api/main.js";
 
 describe("extractAuthToken", () => {
   it("extracts Bearer token from authorization header", () => {
@@ -79,6 +79,37 @@ describe("extractAuthToken", () => {
       },
     };
     expect(extractAuthToken(req as any)).toBe("bearer-key");
+  });
+});
+
+describe("getClientIp", () => {
+  it("ignores X-Forwarded-For when trustProxy is false", () => {
+    const req = {
+      headers: { "x-forwarded-for": "198.51.100.1" },
+      socket: { remoteAddress: "203.0.113.195" },
+    };
+    expect(getClientIp(req as any, false)).toBe("203.0.113.195");
+  });
+
+  it("respects X-Forwarded-For when trustProxy is true", () => {
+    const req = {
+      headers: { "x-forwarded-for": "198.51.100.1, 10.0.0.1" },
+      socket: { remoteAddress: "10.0.0.1" },
+    };
+    expect(getClientIp(req as any, true)).toBe("198.51.100.1");
+  });
+
+  it("falls back to remoteAddress if X-Forwarded-For is missing even when trustProxy is true", () => {
+    const req = {
+      headers: {},
+      socket: { remoteAddress: "203.0.113.195" },
+    };
+    expect(getClientIp(req as any, true)).toBe("203.0.113.195");
+  });
+
+  it("returns unknown when no remoteAddress or forwarded header exists", () => {
+    const req = { headers: {}, socket: {} };
+    expect(getClientIp(req as any, false)).toBe("unknown");
   });
 });
 
