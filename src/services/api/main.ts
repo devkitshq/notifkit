@@ -329,8 +329,28 @@ export async function startApiServer() {
   server.keepAliveTimeout = 5_000;
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    // Add CORS headers for browser clients (like the Next.js dashboard)
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    const origin = req.headers["origin"] as string | undefined;
+    const allowedOrigins = (config.CORS_ORIGIN ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const isSessionRoute =
+      url.pathname.startsWith("/v1/auth/") ||
+      url.pathname === "/v1/projects" ||
+      url.pathname.startsWith("/v1/projects/") ||
+      url.pathname.startsWith("/v1/system/") ||
+      url.pathname.startsWith("/v1/dlq");
+
+    if (isSessionRoute) {
+      if (origin && allowedOrigins.includes(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Vary", "Origin");
+      }
+    } else {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+    }
+
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
     res.setHeader(
       "Access-Control-Allow-Headers",
@@ -342,8 +362,6 @@ export async function startApiServer() {
       res.end();
       return;
     }
-
-    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
     if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
       const handled = await handleAdminRequest(req, res, url);

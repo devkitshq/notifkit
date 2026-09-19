@@ -70,6 +70,10 @@ export const baseConfigSchema = z.object({
    * Defaults to false to prevent client-spoofed headers from bypassing rate limits.
    */
   TRUST_PROXY: z.coerce.boolean().default(false),
+  /**
+   * Comma-separated list of allowed origins for CORS on session-authenticated admin routes.
+   */
+  CORS_ORIGIN: z.string().optional(),
 });
 
 export type BaseConfig = z.infer<typeof baseConfigSchema>;
