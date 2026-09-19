@@ -66,7 +66,12 @@ export class Router {
         const seg = route.segments[i]!;
         const part = parts[i]!;
         if (seg.startsWith(":")) {
-          params[seg.slice(1)] = decodeURIComponent(part);
+          try {
+            params[seg.slice(1)] = decodeURIComponent(part);
+          } catch {
+            ok = false;
+            break;
+          }
         } else if (seg !== part) {
           ok = false;
           break;

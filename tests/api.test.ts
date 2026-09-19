@@ -1155,4 +1155,13 @@ describe("Router param decoding", () => {
     expect(router.match("GET", "/v1/users/123/extra")).toBeNull();
     expect(router.match("POST", "/v1/users/123")).toBeNull();
   });
+
+  it("handles malformed URI parameters gracefully without throwing", () => {
+    const router = new Router();
+    const handler = vi.fn();
+    router.get("/v1/users/:id", handler);
+
+    expect(router.match("GET", "/v1/users/%FF")).toBeNull();
+    expect(router.match("GET", "/v1/users/%c0%af")).toBeNull();
+  });
 });
