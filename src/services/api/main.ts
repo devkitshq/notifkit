@@ -499,6 +499,30 @@ export async function startApiServer() {
       }
     }
 
+    // The login route is unauthenticated and CPU-intensive due to password hashing (scrypt).
+    // Throttle login attempts per IP to prevent credential brute-forcing and CPU exhaustion.
+    if (isPublicAuth) {
+      const clientIp =
+        (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ||
+        req.socket.remoteAddress ||
+        "unknown";
+      try {
+        const key = `rate-limit:api:auth:${clientIp}`;
+        const count = await redis.native.incr(key);
+        if (count === 1) await redis.native.expire(key, 60);
+        if (count > 10) {
+          res.setHeader("Retry-After", "60");
+          sendJson(res, 429, {
+            error: "too_many_requests",
+            message: "Too many login attempts. Please try again later.",
+          });
+          return;
+        }
+      } catch (err) {
+        logger.warn({ err }, "auth rate limit unavailable — allowing request");
+      }
+    }
+
     const route = router.match(req.method ?? "GET", url.pathname);
 
     if (!route) {

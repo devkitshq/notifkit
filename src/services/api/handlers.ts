@@ -17,6 +17,7 @@ import {
   createAdminSession,
   revokeAdminSession,
   getAdminSession,
+  DUMMY_PASSWORD_HASH,
 } from "@/services/auth/index.js";
 import type { Preferences } from "@/contracts/index.js";
 import {
@@ -1853,13 +1854,9 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
 
     const { identifier, password } = parsed.data;
     const user = await deps.adminUserRepo.findByEmailOrUsername(identifier);
-    if (!user) {
-      sendJson(res, 401, { error: "unauthorized", message: "Invalid credentials" });
-      return;
-    }
-
-    const isValid = await verifyPassword(password, user.passwordHash);
-    if (!isValid) {
+    const targetHash = user ? user.passwordHash : DUMMY_PASSWORD_HASH;
+    const isValid = await verifyPassword(password, targetHash);
+    if (!user || !isValid) {
       sendJson(res, 401, { error: "unauthorized", message: "Invalid credentials" });
       return;
     }

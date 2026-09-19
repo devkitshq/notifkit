@@ -8,6 +8,14 @@ const scryptAsync = promisify(scrypt);
 const DEFAULT_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
 const SESSION_PREFIX = "notif:session:";
 
+/**
+ * Pre-computed dummy hash conforming to salt(16 bytes hex):hash(64 bytes hex).
+ * Used during authentication failure to equalize execution time and prevent
+ * user enumeration via scrypt timing side-channels.
+ */
+export const DUMMY_PASSWORD_HASH =
+  "00000000000000000000000000000000:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
+
 export interface AdminSession {
   token: string;
   adminId: string;

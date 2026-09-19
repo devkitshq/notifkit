@@ -5,6 +5,7 @@ import {
   createAdminSession,
   getAdminSession,
   revokeAdminSession,
+  DUMMY_PASSWORD_HASH,
 } from "@/services/auth/index.js";
 import { createHandlers } from "@/services/api/handlers.js";
 
@@ -54,6 +55,10 @@ describe("Password Hashing & Verification", () => {
 
   it("fails verification on malformed hash", async () => {
     expect(await verifyPassword("password", "invalid_hash_string")).toBe(false);
+  });
+
+  it("fails verification on dummy hash without throwing", async () => {
+    expect(await verifyPassword("password", DUMMY_PASSWORD_HASH)).toBe(false);
   });
 });
 
