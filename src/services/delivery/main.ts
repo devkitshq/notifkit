@@ -350,8 +350,6 @@ export class DeliveryWorker extends BaseWorker {
     }
 
     try {
-      publishPromises.push(this.outboxInsertProcessor.add(task).then(() => {}));
-
       publishPromises.push(
         this.eventProcessor.add(
           buildStreamEvent(
@@ -419,6 +417,14 @@ export class DeliveryWorker extends BaseWorker {
         }
 
         if (lastResult.invalidToken) {
+          publishPromises.push(
+            this.outboxUpdateProcessor.add({
+              taskId: task.taskId,
+              channel: task.channel,
+              destination: task.destination,
+              providerMessageId: null,
+            }),
+          );
           await this.contactRepo.deactivate(
             task.projectId,
             task.recipientId,
@@ -527,6 +533,15 @@ export class DeliveryWorker extends BaseWorker {
             task.projectId,
           );
           metrics.deliveryFailed.inc({ channel: task.channel, reason: "push_error" });
+
+          publishPromises.push(
+            this.outboxUpdateProcessor.add({
+              taskId: task.taskId,
+              channel: task.channel,
+              destination: task.destination,
+              providerMessageId: null,
+            }),
+          );
 
           publishPromises.push(
             this.eventProcessor.add(
@@ -645,6 +660,15 @@ export class DeliveryWorker extends BaseWorker {
           );
         } else {
           publishPromises.push(
+            this.outboxUpdateProcessor.add({
+              taskId: task.taskId,
+              channel: task.channel,
+              destination: task.destination,
+              providerMessageId: null,
+            }),
+          );
+
+          publishPromises.push(
             this.eventProcessor.add(
               buildStreamEvent(
                 "notification.failed",
@@ -704,7 +728,9 @@ export class DeliveryWorker extends BaseWorker {
       });
       const flushTime = Date.now() - tFlushStart;
 
-      await this.idempotency.markProcessed(idempotencyKey);
+      void this.idempotency.markProcessed(idempotencyKey).catch((err: any) => {
+        this.logger.warn({ err, taskId: task.taskId }, "failed to upgrade idempotency TTL");
+      });
 
       const t = ((global as any)._telemetry = (global as any)._telemetry || {
         count: 0,
@@ -744,13 +770,15 @@ export async function startDeliveryWorker() {
   const dbData = createDatabase({ url: config.DATABASE_URL, applicationName: "delivery", logger });
   sql = dbData.sql;
   db = dbData.db;
+  const consumerId = `delivery-${process.env.HOSTNAME || process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   consumer = new StreamConsumer({
     redis: redis.native,
     stream: OUTBOUND_STREAMS as unknown as StreamName[],
     group: CONSUMER_GROUPS.DELIVERY,
-    consumer: `delivery-${process.pid}`,
+    consumer: consumerId,
     dlqStream: STREAMS.DEAD_LETTER,
     batchSize: config.WORKER_CONCURRENCY,
+    bufferAcks: true,
     logger,
   });
 
@@ -764,7 +792,7 @@ export async function startDeliveryWorker() {
     redis: redis.native,
     stream: OUTBOUND_STREAMS as unknown as StreamName[],
     group: CONSUMER_GROUPS.DELIVERY,
-    consumer: `delivery-${process.pid}`,
+    consumer: consumerId,
     logger,
   });
 

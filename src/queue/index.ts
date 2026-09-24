@@ -188,6 +188,8 @@ export interface StreamConsumerOptions {
   logger?: Logger;
   batchSize?: number;
   blockMs?: number;
+  bufferAcks?: boolean;
+  ackFlushMs?: number;
 }
 
 type XReadGroupResult = Array<[string, Array<[string, string[] | null]>]> | null;
@@ -202,6 +204,10 @@ export class StreamConsumer {
   private readonly logger?: Logger;
   private readonly batchSize: number;
   private readonly blockMs: number;
+  private readonly bufferAcks: boolean;
+  private readonly ackFlushMs: number;
+  private ackBuffers = new Map<string, string[]>();
+  private ackTimer: NodeJS.Timeout | null = null;
   private running = false;
 
   constructor({
@@ -213,6 +219,8 @@ export class StreamConsumer {
     logger,
     batchSize = 10,
     blockMs = 5_000,
+    bufferAcks = false,
+    ackFlushMs = 5,
   }: StreamConsumerOptions) {
     this.redis = redis;
     this.blockingRedis = redis.duplicate();
@@ -223,6 +231,8 @@ export class StreamConsumer {
     this.logger = logger;
     this.batchSize = batchSize;
     this.blockMs = blockMs;
+    this.bufferAcks = bufferAcks;
+    this.ackFlushMs = ackFlushMs;
   }
 
   async ensureGroup(): Promise<void> {
@@ -336,8 +346,49 @@ export class StreamConsumer {
     const s = stream ?? this.streams[0]!;
     const ids = Array.isArray(messageId) ? messageId : [messageId];
     if (ids.length === 0) return;
-    await this.redis.xack(s, this.group, ...ids);
-    this.logger?.debug({ stream: s, count: ids.length }, "messages acknowledged");
+
+    if (!this.bufferAcks) {
+      await this.redis.xack(s, this.group, ...ids);
+      this.logger?.debug({ stream: s, count: ids.length }, "messages acknowledged");
+      return;
+    }
+
+    let buf = this.ackBuffers.get(s);
+    if (!buf) {
+      buf = [];
+      this.ackBuffers.set(s, buf);
+    }
+    buf.push(...ids);
+
+    if (buf.length >= this.batchSize) {
+      await this.flushAcksForStream(s);
+    } else if (!this.ackTimer) {
+      this.ackTimer = setTimeout(() => {
+        this.ackTimer = null;
+        void this.flushAcks();
+      }, this.ackFlushMs);
+    }
+  }
+
+  async flushAcksForStream(stream: string): Promise<void> {
+    const ids = this.ackBuffers.get(stream);
+    if (!ids || ids.length === 0) return;
+    this.ackBuffers.set(stream, []);
+    try {
+      await this.redis.xack(stream, this.group, ...ids);
+      this.logger?.debug({ stream, count: ids.length }, "buffered messages acknowledged");
+    } catch (err) {
+      this.logger?.error({ err, stream, count: ids.length }, "failed to flush buffered acks");
+    }
+  }
+
+  async flushAcks(): Promise<void> {
+    if (this.ackTimer) {
+      clearTimeout(this.ackTimer);
+      this.ackTimer = null;
+    }
+    const streams = Array.from(this.ackBuffers.keys());
+    await Promise.all(streams.map((s) => this.flushAcksForStream(s)));
   }
 
   async nack(messageId: string, event: StreamEvent, stream?: string): Promise<void> {
@@ -375,6 +426,7 @@ export class StreamConsumer {
 
   async stop(): Promise<void> {
     this.running = false;
+    await this.flushAcks().catch(() => {});
     try {
       await this.blockingRedis.quit();
     } catch (err: any) {

@@ -210,7 +210,9 @@ export abstract class BaseWorker {
       await this.process(message, retryCount);
 
       await this.consumer.ack(message.id, stream);
-      await this.consumer.redis.del(retryKey);
+      void this.consumer.redis.del(retryKey).catch((err: any) => {
+        this.logger.debug({ err, retryKey }, "failed to clean up worker retry key");
+      });
       this.processedCount += 1;
       this.lastProcessedAt = new Date().toISOString();
       metrics.messagesProcessed.inc({ worker: this.constructor.name, status: "success" });

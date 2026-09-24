@@ -510,13 +510,15 @@ export async function startEnricherWorker() {
   const dbData = createDatabase({ url: config.DATABASE_URL, applicationName: "enricher", logger });
   sql = dbData.sql;
   db = dbData.db;
+  const consumerId = `enricher-${process.env.HOSTNAME || process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   consumer = new StreamConsumer({
     redis: redis.native,
     stream: INBOUND_STREAMS as unknown as StreamName[],
     group: CONSUMER_GROUPS.ENRICHER,
-    consumer: `enricher-${process.pid}`,
+    consumer: consumerId,
     dlqStream: STREAMS.DEAD_LETTER,
     batchSize: config.WORKER_CONCURRENCY,
+    bufferAcks: true,
     logger,
   });
 
@@ -524,7 +526,7 @@ export async function startEnricherWorker() {
     redis: redis.native,
     stream: INBOUND_STREAMS as unknown as StreamName[],
     group: CONSUMER_GROUPS.ENRICHER,
-    consumer: `enricher-${process.pid}`,
+    consumer: consumerId,
     logger,
   });
 

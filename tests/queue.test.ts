@@ -154,6 +154,42 @@ describe("StreamConsumer.ack", () => {
 
     expect(mockRedis.xack).not.toHaveBeenCalled();
   });
+
+  it("buffers acks and flushes when batchSize is reached", async () => {
+    const mockRedis = { xack: vi.fn().mockResolvedValue(2), duplicate: vi.fn().mockReturnThis() };
+    const consumer = new StreamConsumer({
+      redis: mockRedis as any,
+      stream: "stream-1" as any,
+      group: "g" as any,
+      consumer: "c",
+      bufferAcks: true,
+      batchSize: 2,
+    });
+
+    await consumer.ack("1-0");
+    expect(mockRedis.xack).not.toHaveBeenCalled();
+
+    await consumer.ack("2-0");
+    expect(mockRedis.xack).toHaveBeenCalledWith("stream-1", "g", "1-0", "2-0");
+  });
+
+  it("flushes remaining buffered acks on flushAcks", async () => {
+    const mockRedis = { xack: vi.fn().mockResolvedValue(1), duplicate: vi.fn().mockReturnThis() };
+    const consumer = new StreamConsumer({
+      redis: mockRedis as any,
+      stream: "stream-1" as any,
+      group: "g" as any,
+      consumer: "c",
+      bufferAcks: true,
+      batchSize: 10,
+    });
+
+    await consumer.ack("1-0");
+    expect(mockRedis.xack).not.toHaveBeenCalled();
+
+    await consumer.flushAcks();
+    expect(mockRedis.xack).toHaveBeenCalledWith("stream-1", "g", "1-0");
+  });
 });
 
 describe("StreamConsumer.nack", () => {

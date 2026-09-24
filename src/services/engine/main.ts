@@ -706,13 +706,15 @@ export async function startEngineWorker() {
   templateRepo = new TemplateRepository(db);
   templateCache = new TemplateCache(templateRepo);
   const contactRepo = new ContactRepository(db);
+  const consumerId = `engine-${process.env.HOSTNAME || process.pid}-${Math.random().toString(36).slice(2, 8)}`;
   consumer = new StreamConsumer({
     redis: redis.native,
     stream: ENRICHED_STREAMS as unknown as StreamName[],
     group: CONSUMER_GROUPS.ENGINE,
-    consumer: `engine-${process.pid}`,
+    consumer: consumerId,
     dlqStream: STREAMS.DEAD_LETTER,
     batchSize: config.WORKER_CONCURRENCY,
+    bufferAcks: true,
     logger,
   });
 
@@ -720,7 +722,7 @@ export async function startEngineWorker() {
     redis: redis.native,
     stream: ENRICHED_STREAMS as unknown as StreamName[],
     group: CONSUMER_GROUPS.ENGINE,
-    consumer: `engine-${process.pid}`,
+    consumer: consumerId,
     logger,
   });
 
