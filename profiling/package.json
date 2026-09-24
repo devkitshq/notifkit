@@ -1,0 +1,25 @@
+{
+  "name": "notifkit-profiling",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/server.ts",
+    "test:load": "tsx tests/load.test.ts",
+    "test:scaling": "tsx tests/scaling.test.ts",
+    "test:distributed": "tsx tests/distributed-scaling.test.ts",
+    "test:money": "tsx tests/money-scaling.test.ts",
+    "test:cpu": "tsx tests/scaling.test.ts",
+    "test": "tsx tests/load.test.ts"
+  },
+  "dependencies": {
+    "@notifkit/provider-console": "file:../packages/provider-console",
+    "notifkit": "file:.."
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "testcontainers": "^10.18.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.3"
+  }
+}
