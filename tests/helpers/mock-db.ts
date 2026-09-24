@@ -145,6 +145,8 @@ export function createMockDb(): MockDb {
       ),
     ),
 
+    execute: vi.fn(async () => selectQueue.shift() ?? []),
+
     transaction: vi.fn(async (cb: any) => cb(db)),
   };
 

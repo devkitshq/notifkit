@@ -99,12 +99,14 @@ export class DeliveryWorker extends BaseWorker {
     this.globalEmitter = options.globalEmitter;
     this.db = options.db;
 
-    this.eventProcessor = new BatchProcessor<any, void>(1000, 100, async (events) => {
+    const batchSize = Math.max(10, Math.min(options.concurrency ?? 50, 100));
+
+    this.eventProcessor = new BatchProcessor<any, void>(batchSize, 5, async (events) => {
       await this.eventsProducer.publishBatch(events);
       return events.map(() => undefined as void);
     });
 
-    this.outboxUpdateProcessor = new BatchProcessor<any, void>(500, 100, async (updates) => {
+    this.outboxUpdateProcessor = new BatchProcessor<any, void>(batchSize, 5, async (updates) => {
       const { sql } = await import("drizzle-orm");
       const values = updates.map((update) => ({
         taskId: update.taskId,
@@ -128,7 +130,7 @@ export class DeliveryWorker extends BaseWorker {
       return updates.map(() => undefined as void);
     });
 
-    this.outboxInsertProcessor = new BatchProcessor(500, 10, async (tasks) => {
+    this.outboxInsertProcessor = new BatchProcessor(batchSize, 5, async (tasks) => {
       const values = tasks.map((task: any) => ({
         taskId: task.taskId,
         channel: task.channel,
@@ -338,7 +340,6 @@ export class DeliveryWorker extends BaseWorker {
       }
     }
 
-    const tInsertStart = Date.now();
     const idempotencyKey = task.taskId;
     if (!(await this.idempotency.checkAndMark(idempotencyKey, 60))) {
       this.logger.info(
@@ -349,8 +350,7 @@ export class DeliveryWorker extends BaseWorker {
     }
 
     try {
-      await this.outboxInsertProcessor.add(task);
-      const insertTime = Date.now() - tInsertStart;
+      publishPromises.push(this.outboxInsertProcessor.add(task).then(() => {}));
 
       publishPromises.push(
         this.eventProcessor.add(
@@ -714,7 +714,7 @@ export class DeliveryWorker extends BaseWorker {
         ack: 0,
       });
       t.count++;
-      t.insert += insertTime;
+      t.insert += 0;
       t.flush += flushTime;
 
       if (t.count % 1000 === 0) {

@@ -9,6 +9,8 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    include: ["tests/**/*.test.ts", "packages/**/*.test.ts"],
+    exclude: ["**/node_modules/**", "**/dist/**", "profiling/**", ".agents/**"],
     testTimeout: 1200_000,
     hookTimeout: 1200_000,
     coverage: {

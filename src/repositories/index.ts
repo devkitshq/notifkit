@@ -1,4 +1,5 @@
 import { eq, and, or, sql as drizzleSql, inArray, desc } from "drizzle-orm";
+import { LRUCache } from "@/shared/index.js";
 import type { Db } from "@/index.js";
 import type { Preferences, ContactChannel } from "@/contracts/index.js";
 import {
@@ -72,6 +73,8 @@ export interface NotificationPreference {
 // ─── UserRepository ─────────────────────────────────────────────────────────
 
 export class UserRepository {
+  private readonly recordCache = new LRUCache<string, UserRecord>(5000, 30_000);
+
   constructor(private readonly db: Db) {}
 
   async findById(projectId: string, userId: string): Promise<UserProfile | null> {
@@ -92,69 +95,40 @@ export class UserRepository {
   }
 
   async findRecordById(projectId: string, userId: string): Promise<UserRecord | null> {
-    const userRows = await this.db
-      .select()
-      .from(users)
-      .where(and(eq(users.externalId, userId), eq(users.projectId, projectId)));
-    if (!userRows[0]) return null;
+    const cacheKey = `${projectId}:${userId}`;
+    const cached = this.recordCache.get(cacheKey);
+    if (cached !== undefined) return cached;
 
-    const userRow = userRows[0];
-    const internalId = userRow.id;
-    const attrs = userRow.attributes as any;
-
-    const [segmentRows, topicRows, channelRows, qhRows] = await Promise.all([
-      this.db.select().from(userSegments).where(eq(userSegments.userId, internalId)),
-      this.db
-        .select()
-        .from(userTopicPreferences)
-        .where(eq(userTopicPreferences.userId, internalId)),
-      this.db
-        .select()
-        .from(userChannelPreferences)
-        .where(eq(userChannelPreferences.userId, internalId)),
-      this.db.select().from(quietHours).where(eq(quietHours.userId, internalId)),
-    ]);
-
-    const segments = segmentRows.map((r) => r.segment);
-
-    const topics: Record<string, boolean> = {};
-    for (const r of topicRows) {
-      topics[r.topic] = r.enabled;
-    }
-
-    const channels: Record<string, boolean> = {};
-    for (const r of channelRows) {
-      channels[r.channel] = r.enabled;
-    }
-
-    const quietHoursList = qhRows.map((r) => ({
-      start: r.startTime.slice(0, 5),
-      end: r.endTime.slice(0, 5),
-    }));
-
-    return {
-      userId: userRow.externalId,
-      language: attrs.language,
-      timezone: attrs.timezone,
-      email: attrs.email,
-      segments,
-      preferences: {
-        channels,
-        topics,
-        quietHours: quietHoursList.length > 0 ? quietHoursList : undefined,
-      },
-    };
+    const records = await this.findRecordsByIds(projectId, [userId]);
+    return records[0] ?? null;
   }
 
   async findRecordsByIds(projectId: string, userIds: string[]): Promise<UserRecord[]> {
     if (userIds.length === 0) return [];
 
+    const results: UserRecord[] = [];
+    const missingIds: string[] = [];
+
+    for (const id of userIds) {
+      const cacheKey = `${projectId}:${id}`;
+      const cached = this.recordCache.get(cacheKey);
+      if (cached !== undefined) {
+        results.push(cached);
+      } else {
+        missingIds.push(id);
+      }
+    }
+
+    if (missingIds.length === 0) {
+      return results;
+    }
+
     const usersRows = await this.db
       .select()
       .from(users)
-      .where(and(inArray(users.externalId, userIds), eq(users.projectId, projectId)));
+      .where(and(inArray(users.externalId, missingIds), eq(users.projectId, projectId)));
 
-    if (usersRows.length === 0) return [];
+    if (usersRows.length === 0) return results;
 
     const internalIds = usersRows.map((r) => r.id);
 
@@ -198,13 +172,11 @@ export class UserRepository {
         .push({ start: r.startTime.slice(0, 5), end: r.endTime.slice(0, 5) });
     }
 
-    const userRecords: UserRecord[] = [];
-
     for (const userRow of usersRows) {
       const attrs = userRow.attributes as any;
       const internalId = userRow.id;
 
-      userRecords.push({
+      const record: UserRecord = {
         userId: userRow.externalId,
         language: attrs.language,
         timezone: attrs.timezone,
@@ -215,10 +187,13 @@ export class UserRepository {
           topics: topicsByUserId.get(internalId) || {},
           quietHours: qhByUserId.get(internalId),
         },
-      });
+      };
+
+      this.recordCache.set(`${projectId}:${record.userId}`, record);
+      results.push(record);
     }
 
-    return userRecords;
+    return results;
   }
 
   async upsertFull(
@@ -319,6 +294,7 @@ export class UserRepository {
         }
       }
     });
+    this.recordCache.delete(`${projectId}:${user.userId}`);
   }
 
   async upsertManyFull(
@@ -478,6 +454,9 @@ export class UserRepository {
             await tx.insert(quietHours).values(quietHoursInserts);
           }
         });
+        for (const u of usersList) {
+          this.recordCache.delete(`${projectId}:${u.userId}`);
+        }
         return;
       } catch (err: any) {
         attempts++;
@@ -582,10 +561,12 @@ export class UserRepository {
       }
     });
 
+    this.recordCache.delete(`${projectId}:${userId}`);
     return true;
   }
 
   async delete(projectId: string, userId: string): Promise<boolean> {
+    this.recordCache.delete(`${projectId}:${userId}`);
     const result = await this.db
       .delete(users)
       .where(and(eq(users.externalId, userId), eq(users.projectId, projectId)))
@@ -726,6 +707,8 @@ export class PreferenceRepository {
 // ─── ContactRepository ───────────────────────────────────────────────────────
 
 export class ContactRepository {
+  private readonly activeContactsCache = new LRUCache<string, UserContact[]>(5000, 30_000);
+
   constructor(private readonly db: Db) {}
 
   async findByUserId(projectId: string, userId: string): Promise<UserContact[]> {
@@ -776,6 +759,23 @@ export class ContactRepository {
     const byUser = new Map<string, UserContact[]>();
     if (userIds.length === 0) return byUser;
 
+    const missingIds: string[] = [];
+    for (const userId of userIds) {
+      const cacheKey = `${projectId}:${userId}`;
+      const cached = this.activeContactsCache.get(cacheKey);
+      if (cached !== undefined) {
+        if (cached.length > 0) {
+          byUser.set(userId, cached);
+        }
+      } else {
+        missingIds.push(userId);
+      }
+    }
+
+    if (missingIds.length === 0) {
+      return byUser;
+    }
+
     const rows = await this.db
       .select({
         userId: users.externalId,
@@ -789,13 +789,18 @@ export class ContactRepository {
       .where(
         and(
           eq(users.projectId, projectId),
-          inArray(users.externalId, userIds),
+          inArray(users.externalId, missingIds),
           eq(userContacts.enabled, true),
         ),
       );
 
+    const fetchedByUser = new Map<string, UserContact[]>();
+    for (const id of missingIds) {
+      fetchedByUser.set(id, []);
+    }
+
     for (const row of rows) {
-      const contacts = byUser.get(row.userId) ?? [];
+      const contacts = fetchedByUser.get(row.userId) ?? [];
       contacts.push({
         id: row.id,
         userId: row.userId,
@@ -804,8 +809,17 @@ export class ContactRepository {
         preferences: {},
         active: row.enabled,
       });
-      byUser.set(row.userId, contacts);
+      fetchedByUser.set(row.userId, contacts);
     }
+
+    for (const id of missingIds) {
+      const contacts = fetchedByUser.get(id) ?? [];
+      this.activeContactsCache.set(`${projectId}:${id}`, contacts);
+      if (contacts.length > 0) {
+        byUser.set(id, contacts);
+      }
+    }
+
     return byUser;
   }
 
@@ -854,6 +868,7 @@ export class ContactRepository {
           set: { enabled: drizzleSql`excluded.enabled` },
         });
     }
+    this.activeContactsCache.delete(`${projectId}:${userId}`);
   }
 
   async upsertMany(
@@ -931,6 +946,9 @@ export class ContactRepository {
           set: { enabled: drizzleSql`excluded.enabled` },
         });
     }
+    for (const c of validContacts) {
+      this.activeContactsCache.delete(`${projectId}:${c.userId}`);
+    }
   }
 
   /**
@@ -944,6 +962,7 @@ export class ContactRepository {
     channel: ContactChannel,
     target: string,
   ): Promise<boolean> {
+    this.activeContactsCache.delete(`${projectId}:${userId}`);
     const internalUserIdRows = await this.db
       .select({ id: users.id })
       .from(users)
@@ -971,6 +990,7 @@ export class ContactRepository {
     channel: ContactChannel,
     target: string,
   ): Promise<boolean> {
+    this.activeContactsCache.delete(`${projectId}:${userId}`);
     const internalUserIdRows = await this.db
       .select({ id: users.id })
       .from(users)

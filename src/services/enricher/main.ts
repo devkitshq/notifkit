@@ -88,11 +88,11 @@ export class EnricherWorker extends BaseWorker {
   private async loadContacts(projectId: string, userIds: string[]): Promise<Map<string, any[]>> {
     return new Promise((resolve, reject) => {
       this.contactBatch.push({ projectId, userIds, resolve, reject });
-      if (this.contactBatch.length >= 500) {
+      if (this.contactBatch.length >= Math.min(this.concurrency, 50)) {
         if (this.contactBatchTimer) clearTimeout(this.contactBatchTimer);
         void this.flushContactBatch();
       } else if (!this.contactBatchTimer) {
-        this.contactBatchTimer = setTimeout(() => void this.flushContactBatch(), 10);
+        this.contactBatchTimer = setTimeout(() => void this.flushContactBatch(), 5);
       }
     });
   }
@@ -131,7 +131,7 @@ export class EnricherWorker extends BaseWorker {
     this.contactRepo = options.contactRepo;
     this.templateCache = options.templateCache;
 
-    this.flushTimer = setInterval(() => void this.flushWorkerBuffers(), 100);
+    this.flushTimer = setInterval(() => void this.flushWorkerBuffers(), 5);
   }
 
   override async stop(): Promise<void> {
@@ -177,13 +177,13 @@ export class EnricherWorker extends BaseWorker {
   private async loadUser(projectId: string, userId: string): Promise<any> {
     return new Promise((resolve, reject) => {
       this.userBatch.push({ projectId, userId, resolve, reject });
-      if (this.userBatch.length >= 500) {
+      if (this.userBatch.length >= Math.min(this.concurrency, 50)) {
         if (this.batchTimer) clearTimeout(this.batchTimer);
         void this.flushUserBatch();
       } else if (!this.batchTimer) {
         this.batchTimer = setTimeout(() => {
           void this.flushUserBatch();
-        }, 10);
+        }, 5);
       }
     });
   }
@@ -474,6 +474,9 @@ export class EnricherWorker extends BaseWorker {
                   this.eventBuffer.push({ producer, event: ev, resolve, reject });
                 }),
               );
+            }
+            if (this.eventBuffer.length >= Math.min(this.concurrency, 50)) {
+              void this.flushWorkerBuffers();
             }
           }
         }

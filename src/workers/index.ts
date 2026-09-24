@@ -41,7 +41,7 @@ export abstract class BaseWorker {
 
   private readonly consumer: StreamConsumer;
   private readonly pendingScanner: PendingMessageScanner;
-  private readonly concurrency: number;
+  protected readonly concurrency: number;
   private readonly recoveryIntervalMs: number;
   private readonly maxRetriesBeforeDlq: number;
 

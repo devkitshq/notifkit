@@ -32,6 +32,7 @@ import {
   normaliseTarget,
   type WorkerOptions,
   DataLoader,
+  LRUCache,
 } from "@/shared/index.js";
 import { renderWithTemplate, TemplateCache } from "@/templates/index.js";
 import { buildUnsubscribeHeaders } from "@/unsubscribe/index.js";
@@ -272,6 +273,8 @@ export class EngineWorker extends BaseWorker {
    * suppression written mid-batch takes effect on the next batch — acceptable,
    * since the webhook that writes it is itself minutes behind the send.
    */
+  private readonly suppressionsCache = new LRUCache<string, Set<string>>(1000, 10_000);
+
   private readonly suppressionsLoader = new DataLoader<
     { projectId: string; channel: string },
     Set<string>
@@ -280,6 +283,13 @@ export class EngineWorker extends BaseWorker {
     for (const key of keys) {
       const cacheKey = `${key.projectId}:${key.channel}`;
       if (results.has(cacheKey)) continue;
+
+      const cached = this.suppressionsCache.get(cacheKey);
+      if (cached !== undefined) {
+        results.set(cacheKey, cached);
+        continue;
+      }
+
       try {
         const rows = await this.db
           .select({ target: suppressions.target })
@@ -290,10 +300,9 @@ export class EngineWorker extends BaseWorker {
               eq(suppressions.channel, key.channel as any),
             ),
           );
-        results.set(
-          cacheKey,
-          new Set(rows.map((r: { target: string }) => normaliseTarget(r.target))),
-        );
+        const set = new Set<string>(rows.map((r: { target: string }) => normaliseTarget(r.target)));
+        this.suppressionsCache.set(cacheKey, set);
+        results.set(cacheKey, set);
       } catch (err) {
         // A suppression lookup that fails must not silently become "nothing
         // is suppressed" — that would resume mailing people who opted out.
