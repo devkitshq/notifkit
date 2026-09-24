@@ -508,6 +508,56 @@ describe("API Handlers", () => {
     expect(body.notificationIdsBase).toBeDefined();
   });
 
+  it("dispatches directly to outboundProducers when priority is critical and recipient is inline (Approach B transactional fast-path)", async () => {
+    const mockOutboundProducers = {
+      critical: {
+        publishBatch: vi.fn().mockResolvedValue({ messageIds: ["fast-msg-1"] }),
+      },
+    };
+
+    const fastDeps: any = {
+      ...deps,
+      outboundProducers: mockOutboundProducers,
+      templateCache: {
+        getCachedTemplate: vi.fn().mockResolvedValue({
+          id: "urgent-alert",
+          content: { subject: "Security Alert: {{code}}" },
+        }),
+      },
+    };
+    const fastHandlers = createHandlers(fastDeps);
+
+    const req = createMockReq({
+      user: {
+        id: "usr_fast_1",
+        email: "security@example.com",
+      },
+      template: "urgent-alert",
+      priority: "critical",
+      channels: ["email"],
+      data: { code: "123456" },
+    });
+    const res = createMockRes();
+
+    await fastHandlers.notify(req, res, {
+      projectId: "test_project_id",
+      params: {},
+      query: new URLSearchParams(),
+    } as any);
+
+    expect(res.statusCode).toBe(202);
+    // Bypasses standard inbound producers
+    expect(deps.producers.critical!.publishBatch).not.toHaveBeenCalled();
+    // Directly hits outbound critical producer
+    expect(mockOutboundProducers.critical.publishBatch).toHaveBeenCalledTimes(1);
+
+    const publishedArg = (mockOutboundProducers.critical.publishBatch as any).mock.calls[0][0][0];
+    expect(publishedArg.type).toBe("notification.dispatched");
+    expect(publishedArg.payload.destination).toBe("security@example.com");
+    expect(publishedArg.payload.channel).toBe("email");
+    expect(publishedArg.payload.renderedContent.content.subject).toBe("Security Alert: 123456");
+  });
+
   describe("New CRUD Endpoints", () => {
     it("listWorkflows", async () => {
       const res = createMockRes();

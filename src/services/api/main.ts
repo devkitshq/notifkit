@@ -14,6 +14,7 @@ import {
   AdminUserRepository,
 } from "@/repositories/index.js";
 import { STREAMS } from "@/contracts/index.js";
+import { TemplateCache } from "@/templates/index.js";
 import { readJsonBody, readRawBody, sendJson, HttpError } from "./http.js";
 import { Router } from "./router.js";
 import { createHandlers } from "./handlers.js";
@@ -258,13 +259,28 @@ export async function startApiServer() {
     }
   }
 
+  const outboundProducers = {
+    critical: new StreamProducer({
+      redis: redis.native,
+      stream: STREAMS.OUTBOUND_CRITICAL,
+      logger,
+    }),
+    normal: new StreamProducer({ redis: redis.native, stream: STREAMS.OUTBOUND_NORMAL, logger }),
+    low: new StreamProducer({ redis: redis.native, stream: STREAMS.OUTBOUND_LOW, logger }),
+  };
+
+  const templateRepo = new TemplateRepository(db);
+  const templateCache = new TemplateCache(templateRepo);
+
   deps = {
     logger,
     redis,
     producers,
+    outboundProducers,
     userRepo: new UserRepository(db),
     contactRepo: new ContactRepository(db),
-    templateRepo: new TemplateRepository(db),
+    templateRepo,
+    templateCache,
     projectRepo: new ProjectRepository(db),
     workflowRepo: new WorkflowRepository(db),
     segmentRepo: new SegmentRepository(db),
