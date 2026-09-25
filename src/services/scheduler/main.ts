@@ -105,14 +105,12 @@ export async function executeSchedulerPoll(
     const pipeline = redis.pipeline();
 
     for (let i = 0; i < 16; i++) {
-      pipeline.eval(
-        LUA_SCHEDULER_POLL,
-        1,
-        `notif:scheduled:zset:${i}`,
-        now,
-        perShardLimit,
-        visibilityTimeout,
-      );
+      const shardKey = `notif:scheduled:zset:${i}`;
+      if (typeof pipeline.schedulerPoll === "function") {
+        pipeline.schedulerPoll(shardKey, now, perShardLimit, visibilityTimeout);
+      } else {
+        pipeline.eval(LUA_SCHEDULER_POLL, 1, shardKey, now, perShardLimit, visibilityTimeout);
+      }
     }
 
     const results = await pipeline.exec();
@@ -212,15 +210,19 @@ export async function executeSchedulerPoll(
     return false;
   } finally {
     if (acquired) {
-      // Delete the lock only if we still own it
-      const lua = `
+      if (typeof redis.releaseLock === "function") {
+        await redis.releaseLock(lockKey, lockOwner).catch(() => {});
+      } else {
+        // Delete the lock only if we still own it
+        const lua = `
         if redis.call("get", KEYS[1]) == ARGV[1] then
           return redis.call("del", KEYS[1])
         else
           return 0
         end
       `;
-      await redis.eval(lua, 1, lockKey, lockOwner).catch(() => {});
+        await redis.eval(lua, 1, lockKey, lockOwner).catch(() => {});
+      }
     }
   }
 }

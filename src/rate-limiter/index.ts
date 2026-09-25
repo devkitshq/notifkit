@@ -1,5 +1,8 @@
 import type { Redis } from "@/index.js";
 import { LRUCache } from "@/shared/index.js";
+import { LUA_USER_THROTTLE } from "@/redis/index.js";
+
+export { LUA_USER_THROTTLE };
 
 import { randomUUID } from "crypto";
 
@@ -174,17 +177,6 @@ export class UserThrottle {
     const windowStart = targetTime - windowMs;
     const memberId = randomUUID();
 
-    const LUA_THROTTLE = `
-      redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", ARGV[1])
-      local count = redis.call("ZCARD", KEYS[1])
-      if tonumber(count) < tonumber(ARGV[2]) then
-        redis.call("ZADD", KEYS[1], tonumber(ARGV[3]), ARGV[4])
-        redis.call("EXPIRE", KEYS[1], tonumber(ARGV[5]))
-        return tonumber(count) + 1
-      end
-      return tonumber(count) + 1
-    `;
-
     // The key must outlive the window it is counting. For a future-dated send
     // that means surviving until targetTime plus one more window, so a task
     // scheduled for next week still counts against the right bucket.
@@ -194,16 +186,19 @@ export class UserThrottle {
       Math.ceil((targetTime - Date.now()) / 1000) + windowSeconds,
     );
 
-    const count = (await this.redis.eval(
-      LUA_THROTTLE,
-      1,
-      key,
-      windowStart,
-      limit,
-      targetTime,
-      memberId,
-      ttlSeconds,
-    )) as number;
+    const count =
+      typeof this.redis.throttleUser === "function"
+        ? await this.redis.throttleUser(key, windowStart, limit, targetTime, memberId, ttlSeconds)
+        : ((await this.redis.eval(
+            LUA_USER_THROTTLE,
+            1,
+            key,
+            windowStart,
+            limit,
+            targetTime,
+            memberId,
+            ttlSeconds,
+          )) as number);
 
     return { allowed: count <= limit, count, limit };
   }

@@ -34,58 +34,8 @@ export const API_KEY_INVALIDATION_CHANNEL = "apikey.invalidated";
 /** Default window length in milliseconds for API rate limiting (1 minute). */
 export const API_RATE_LIMIT_WINDOW_MS = 60_000;
 
-/**
- * Lua script implementing a sliding-window counter rate limiter.
- *
- * Approximates request rate across two contiguous time windows without
- * maintaining an O(N) sorted set of individual request timestamps.
- *
- * KEYS[1]: Current window bucket key
- * KEYS[2]: Previous window bucket key (optional if computing from KEYS[1])
- * ARGV[1]: Current timestamp in ms
- * ARGV[2]: Window size in ms (e.g. 60000)
- * ARGV[3]: Maximum requests permitted in window
- * ARGV[4]: TTL in seconds for bucket keys (optional, defaults to 2 * window + 60s)
- */
-export const LUA_SLIDING_WINDOW_COUNTER = `
-  local currentKey = KEYS[1]
-  local prevKey = KEYS[2]
-  local now = tonumber(ARGV[1])
-  local window = tonumber(ARGV[2])
-  local maxReqs = tonumber(ARGV[3])
-  local ttl = tonumber(ARGV[4]) or (math.ceil((window * 2) / 1000) + 60)
-
-  if not now or not window or window <= 0 then
-    return -1
-  end
-  if not maxReqs or maxReqs <= 0 then
-    return -1
-  end
-
-  if not prevKey then
-    local currentBucket = math.floor(now / window)
-    local prevBucket = currentBucket - 1
-    currentKey = KEYS[1] .. ":" .. currentBucket
-    prevKey = KEYS[1] .. ":" .. prevBucket
-  end
-
-  local currentCount = tonumber(redis.call("GET", currentKey) or "0")
-  local prevCount = tonumber(redis.call("GET", prevKey) or "0")
-
-  local timeIntoCurrent = now % window
-  local weight = (window - timeIntoCurrent) / window
-  local estimated = math.floor(prevCount * weight + currentCount)
-
-  if estimated < maxReqs then
-    local newCount = redis.call("INCR", currentKey)
-    if newCount == 1 then
-      redis.call("EXPIRE", currentKey, ttl)
-    end
-    return estimated + 1
-  end
-
-  return -1
-`;
+import { LUA_CHECK_API_RATE_LIMIT } from "@/redis/index.js";
+export const LUA_SLIDING_WINDOW_COUNTER = LUA_CHECK_API_RATE_LIMIT;
 
 /**
  * Evaluates the sliding window counter approximation for given parameters.
@@ -587,15 +537,25 @@ export async function startApiServer() {
 
       let count = 0;
       try {
-        count = (await redis.native.eval(
-          LUA_SLIDING_WINDOW_COUNTER,
-          2,
-          currentKey,
-          prevKey,
-          nowMs,
-          API_RATE_LIMIT_WINDOW_MS,
-          projectRateLimitRpm,
-        )) as number;
+        if (typeof redis.native.checkApiRateLimit === "function") {
+          count = await redis.native.checkApiRateLimit(
+            currentKey,
+            prevKey,
+            nowMs,
+            API_RATE_LIMIT_WINDOW_MS,
+            projectRateLimitRpm,
+          );
+        } else {
+          count = (await redis.native.eval(
+            LUA_SLIDING_WINDOW_COUNTER,
+            2,
+            currentKey,
+            prevKey,
+            nowMs,
+            API_RATE_LIMIT_WINDOW_MS,
+            projectRateLimitRpm,
+          )) as number;
+        }
       } catch (err) {
         logger.warn({ err, projectId }, "project rate limit check failed — allowing request");
       }

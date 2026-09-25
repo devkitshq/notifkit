@@ -1,39 +1,12 @@
 import type { Redis } from "ioredis";
+import { LUA_THROTTLE_PROVIDER as LUA_THROTTLE } from "@/redis/index.js";
+
+export { LUA_THROTTLE };
 
 export interface ThrottleResult {
   allowed: boolean;
   retryAfterMs: number;
 }
-
-const LUA_THROTTLE = `
-  local key = KEYS[1]
-  local now = tonumber(ARGV[1])
-  local windowSeconds = tonumber(ARGV[2])
-  local limit = tonumber(ARGV[3])
-  local member = ARGV[4]
-
-  local clearBefore = now - (windowSeconds * 1000)
-  
-  -- Cleanup expired scores
-  redis.call('ZREMRANGEBYSCORE', key, 0, clearBefore)
-  
-  -- Get current count
-  local count = redis.call('ZCARD', key)
-  
-  if count >= limit then
-    -- Find the oldest score
-    local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
-    if oldest and oldest[2] then
-      return {0, tonumber(oldest[2])}
-    end
-    return {0, now}
-  end
-  
-  -- Add new request
-  redis.call('ZADD', key, now, member)
-  redis.call('EXPIRE', key, windowSeconds * 2)
-  return {1, 0}
-`;
 
 export async function throttleProvider(
   redis: Redis,
@@ -45,15 +18,24 @@ export async function throttleProvider(
   const now = Date.now();
   const zmember = `${now}:${Math.random()}`;
 
-  const result = (await redis.eval(
-    LUA_THROTTLE,
-    1,
-    key,
-    now.toString(),
-    config.windowSeconds.toString(),
-    config.limit.toString(),
-    zmember,
-  )) as [number, number];
+  const result =
+    typeof redis.throttleProvider === "function"
+      ? await redis.throttleProvider(
+          key,
+          now.toString(),
+          config.windowSeconds.toString(),
+          config.limit.toString(),
+          zmember,
+        )
+      : ((await redis.eval(
+          LUA_THROTTLE,
+          1,
+          key,
+          now.toString(),
+          config.windowSeconds.toString(),
+          config.limit.toString(),
+          zmember,
+        )) as [number, number]);
 
   const allowed = result[0] === 1;
   const oldestTimestamp = result[1];

@@ -20,19 +20,7 @@ export function normaliseTarget(target: string): string {
   return trimmed.includes("@") ? trimmed.toLowerCase() : trimmed;
 }
 
-export const LUA_SCHEDULER_POLL = `
-  local key = KEYS[1]
-  local maxScore = tonumber(ARGV[1])
-  local limit = tonumber(ARGV[2])
-  local visibilityTimeout = tonumber(ARGV[3]) or 0
-  local tasks = redis.call('ZRANGE', key, 0, maxScore, 'BYSCORE', 'LIMIT', 0, limit)
-  if #tasks > 0 then
-    for i, task in ipairs(tasks) do
-      redis.call('ZADD', key, maxScore + visibilityTimeout, task)
-    end
-  end
-  return tasks
-`;
+export { LUA_SCHEDULER_POLL } from "@/redis/index.js";
 
 export const LUA_SCHEDULER_CLAIM = `
   local payloadKey = KEYS[1]
@@ -47,18 +35,4 @@ export const LUA_SCHEDULER_CLAIM = `
     return nil
   end
 `;
-/** Release a lock only if we still hold it (value matches our token). */
-export const LUA_RELEASE_LOCK = `
-  if redis.call('GET', KEYS[1]) == ARGV[1] then
-    return redis.call('DEL', KEYS[1])
-  end
-  return 0
-`;
-
-/** Extend a lock's TTL only if we still hold it. */
-export const LUA_RENEW_LOCK = `
-  if redis.call('GET', KEYS[1]) == ARGV[1] then
-    return redis.call('EXPIRE', KEYS[1], ARGV[2])
-  end
-  return 0
-`;
+export { LUA_RELEASE_LOCK, LUA_RENEW_LOCK } from "@/redis/index.js";

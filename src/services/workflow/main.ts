@@ -202,11 +202,19 @@ export class WorkflowWorker extends BaseWorker {
     // Keep the lock alive while the handler runs; without this a handler that
     // outlives the TTL lets a second resume execute the same steps in parallel.
     const renewTimer = setInterval(() => {
-      void this.redisCli
-        .eval(LUA_RENEW_LOCK, 1, lockKey, lockToken, String(WORKFLOW_LOCK_TTL_SECONDS))
-        .catch((err: unknown) => {
-          this.logger.warn({ err, instanceId }, "failed to renew workflow lock");
-        });
+      const renewPromise =
+        typeof this.redisCli.renewLock === "function"
+          ? this.redisCli.renewLock(lockKey, lockToken, WORKFLOW_LOCK_TTL_SECONDS)
+          : this.redisCli.eval(
+              LUA_RENEW_LOCK,
+              1,
+              lockKey,
+              lockToken,
+              String(WORKFLOW_LOCK_TTL_SECONDS),
+            );
+      void renewPromise.catch((err: unknown) => {
+        this.logger.warn({ err, instanceId }, "failed to renew workflow lock");
+      });
     }, WORKFLOW_LOCK_RENEW_MS);
 
     try {
@@ -441,7 +449,11 @@ export class WorkflowWorker extends BaseWorker {
     } finally {
       clearInterval(renewTimer);
       // Compare-and-delete: never release a lock a later process re-acquired.
-      await this.redisCli.eval(LUA_RELEASE_LOCK, 1, lockKey, lockToken);
+      if (typeof this.redisCli.releaseLock === "function") {
+        await this.redisCli.releaseLock(lockKey, lockToken);
+      } else {
+        await this.redisCli.eval(LUA_RELEASE_LOCK, 1, lockKey, lockToken);
+      }
     }
 
     await Promise.all(publishPromises);
@@ -505,14 +517,23 @@ export async function startWorkflowWorker() {
     void (async () => {
       try {
         const now = Date.now();
-        const tasks = (await redis.native.eval(
-          LUA_SCHEDULER_POLL,
-          1,
-          "notif:workflow:timers",
-          now,
-          100,
-          WORKFLOW_TIMER_VISIBILITY_MS,
-        )) as string[];
+        const tasks = (
+          typeof redis.native.schedulerPoll === "function"
+            ? await redis.native.schedulerPoll(
+                "notif:workflow:timers",
+                now,
+                100,
+                WORKFLOW_TIMER_VISIBILITY_MS,
+              )
+            : await redis.native.eval(
+                LUA_SCHEDULER_POLL,
+                1,
+                "notif:workflow:timers",
+                now,
+                100,
+                WORKFLOW_TIMER_VISIBILITY_MS,
+              )
+        ) as string[];
 
         for (const taskStr of tasks) {
           const task = JSON.parse(taskStr);
