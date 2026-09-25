@@ -46,7 +46,7 @@ const DEFAULT_TIERS: CpuScalingTier[] = [
     dbMemory: "2G",
     redisCpus: "1.0",
     redisMemory: "1G",
-    workerConcurrency: 100,
+    workerConcurrency: 75,
     label: "2.0 vCPU",
   },
   {
@@ -56,7 +56,7 @@ const DEFAULT_TIERS: CpuScalingTier[] = [
     dbMemory: "3G",
     redisCpus: "1.0",
     redisMemory: "1G",
-    workerConcurrency: 200,
+    workerConcurrency: 100,
     label: "4.0 vCPU",
   },
 ];
@@ -66,7 +66,7 @@ function parseArgs(): ScalingBenchmarkOptions {
   let durationSeconds = 10;
   let concurrency = 50;
   let tiers = DEFAULT_TIERS;
-  let providerLatencyMs: number | string | undefined = process.env.PROVIDER_LATENCY_MS || "200-300";
+  let providerLatencyMs: number | string | undefined = process.env.PROVIDER_LATENCY_MS || "100-150";
 
   for (const arg of args) {
     if (arg.startsWith("--duration=")) {

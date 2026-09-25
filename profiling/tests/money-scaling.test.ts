@@ -93,7 +93,11 @@ function parseArgs() {
         .split("=")[1]!
         .split(",")
         .map((s) => s.trim());
-      tiers = DEFAULT_BUDGET_TIERS.filter((t) => requested.includes(t.budget.replace("/mo", "")));
+      tiers = DEFAULT_BUDGET_TIERS.filter(
+        (t) =>
+          requested.includes(t.budget.replace("/mo", "")) ||
+          requested.includes(t.budget.replace("/mo", "").replace("$", "")),
+      );
     }
   }
 
