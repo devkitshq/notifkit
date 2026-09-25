@@ -727,7 +727,7 @@ describe("StreamProducer", () => {
       "my-stream",
       "MAXLEN",
       "~",
-      "10000000",
+      "100000",
       "*",
       "data",
       expect.any(String),

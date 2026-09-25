@@ -169,7 +169,7 @@ export default function AnalyticsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {streamNames.map((st) => {
                 const depth = data?.streams?.[st.key] ?? 0;
-                const maxCapacity = 10000;
+                const maxCapacity = 100000;
                 const pct = Math.min(100, Math.round((depth / maxCapacity) * 100));
 
                 return (
@@ -186,12 +186,12 @@ export default function AnalyticsPage() {
                     <div className="w-full h-2.5 rounded-full bg-muted overflow-hidden relative">
                       <div
                         className="h-full bg-primary transition-all duration-300 rounded-full"
-                        style={{ width: `${Math.max(4, pct)}%` }}
+                        style={{ width: `${depth === 0 ? 0 : Math.max(4, pct)}%` }}
                       />
                     </div>
                     <div className="flex justify-between text-[10px] text-muted-foreground">
                       <span>0</span>
-                      <span>Cap: 10,000</span>
+                      <span>Cap: 100,000</span>
                     </div>
                   </div>
                 );

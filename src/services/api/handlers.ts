@@ -37,6 +37,7 @@ import {
   CreateWorkflowSchema,
   TriggerWorkflowSchema,
   STREAMS,
+  CONSUMER_GROUPS,
   PUBSUB_CHANNELS,
 } from "@/contracts/index.js";
 import { renderWithTemplate, type TemplateCache } from "@/templates/index.js";
@@ -1186,31 +1187,76 @@ export function createHandlers(deps: Deps) {
     });
   }
 
+  // Helper to resolve true unconsumed backlog (consumer group lag + pending entries)
+  async function getStreamBacklog(
+    redis: any,
+    streamKey: string,
+    targetGroup?: string,
+  ): Promise<number> {
+    if (!targetGroup) {
+      return await redis.xlen(streamKey);
+    }
+
+    if (typeof redis.xinfo === "function") {
+      try {
+        const groups = await redis.xinfo("GROUPS", streamKey);
+        if (Array.isArray(groups) && groups.length > 0) {
+          for (const item of groups) {
+            const groupData: Record<string, any> = {};
+            if (Array.isArray(item)) {
+              for (let i = 0; i < item.length; i += 2) {
+                groupData[String(item[i])] = item[i + 1];
+              }
+            } else if (item && typeof item === "object") {
+              Object.assign(groupData, item);
+            }
+
+            if (groupData.name === targetGroup) {
+              const pending = typeof groupData.pending === "number" ? groupData.pending : 0;
+              if (typeof groupData.lag === "number") {
+                return groupData.lag + pending;
+              }
+              if (groupData["last-delivered-id"] === "0-0") {
+                const totalLen = await redis.xlen(streamKey);
+                return totalLen + pending;
+              }
+              return pending;
+            }
+          }
+        }
+      } catch {
+        // Group or stream may not exist yet, fallback to xlen
+      }
+    }
+
+    return await redis.xlen(streamKey);
+  }
+
   // ── GET /v1/system/metrics — getSystemMetrics ────────────────────────────
   async function getSystemMetrics(
     _req: IncomingMessage,
     res: ServerResponse,
     ctx: RouteContext,
   ): Promise<void> {
-    const streamMap: Record<string, string> = {
-      INBOUND_CRITICAL: STREAMS.INBOUND_CRITICAL,
-      INBOUND_NORMAL: STREAMS.INBOUND_NORMAL,
-      INBOUND_LOW: STREAMS.INBOUND_LOW,
-      ENRICHED_NORMAL: STREAMS.ENRICHED_NORMAL,
-      OUTBOUND_CRITICAL: STREAMS.OUTBOUND_CRITICAL,
-      OUTBOUND_NORMAL: STREAMS.OUTBOUND_NORMAL,
-      OUTBOUND_LOW: STREAMS.OUTBOUND_LOW,
-      WORKFLOW_INBOUND: STREAMS.WORKFLOW_INBOUND,
-      EVENTS_INBOUND: STREAMS.EVENTS_INBOUND,
-      DEAD_LETTER: STREAMS.DEAD_LETTER,
+    const streamMap: Record<string, { key: string; group?: string }> = {
+      INBOUND_CRITICAL: { key: STREAMS.INBOUND_CRITICAL, group: CONSUMER_GROUPS.ENRICHER },
+      INBOUND_NORMAL: { key: STREAMS.INBOUND_NORMAL, group: CONSUMER_GROUPS.ENRICHER },
+      INBOUND_LOW: { key: STREAMS.INBOUND_LOW, group: CONSUMER_GROUPS.ENRICHER },
+      ENRICHED_NORMAL: { key: STREAMS.ENRICHED_NORMAL, group: CONSUMER_GROUPS.ENGINE },
+      OUTBOUND_CRITICAL: { key: STREAMS.OUTBOUND_CRITICAL, group: CONSUMER_GROUPS.DELIVERY },
+      OUTBOUND_NORMAL: { key: STREAMS.OUTBOUND_NORMAL, group: CONSUMER_GROUPS.DELIVERY },
+      OUTBOUND_LOW: { key: STREAMS.OUTBOUND_LOW, group: CONSUMER_GROUPS.DELIVERY },
+      WORKFLOW_INBOUND: { key: STREAMS.WORKFLOW_INBOUND, group: CONSUMER_GROUPS.WORKFLOW },
+      EVENTS_INBOUND: { key: STREAMS.EVENTS_INBOUND, group: CONSUMER_GROUPS.EVENTS },
+      DEAD_LETTER: { key: STREAMS.DEAD_LETTER },
     };
 
     const streamDepths: Record<string, number> = {};
     if (ctx.isAdmin !== false) {
-      for (const [key, realRedisKey] of Object.entries(streamMap)) {
+      for (const [key, { key: realRedisKey, group }] of Object.entries(streamMap)) {
         try {
-          const len = await deps.redis.native.xlen(realRedisKey);
-          streamDepths[key] = len;
+          const depth = await getStreamBacklog(deps.redis.native, realRedisKey, group);
+          streamDepths[key] = depth;
         } catch {
           streamDepths[key] = 0;
         }

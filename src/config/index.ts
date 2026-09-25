@@ -47,7 +47,7 @@ export const baseConfigSchema = z.object({
   ADMIN_PASSWORD: z.string().trim().min(6).optional(),
   ADMIN_USERNAME: z.string().trim().optional(),
   WORKER_CONCURRENCY: z.coerce.number().int().min(1).default(10),
-  QUEUE_MAX_LEN: z.coerce.number().int().min(1).default(10000000),
+  QUEUE_MAX_LEN: z.coerce.number().int().min(1).default(100000),
   DB_MAX_CONNECTIONS: z.coerce.number().int().min(1).default(2),
   LOG_FLUSH_INTERVAL_MS: z.coerce.number().int().min(50).default(500),
   LOG_BUFFER_MAX_SIZE: z.coerce.number().int().min(100).default(5000),

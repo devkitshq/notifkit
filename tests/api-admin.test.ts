@@ -227,6 +227,27 @@ describe("API operational handlers", () => {
       expect(body.deliveryStats.delivered).toBe(10);
       expect(body.deliveryStats.failed).toBe(0);
     });
+
+    it("uses consumer group lag and pending entries when xinfo is available", async () => {
+      selectRows = [[{ count: 0 }], [{ count: 0 }]];
+      deps.redis.native.xinfo = vi.fn().mockImplementation(async (_cmd: string, stream: string) => {
+        if (stream.includes("outbound:critical")) {
+          return [["name", "notifkit:group:delivery", "pending", 0, "lag", 0]];
+        }
+        if (stream.includes("outbound:normal")) {
+          return [["name", "notifkit:group:delivery", "pending", 2, "lag", 5]];
+        }
+        return [];
+      });
+
+      const res = createMockRes();
+      await handlers.getSystemMetrics(createMockReq(), res, ctx());
+
+      const body = parse(res);
+      expect(body.streams.OUTBOUND_CRITICAL).toBe(0); // 0 lag + 0 pending
+      expect(body.streams.OUTBOUND_LOW).toBe(3); // fallback to xlen when xinfo returns empty
+      expect(body.streams.OUTBOUND_NORMAL).toBe(7); // 5 lag + 2 pending
+    });
   });
 
   describe("DLQ", () => {

@@ -25,7 +25,7 @@ export default function DashboardHeader({ isConnected }: { isConnected: boolean 
           const data = await res.json();
           const streams = data.streams || {};
           const maxDepth = Math.max(...(Object.values(streams) as number[]), 0);
-          setHighBackpressure(maxDepth > 8000);
+          setHighBackpressure(maxDepth > 80000);
         }
       } catch {
         // Ignore background header check errors
