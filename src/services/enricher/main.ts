@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { loadEnv, readBaseConfig } from "@/index.js";
 import { createLogger } from "@/index.js";
 import { RedisClient } from "@/index.js";
@@ -17,25 +16,18 @@ import {
   buildStreamEvent,
   type NotificationCreatedPayload,
   type NotificationEnrichedPayload,
-  type NotificationDispatchedPayload,
 } from "@/index.js";
 import { type StreamName } from "@/contracts/streams.js";
 import { IdempotencyGuard } from "@/index.js";
 import { createDatabase } from "@/db/index.js";
-import { scheduledPayloads } from "@/db/schema.js";
 import {
   UserRepository,
   PreferenceRepository,
   TemplateRepository,
   ContactRepository,
 } from "@/index.js";
-import { TemplateCache, renderWithTemplate } from "@/templates/index.js";
-import { isInQuietHours } from "@/services/engine/main.js";
-import {
-  getPriorityBucket,
-  globalEmitter as defaultGlobalEmitter,
-  type WorkerOptions,
-} from "@/shared/index.js";
+import { TemplateCache } from "@/templates/index.js";
+import { getPriorityBucket, type WorkerOptions } from "@/shared/index.js";
 import { startHealthReporter } from "@/workers/index.js";
 
 // ─── Bootstrap ─────────────────────────────────────────────────────────────
@@ -55,28 +47,20 @@ let healthInterval: NodeJS.Timeout | null = null;
 
 export interface EnricherWorkerOptions extends WorkerOptions {
   producers: any;
-  outboundProducers?: any;
-  scheduledProducer?: any;
   idempotency: any;
   userRepo: any;
   prefRepo: any;
   contactRepo: any;
   templateCache: TemplateCache;
-  db?: any;
-  globalEmitter?: any;
 }
 
 export class EnricherWorker extends BaseWorker {
   private readonly producers: any;
-  private readonly outboundProducers?: any;
-  private readonly scheduledProducer?: any;
   private readonly idempotency: any;
   private readonly userRepo: any;
   private readonly prefRepo: any;
   private readonly contactRepo: any;
   private readonly templateCache: TemplateCache;
-  private readonly db?: any;
-  private readonly globalEmitter?: any;
 
   private userBatch: {
     projectId: string;
@@ -141,15 +125,11 @@ export class EnricherWorker extends BaseWorker {
   constructor(options: EnricherWorkerOptions) {
     super(options);
     this.producers = options.producers;
-    this.outboundProducers = options.outboundProducers;
-    this.scheduledProducer = options.scheduledProducer;
     this.idempotency = options.idempotency;
     this.userRepo = options.userRepo;
     this.prefRepo = options.prefRepo;
     this.contactRepo = options.contactRepo;
     this.templateCache = options.templateCache;
-    this.db = options.db;
-    this.globalEmitter = options.globalEmitter ?? defaultGlobalEmitter;
 
     this.flushTimer = setInterval(() => void this.flushWorkerBuffers(), 5);
   }
@@ -473,133 +453,21 @@ export class EnricherWorker extends BaseWorker {
 
               enrichedPayload.priority = msgPriority;
 
-              if (this.outboundProducers) {
-                // Topic opt-out check
-                const isOptedOut = topics.some((t) => profile.preferences?.topics?.[t] === false);
-                if (isOptedOut) {
-                  this.logger.info(
-                    { recipientId: profile.userId, channel },
-                    "user opted out of topic — dropping",
-                  );
-                  this.globalEmitter?.emit("notification:skipped", {
-                    projectId: raw.projectId,
-                    eventId: event.id,
-                    recipientId: profile.userId,
-                    reason: "user_opted_out",
-                  });
-                  continue;
-                }
-
-                // Channel disabled check
-                if (profile.preferences?.channels?.[channel] === false) {
-                  this.logger.info(
-                    { recipientId: profile.userId, channel },
-                    "user disabled channel — dropping",
-                  );
-                  this.globalEmitter?.emit("notification:skipped", {
-                    projectId: raw.projectId,
-                    eventId: event.id,
-                    recipientId: profile.userId,
-                    reason: "channel_disabled",
-                  });
-                  continue;
-                }
-
-                // Quiet hours check
-                let scheduledAt = raw.scheduledAt;
-                const qh = profile.preferences?.quietHours;
-                if (qh && qh.length > 0 && msgPriority !== "critical") {
-                  const qhResult = isInQuietHours(profile.timezone ?? "UTC", qh);
-                  if (qhResult.inQuietHours && qhResult.nextActiveTime) {
-                    scheduledAt = qhResult.nextActiveTime.toISOString();
-                  }
-                }
-
-                const rendered = renderWithTemplate(template, raw.data ?? {});
-                const now = Date.now();
-                const isScheduled = scheduledAt && new Date(scheduledAt).getTime() > now;
-                const taskId = `${event.id}:${destination || randomUUID()}`;
-
-                const taskPayload: NotificationDispatchedPayload = {
-                  projectId: raw.projectId,
-                  taskId,
-                  enrichedEventId: event.id,
-                  recipientId: profile.userId,
-                  channel: channel as any,
-                  priority: msgPriority,
-                  templateId: raw.templateId,
-                  templateVariables: raw.data ?? {},
-                  aiPrompts: raw.aiPrompts,
-                  recipient: enrichedPayload.recipient,
-                  renderedContent: rendered,
-                  destination,
-                  deliveryOptions: {
-                    maxAttempts: 3,
-                    timeoutMs: 10_000,
-                  },
-                  fallbackChain: fallbackChain?.length ? fallbackChain : undefined,
-                  campaignId: raw.campaignId,
-                };
-
-                if (isScheduled && this.scheduledProducer) {
-                  if (this.db) {
-                    await this.db
-                      .insert(scheduledPayloads)
-                      .values({
-                        taskId,
-                        payload: {
-                          ...taskPayload,
-                          scheduledAt,
-                        },
-                      })
-                      .onConflictDoNothing()
-                      .catch((err: any) =>
-                        this.logger.error({ err, taskId }, "failed to cache scheduled payload"),
-                      );
-                  }
-
-                  const scheduledEnvelope = buildStreamEvent(
-                    "notification.scheduled",
-                    {
-                      projectId: raw.projectId,
-                      enrichedEventId: event.id,
-                      taskId,
-                      scheduledAt,
-                    },
-                    "enricher",
-                    event.metadata.traceId,
-                  );
-                  await this.scheduledProducer.publish(scheduledEnvelope);
-                  continue;
-                }
-
-                batchedEvents[p].push(
-                  buildStreamEvent(
-                    "notification.dispatched",
-                    taskPayload as Record<string, unknown>,
-                    "enricher",
-                    event.metadata.traceId,
-                  ),
-                );
-              } else {
-                batchedEvents[p].push(
-                  buildStreamEvent(
-                    "notification.enriched",
-                    enrichedPayload as Record<string, unknown>,
-                    "enricher",
-                    event.metadata.traceId,
-                  ),
-                );
-              }
+              batchedEvents[p].push(
+                buildStreamEvent(
+                  "notification.enriched",
+                  enrichedPayload as Record<string, unknown>,
+                  "enricher",
+                  event.metadata.traceId,
+                ),
+              );
             }
           }
         }
 
         for (const p of ["critical", "normal", "low"] as const) {
           if (batchedEvents[p].length > 0) {
-            const producer = this.outboundProducers
-              ? (this.outboundProducers[p] ?? this.outboundProducers.normal)
-              : (this.producers[p] ?? this.producers.normal);
+            const producer = this.producers[p] ?? this.producers.normal;
             for (const ev of batchedEvents[p]) {
               publishPromises.push(
                 new Promise((resolve, reject) => {
@@ -672,22 +540,6 @@ export async function startEnricherWorker() {
     low: new StreamProducer({ redis: redis.native, stream: STREAMS.ENRICHED_LOW, logger }),
   };
 
-  const outboundProducers = {
-    critical: new StreamProducer({
-      redis: redis.native,
-      stream: STREAMS.OUTBOUND_CRITICAL,
-      logger,
-    }),
-    normal: new StreamProducer({ redis: redis.native, stream: STREAMS.OUTBOUND_NORMAL, logger }),
-    low: new StreamProducer({ redis: redis.native, stream: STREAMS.OUTBOUND_LOW, logger }),
-  };
-
-  const scheduledProducer = new StreamProducer({
-    redis: redis.native,
-    stream: STREAMS.SCHEDULED,
-    logger,
-  });
-
   const idempotency = new IdempotencyGuard({
     redis: redis.native,
     keyPrefix: "notif:processed:enricher",
@@ -715,14 +567,11 @@ export async function startEnricherWorker() {
     maxRetriesBeforeDlq: 5,
     concurrency: config.WORKER_CONCURRENCY,
     producers,
-    outboundProducers,
-    scheduledProducer,
     idempotency,
     userRepo,
     prefRepo,
     contactRepo,
     templateCache,
-    db,
   });
 
   // ─── Health check interval ──────────────────────────────────────────────────

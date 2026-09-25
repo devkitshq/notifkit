@@ -97,3 +97,53 @@ services:
         limits:
           cpus: "${SERVER_CPUS:-1.0}"
           memory: "${SERVER_MEMORY:-1G}"
+
+  server4:
+    build:
+      context: ..
+      dockerfile: profiling/Dockerfile
+    environment:
+      DATABASE_URL: postgres://notifkit:password@db:5432/notifkit
+      REDIS_URL: redis://redis:6379
+      ADMIN_API_KEY: perf-admin-key
+      LOG_LEVEL: warn
+      HOST: 0.0.0.0
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-100}
+      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-5}
+      PROVIDER_LATENCY_MS: ${PROVIDER_LATENCY_MS:-0}
+      SERVICES: ${SERVER4_SERVICES:-all}
+    ports:
+      - "35681:3000"
+    depends_on:
+      - db
+      - redis
+    deploy:
+      resources:
+        limits:
+          cpus: "${SERVER_CPUS:-1.0}"
+          memory: "${SERVER_MEMORY:-1G}"
+
+  server5:
+    build:
+      context: ..
+      dockerfile: profiling/Dockerfile
+    environment:
+      DATABASE_URL: postgres://notifkit:password@db:5432/notifkit
+      REDIS_URL: redis://redis:6379
+      ADMIN_API_KEY: perf-admin-key
+      LOG_LEVEL: warn
+      HOST: 0.0.0.0
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-100}
+      DB_MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-5}
+      PROVIDER_LATENCY_MS: ${PROVIDER_LATENCY_MS:-0}
+      SERVICES: ${SERVER5_SERVICES:-all}
+    ports:
+      - "35682:3000"
+    depends_on:
+      - db
+      - redis
+    deploy:
+      resources:
+        limits:
+          cpus: "${SERVER_CPUS:-1.0}"
+          memory: "${SERVER_MEMORY:-1G}"

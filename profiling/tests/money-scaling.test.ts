@@ -18,6 +18,8 @@ export interface BudgetTier {
   concurrency: number;
   description: string;
   serverServices?: string[];
+  awsTopology?: string;
+  awsCostDetails?: string;
 }
 
 const DEFAULT_BUDGET_TIERS: BudgetTier[] = [
@@ -27,14 +29,17 @@ const DEFAULT_BUDGET_TIERS: BudgetTier[] = [
     serverCount: 1,
     serverCpus: "1.0",
     serverMemory: "1G",
-    dbCpus: "1.0",
-    dbMemory: "1G",
+    dbCpus: "0.5",
+    dbMemory: "512M",
     redisCpus: "0.5",
-    redisMemory: "512M",
+    redisMemory: "256M",
     workerConcurrency: 100,
     dbMaxConnections: 5,
     concurrency: 150,
-    description: "1x Monolith (API + Pipeline + Delivery)",
+    description: "1x Monolith on EC2 t4g.small",
+    awsTopology: "1x EC2 t4g.small (Monolith)",
+    awsCostDetails:
+      "EC2 t4g.small (2 vCPU/2G: $12.26) + 30GB gp3 ($2.40) + IPv4/Net ($5.34) = ~$20.00/mo",
     serverServices: ["api,enricher,engine,delivery,scheduler"],
   },
   {
@@ -43,14 +48,17 @@ const DEFAULT_BUDGET_TIERS: BudgetTier[] = [
     serverCount: 2,
     serverCpus: "1.0",
     serverMemory: "1G",
-    dbCpus: "2.0",
-    dbMemory: "2G",
-    redisCpus: "1.0",
-    redisMemory: "1G",
+    dbCpus: "1.0",
+    dbMemory: "1G",
+    redisCpus: "0.5",
+    redisMemory: "512M",
     workerConcurrency: 200,
     dbMaxConnections: 8,
     concurrency: 300,
-    description: "1x API + 1x Worker (Enricher/Engine/Delivery)",
+    description: "1x API + 1x Worker (RDS db.t4g.micro + ElastiCache)",
+    awsTopology: "1x EC2 t4g.small + RDS db.t4g.micro + ElastiCache t4g.micro",
+    awsCostDetails:
+      "EC2 t4g.small ($13.86) + RDS db.t4g.micro ($13.98) + ElastiCache Valkey ($9.34) + Net ($2.82) = ~$40.00/mo",
     serverServices: ["api", "enricher,engine,delivery,scheduler"],
   },
   {
@@ -59,15 +67,56 @@ const DEFAULT_BUDGET_TIERS: BudgetTier[] = [
     serverCount: 3,
     serverCpus: "1.0",
     serverMemory: "1G",
-    dbCpus: "3.0",
-    dbMemory: "3G",
-    redisCpus: "1.5",
+    dbCpus: "1.0",
+    dbMemory: "1G",
+    redisCpus: "1.0",
     redisMemory: "1G",
     workerConcurrency: 300,
     dbMaxConnections: 10,
     concurrency: 300,
-    description: "1x API + 1x Pipeline (Engine/Enrich) + 1x Delivery",
+    description: "1x API + 1x Pipeline + 1x Delivery (Decoupled Compute)",
+    awsTopology: "2x EC2 t4g.small + RDS db.t4g.micro + ElastiCache t4g.micro + ALB",
+    awsCostDetails:
+      "2x EC2 t4g.small ($27.72) + RDS db.t4g.micro ($13.98) + ElastiCache Valkey ($9.34) + ALB/Net ($8.96) = ~$60.00/mo",
     serverServices: ["api", "enricher,engine,scheduler", "delivery"],
+  },
+  {
+    budget: "$80/mo",
+    monthlyCost: 80,
+    serverCount: 3,
+    serverCpus: "1.0",
+    serverMemory: "1G",
+    dbCpus: "2.0",
+    dbMemory: "2G",
+    redisCpus: "1.0",
+    redisMemory: "1G",
+    workerConcurrency: 400,
+    dbMaxConnections: 15,
+    concurrency: 400,
+    description: "1x API + 1x Pipeline + 1x Delivery (RDS db.t4g.small 2G)",
+    awsTopology: "3x EC2 t4g.small + RDS db.t4g.small (2G) + ElastiCache t4g.micro",
+    awsCostDetails:
+      "3x EC2 t4g.small ($41.58) + RDS db.t4g.small ($27.70) + ElastiCache Valkey ($9.34) + Net ($1.38) = ~$80.00/mo",
+    serverServices: ["api", "enricher,engine,scheduler", "delivery"],
+  },
+  {
+    budget: "$100/mo",
+    monthlyCost: 100,
+    serverCount: 4,
+    serverCpus: "1.0",
+    serverMemory: "1G",
+    dbCpus: "2.0",
+    dbMemory: "2G",
+    redisCpus: "1.5",
+    redisMemory: "1.5G",
+    workerConcurrency: 450,
+    dbMaxConnections: 20,
+    concurrency: 500,
+    description: "1x API + 1x Pipeline + 2x Delivery (2x Scaled Workers)",
+    awsTopology: "4x EC2 t4g.small + RDS db.t4g.small + ElastiCache cache.t4g.small",
+    awsCostDetails:
+      "4x EC2 t4g.small ($53.84) + RDS db.t4g.small ($28.27) + ElastiCache t4g.small ($18.69) = ~$100.80/mo",
+    serverServices: ["api", "enricher,scheduler", "engine", "delivery"],
   },
 ];
 
@@ -105,15 +154,15 @@ function parseArgs() {
 }
 
 function printSummaryTable(results: Array<{ tier: BudgetTier; res: DistributedBenchmarkResult }>) {
-  console.log("\n" + "=".repeat(150));
+  console.log("\n" + "=".repeat(170));
   console.log(
-    "                                  💰 NOTIFKIT MONEY / BUDGET SCALING BENCHMARK SUMMARY 💰",
+    "                                  💰 NOTIFKIT AWS BUDGET SCALING BENCHMARK SUMMARY 💰",
   );
-  console.log("=".repeat(150));
+  console.log("=".repeat(170));
 
   const headers = [
     "Budget Tier",
-    "Architecture Topology",
+    "AWS Architecture & Topology",
     "Clients",
     "Ingestion",
     "Active Deliv",
@@ -123,13 +172,13 @@ function printSummaryTable(results: Array<{ tier: BudgetTier; res: DistributedBe
     "Cost Efficiency",
   ];
 
-  const colWidths = [13, 44, 9, 14, 15, 14, 10, 11, 15];
+  const colWidths = [13, 62, 9, 14, 15, 14, 10, 11, 15];
 
   const formatRow = (cols: string[]) =>
     cols.map((col, idx) => col.padEnd(colWidths[idx]!)).join(" | ");
 
   console.log(formatRow(headers));
-  console.log("-".repeat(150));
+  console.log("-".repeat(170));
 
   for (const { tier, res } of results) {
     const msgsPerDollar = (res.activeDeliveryRate / tier.monthlyCost).toFixed(1) + " msg/s/$";
@@ -148,7 +197,16 @@ function printSummaryTable(results: Array<{ tier: BudgetTier; res: DistributedBe
     console.log(formatRow(row));
   }
 
-  console.log("=".repeat(150) + "\n");
+  console.log("=".repeat(170));
+
+  console.log("\n" + "-".repeat(170));
+  console.log("                                  📋 AWS MONTHLY INFRASTRUCTURE PRICING BREAKDOWN");
+  console.log("-".repeat(170));
+  for (const { tier } of results) {
+    console.log(`  • ${tier.budget.padEnd(8)} [${tier.awsTopology ?? tier.description}]:`);
+    console.log(`    ${tier.awsCostDetails ?? "On-demand AWS components"}`);
+  }
+  console.log("-".repeat(170) + "\n");
 }
 
 async function main() {
@@ -163,7 +221,9 @@ async function main() {
   console.log(
     "==========================================================================================",
   );
-  console.log(`Window: ${durationSeconds}s per tier | Measuring: $20/mo ➜ $40/mo ➜ $60/mo`);
+  console.log(
+    `Window: ${durationSeconds}s per tier | Measuring: ${DEFAULT_BUDGET_TIERS.map((t) => t.budget).join(" ➜ ")} (AWS Actual Pricing)`,
+  );
   console.log(`Tiers to test: ${tiers.map((t) => t.budget).join("  ➜  ")}`);
   if (providerLatencyMs && providerLatencyMs !== "0") {
     console.log(`Mock Provider Latency: ${providerLatencyMs}ms`);

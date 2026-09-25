@@ -31,7 +31,6 @@ import {
   type ContactChannel,
   PreferencesSchema,
   type NotificationRequestedPayload,
-  type NotificationDispatchedPayload,
   type NotificationTarget,
   buildStreamEvent,
   CreateWorkflowSchema,
@@ -40,7 +39,6 @@ import {
   CONSUMER_GROUPS,
   PUBSUB_CHANNELS,
 } from "@/contracts/index.js";
-import { renderWithTemplate, type TemplateCache } from "@/templates/index.js";
 import { readJsonBody, sendJson, sendNoContent, sendValidationError } from "./http.js";
 import type { RouteContext } from "./router.js";
 import { globalEmitter, getPriorityBucket, normaliseTarget } from "@/shared/index.js";
@@ -69,8 +67,6 @@ export interface Deps {
   logger: Logger;
   redis: RedisClient;
   producers: Record<string, StreamProducer>;
-  outboundProducers?: Record<string, StreamProducer>;
-  templateCache?: TemplateCache;
   userRepo: UserRepository;
   contactRepo: ContactRepository;
   templateRepo: TemplateRepository;
@@ -382,100 +378,6 @@ export function createHandlers(deps: Deps) {
     const baseNotificationId = (req.headers["x-idempotency-key"] as string) || randomUUID();
 
     const priority = body.priority ?? "normal";
-
-    // ─── Approach B: Transactional Direct Fast-Path ─────────────────────────
-    // If critical priority, unscheduled, and direct contact addresses are provided
-    // via inline users, bypass Enricher and Decision streams and publish directly
-    // to OUTBOUND_CRITICAL for immediate delivery.
-    if (
-      priority === "critical" &&
-      !body.sendAt &&
-      deps.outboundProducers?.critical &&
-      inlineUsersToSync.length > 0 &&
-      inlineUsersToSync.length === targets.length
-    ) {
-      const requestedChannels =
-        body.channels && body.channels.length > 0 ? body.channels : (["email"] as ContactChannel[]);
-
-      const dbTemplate = deps.templateCache
-        ? await deps.templateCache.getCachedTemplate(ctx.projectId!, body.template)
-        : await deps.templateRepo.findById(ctx.projectId!, body.template);
-
-      const rendered = renderWithTemplate(dbTemplate, body.data ?? {});
-      const fastPathEvents: any[] = [];
-      let lastFastNotificationId = "";
-
-      for (let idx = 0; idx < inlineUsersToSync.length; idx++) {
-        const u = inlineUsersToSync[idx]!;
-        const notificationId =
-          targets.length > 1 ? `${baseNotificationId}-${idx}` : baseNotificationId;
-        lastFastNotificationId = notificationId;
-
-        const contacts = contactsOf(u);
-        const activeContacts = contacts.filter((c) => requestedChannels.includes(c.channel));
-
-        for (const c of activeContacts) {
-          const taskPayload: NotificationDispatchedPayload = {
-            projectId: ctx.projectId!,
-            taskId: `${notificationId}:${c.target || randomUUID()}`,
-            enrichedEventId: notificationId,
-            recipientId: u.id,
-            channel: c.channel,
-            priority: "critical",
-            templateId: body.template,
-            templateVariables: body.data ?? {},
-            aiPrompts: body.aiPrompts,
-            renderedContent: rendered,
-            destination: c.target,
-            deliveryOptions: {
-              maxAttempts: 3,
-              timeoutMs: 10_000,
-            },
-            campaignId: body.campaign,
-          };
-
-          fastPathEvents.push(
-            buildStreamEvent(
-              "notification.dispatched",
-              taskPayload as Record<string, unknown>,
-              "api",
-              notificationId,
-            ),
-          );
-        }
-      }
-
-      if (fastPathEvents.length > 0) {
-        const { messageIds: fastMessageIds } =
-          await deps.outboundProducers.critical.publishBatch(fastPathEvents);
-        deps.logger.info(
-          { count: fastPathEvents.length, priority: "critical" },
-          "notification direct fast-path dispatched",
-        );
-        metrics.messagesPublished.inc(
-          { channel: "api", priority: "critical" },
-          fastPathEvents.length,
-        );
-
-        if (targets.length === 1) {
-          sendJson(res, 202, {
-            messageId: fastMessageIds[0],
-            notificationId: lastFastNotificationId,
-            target: targets[0],
-            ...(body.campaign ? { campaign: body.campaign } : {}),
-          });
-        } else {
-          sendJson(res, 202, {
-            batchSize: targets.length,
-            messageIds: fastMessageIds,
-            notificationIdsBase: baseNotificationId,
-            ...(body.campaign ? { campaign: body.campaign } : {}),
-          });
-        }
-        return;
-      }
-    }
-
     const p = getPriorityBucket(priority);
     const producer = deps.producers[p] ?? deps.producers.normal!;
 
