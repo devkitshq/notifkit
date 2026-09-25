@@ -7,7 +7,7 @@ import {
   type StreamMessage,
   StreamProducer,
 } from "@/index.js";
-import { BaseWorker } from "@/index.js";
+import { BaseWorker, type ProcessResult } from "@/index.js";
 import {
   STREAMS,
   OUTBOUND_STREAMS,
@@ -160,7 +160,7 @@ export class DeliveryWorker extends BaseWorker {
     return breaker;
   }
 
-  async process(message: StreamMessage, attempt: number = 1): Promise<void> {
+  async process(message: StreamMessage, attempt: number = 1): Promise<ProcessResult> {
     const { event } = message;
     const publishPromises: Promise<void>[] = [];
 
@@ -340,13 +340,30 @@ export class DeliveryWorker extends BaseWorker {
     }
 
     const idempotencyKey = task.taskId;
-    if (!(await this.idempotency.checkAndMark(idempotencyKey, 60))) {
+    const lease = this.idempotency.acquireLease
+      ? await this.idempotency.acquireLease(idempotencyKey, 60)
+      : (await this.idempotency.checkAndMark(idempotencyKey, 60))
+        ? "acquired"
+        : "locked";
+
+    if (lease === "completed") {
       this.logger.info(
-        { messageId: message.id, taskId: task.taskId, channel: task.channel, attempt },
-        "duplicate delivery — skipping",
+        { messageId: message.id, taskId: task.taskId, channel: task.channel },
+        "duplicate delivery — already completed, acking message",
       );
       return;
     }
+
+    if (lease === "locked") {
+      this.logger.info(
+        { messageId: message.id, taskId: task.taskId, channel: task.channel, attempt },
+        "duplicate delivery — skipping and leaving pending in stream",
+      );
+      return { ack: false };
+    }
+
+    const tDispatchStart = Date.now();
+    const MAX_DISPATCH_BUDGET_MS = 25_000; // Strictly shorter than lock lease (30s)
 
     try {
       publishPromises.push(
@@ -377,12 +394,23 @@ export class DeliveryWorker extends BaseWorker {
         let lastResult: any = { success: false, error: "No transports" };
 
         for (const transport of transports) {
+          const elapsedMs = Date.now() - tDispatchStart;
+          const remainingBudgetMs = Math.max(0, MAX_DISPATCH_BUDGET_MS - elapsedMs);
+          if (remainingBudgetMs <= 0) {
+            this.logger.warn(
+              { taskId: task.taskId, channel: task.channel },
+              "dispatch budget exhausted before transport call — aborting to protect lock lease",
+            );
+            break;
+          }
+          const configuredTimeoutMs = task.deliveryOptions?.timeoutMs ?? 10_000;
+          const timeoutMs = Math.min(configuredTimeoutMs, remainingBudgetMs);
+
           try {
             const tProv = Date.now();
             const breaker = this.getBreaker(`${task.channel}:${transport.constructor.name}`);
 
             lastResult = await breaker.execute(async () => {
-              const timeoutMs = task.deliveryOptions?.timeoutMs ?? 10_000;
               const controller = new AbortController();
               const timeout = setTimeout(() => {
                 controller.abort(new Error(`Transport timeout after ${timeoutMs}ms`));
@@ -576,12 +604,23 @@ export class DeliveryWorker extends BaseWorker {
         // Other channels (email, sms, webhook, whatsapp) use the pre-resolved destination
         let result: any = { success: false, error: "No transports" };
         for (const transport of transports) {
+          const elapsedMs = Date.now() - tDispatchStart;
+          const remainingBudgetMs = Math.max(0, MAX_DISPATCH_BUDGET_MS - elapsedMs);
+          if (remainingBudgetMs <= 0) {
+            this.logger.warn(
+              { taskId: task.taskId, channel: task.channel },
+              "dispatch budget exhausted before transport call — aborting to protect lock lease",
+            );
+            break;
+          }
+          const configuredTimeoutMs = task.deliveryOptions?.timeoutMs ?? 10_000;
+          const timeoutMs = Math.min(configuredTimeoutMs, remainingBudgetMs);
+
           try {
             const tProv = Date.now();
             const breaker = this.getBreaker(`${task.channel}:${transport.constructor.name}`);
 
             result = await breaker.execute(async () => {
-              const timeoutMs = task.deliveryOptions?.timeoutMs ?? 10_000;
               const controller = new AbortController();
               const timeout = setTimeout(() => {
                 controller.abort(new Error(`Transport timeout after ${timeoutMs}ms`));

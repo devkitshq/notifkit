@@ -14,6 +14,16 @@ export class NonRetryableError extends Error {
   }
 }
 
+export class LockHeldError extends Error {
+  readonly lockHeld = true;
+  constructor(message: string = "Idempotency lock held — leaving message pending") {
+    super(message);
+    this.name = "LockHeldError";
+  }
+}
+
+export type ProcessResult = void | { ack?: boolean };
+
 export type WorkerState = "idle" | "running" | "stopping" | "stopped" | "error";
 
 export interface WorkerHealth {
@@ -74,7 +84,7 @@ export abstract class BaseWorker {
     this.semaphore = new AsyncSemaphore(concurrency);
   }
 
-  protected abstract process(message: StreamMessage, attempt?: number): Promise<void>;
+  protected abstract process(message: StreamMessage, attempt?: number): Promise<ProcessResult>;
 
   async start(): Promise<void> {
     if (this.state !== "idle") {
@@ -181,23 +191,15 @@ export abstract class BaseWorker {
   private async processWithTracking(message: StreamMessage): Promise<void> {
     const start = Date.now();
     const stream = message.stream;
-    const retryKey = `notif:worker:retries:${this.constructor.name}:${stream ?? "default"}:${message.id}`;
+    const retryCount = message.deliveryCount ?? 1;
 
     try {
-      const results = await this.consumer.redis
-        .multi()
-        .incr(retryKey)
-        .expire(retryKey, 7200)
-        .exec();
-      const retryCount = (results?.[0]?.[1] as number) ?? 1;
-
       if (retryCount > this.maxRetriesBeforeDlq) {
         this.logger.warn(
           { messageId: message.id, retryCount },
           "max retries exceeded, moving to dead-letter queue",
         );
         await this.consumer.nack(message.id, message.event, stream);
-        await this.consumer.redis.del(retryKey);
         globalEmitter.emit(
           "notification:failed",
           message.id,
@@ -207,12 +209,16 @@ export abstract class BaseWorker {
         return;
       }
 
-      await this.process(message, retryCount);
+      const result = await this.process(message, retryCount);
+      if (result && (result as any).ack === false) {
+        this.logger.debug(
+          { messageId: message.id, eventType: message.event.type },
+          "message skipped without ack — leaving pending in stream",
+        );
+        return;
+      }
 
       await this.consumer.ack(message.id, stream);
-      void this.consumer.redis.del(retryKey).catch((err: any) => {
-        this.logger.debug({ err, retryKey }, "failed to clean up worker retry key");
-      });
       this.processedCount += 1;
       this.lastProcessedAt = new Date().toISOString();
       metrics.messagesProcessed.inc({ worker: this.constructor.name, status: "success" });
@@ -222,6 +228,14 @@ export abstract class BaseWorker {
         "message processed",
       );
     } catch (err) {
+      if (err instanceof LockHeldError || (err as any)?.lockHeld) {
+        this.logger.debug(
+          { err, messageId: message.id, eventType: message.event.type },
+          "lock held by another worker — leaving message pending in stream",
+        );
+        return;
+      }
+
       this.errorCount += 1;
       this.lastErrorAt = new Date().toISOString();
       metrics.messagesProcessed.inc({ worker: this.constructor.name, status: "error" });
@@ -232,7 +246,6 @@ export abstract class BaseWorker {
           "non-retryable error encountered, immediately moving to dead-letter queue without retry loop",
         );
         await this.consumer.nack(message.id, message.event, stream);
-        await this.consumer.redis.del(retryKey);
         globalEmitter.emit(
           "notification:failed",
           message.id,

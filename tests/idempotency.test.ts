@@ -86,4 +86,48 @@ describe("IdempotencyGuard (src/idempotency/index.ts)", () => {
     await guard.unmark("msg-rollback");
     expect(mockRedis.del).toHaveBeenCalledWith("notif:idem:msg-rollback");
   });
+
+  describe("acquireLease two-phase state", () => {
+    it("returns 'acquired' on first attempt via fast-path SET NX", async () => {
+      mockRedis.set.mockResolvedValueOnce("OK");
+      const guard = new IdempotencyGuard({ redis: mockRedis, keyPrefix: "notif:idem" });
+
+      const state = await guard.acquireLease("task-1", 30);
+      expect(state).toBe("acquired");
+      expect(mockRedis.set).toHaveBeenCalledWith("notif:idem:task-1", "L", "EX", 30, "NX");
+    });
+
+    it("returns 'completed' when key already marked completed ('S')", async () => {
+      mockRedis.set.mockResolvedValueOnce(null); // SET NX fails (key exists)
+      mockRedis.get.mockImplementation(async (key: string) => {
+        if (key === "notif:idem:task-2") return "S";
+        return null;
+      });
+      const guard = new IdempotencyGuard({ redis: mockRedis, keyPrefix: "notif:idem" });
+
+      const state = await guard.acquireLease("task-2", 30);
+      expect(state).toBe("completed");
+    });
+
+    it("returns 'locked' when lock lease is currently held ('L')", async () => {
+      mockRedis.set.mockResolvedValueOnce(null); // SET NX fails (held)
+      mockRedis.get.mockImplementation(async (key: string) => {
+        if (key === "notif:idem:task-3") return "L";
+        return null;
+      });
+      const guard = new IdempotencyGuard({ redis: mockRedis, keyPrefix: "notif:idem" });
+
+      const state = await guard.acquireLease("task-3", 30);
+      expect(state).toBe("locked");
+    });
+
+    it("markProcessed records completed marker '1' on main key with given TTL", async () => {
+      mockRedis.set.mockResolvedValue("OK");
+      const guard = new IdempotencyGuard({ redis: mockRedis, keyPrefix: "notif:idem" });
+
+      await guard.markProcessed("task-4", 86400);
+
+      expect(mockRedis.set).toHaveBeenCalledWith("notif:idem:task-4", "1", "EX", 86400);
+    });
+  });
 });

@@ -8,7 +8,7 @@ import {
   StreamProducer,
   type StreamMessage,
 } from "@/index.js";
-import { BaseWorker } from "@/index.js";
+import { BaseWorker, type ProcessResult } from "@/index.js";
 import {
   STREAMS,
   ENRICHED_STREAMS,
@@ -316,7 +316,7 @@ export class EngineWorker extends BaseWorker {
     return keys.map((key) => results.get(`${key.projectId}:${key.channel}`) ?? new Set<string>());
   });
 
-  async process(message: StreamMessage): Promise<void> {
+  async process(message: StreamMessage): Promise<ProcessResult> {
     const { event } = message;
 
     const payloadResult = this.registry.safeParsePayload("notification.enriched", event.payload);
@@ -341,7 +341,7 @@ export class EngineWorker extends BaseWorker {
       }
     }
 
-    if (!(await this.idempotency.checkAndMark(idempotencyKey, 60))) {
+    if (!(await this.idempotency.checkAndMark(idempotencyKey, customTtl ?? 60))) {
       this.logger.debug({ messageId: message.id, eventId: event.id }, "duplicate — skipping");
       return;
     }

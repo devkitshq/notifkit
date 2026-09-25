@@ -172,6 +172,29 @@ export const LUA_SCHEDULER_POLL = `
   return tasks
 `;
 
+/** Two-phase idempotency lease acquisition. Checks sent/legacy, then attempts SET NX lock. */
+export const LUA_ACQUIRE_LEASE = `
+  if redis.call('EXISTS', KEYS[1]) == 1 or redis.call('EXISTS', KEYS[3]) == 1 then
+    return 'completed'
+  end
+  local lockAcquired = redis.call('SET', KEYS[2], '1', 'EX', ARGV[1], 'NX')
+  if lockAcquired then
+    return 'acquired'
+  end
+  if redis.call('EXISTS', KEYS[1]) == 1 or redis.call('EXISTS', KEYS[3]) == 1 then
+    return 'completed'
+  end
+  return 'locked'
+`;
+
+/** Two-phase idempotency completion marker. Atomically sets completed + legacy and deletes lock. */
+export const LUA_MARK_PROCESSED = `
+  redis.call('SET', KEYS[1], '1', 'EX', ARGV[1])
+  redis.call('SET', KEYS[2], '1', 'EX', ARGV[1])
+  redis.call('DEL', KEYS[3])
+  return 1
+`;
+
 /**
  * Registers pre-compiled custom commands on an ioredis instance.
  * Calls defineCommand so ioredis uses EVALSHA rather than re-transmitting
@@ -211,6 +234,16 @@ export function registerCustomCommands(redis: Redis): void {
   redis.defineCommand("schedulerPoll", {
     numberOfKeys: 1,
     lua: LUA_SCHEDULER_POLL,
+  });
+
+  redis.defineCommand("acquireLease", {
+    numberOfKeys: 3,
+    lua: LUA_ACQUIRE_LEASE,
+  });
+
+  redis.defineCommand("markProcessed", {
+    numberOfKeys: 3,
+    lua: LUA_MARK_PROCESSED,
   });
 }
 

@@ -8,6 +8,8 @@ import {
   LUA_RENEW_LOCK,
   LUA_USER_THROTTLE,
   LUA_SCHEDULER_POLL,
+  LUA_ACQUIRE_LEASE,
+  LUA_MARK_PROCESSED,
 } from "@/redis/index.js";
 import { throttleProvider } from "@/services/delivery/throttle.js";
 import { UserThrottle } from "@/rate-limiter/index.js";
@@ -53,6 +55,14 @@ describe("Redis Pre-compiled Commands (defineCommand)", () => {
       expect(definedCommands.has("schedulerPoll")).toBe(true);
       expect(definedCommands.get("schedulerPoll")?.numberOfKeys).toBe(1);
       expect(definedCommands.get("schedulerPoll")?.lua).toBe(LUA_SCHEDULER_POLL);
+
+      expect(definedCommands.has("acquireLease")).toBe(true);
+      expect(definedCommands.get("acquireLease")?.numberOfKeys).toBe(3);
+      expect(definedCommands.get("acquireLease")?.lua).toBe(LUA_ACQUIRE_LEASE);
+
+      expect(definedCommands.has("markProcessed")).toBe(true);
+      expect(definedCommands.get("markProcessed")?.numberOfKeys).toBe(3);
+      expect(definedCommands.get("markProcessed")?.lua).toBe(LUA_MARK_PROCESSED);
     });
 
     it("RedisClient automatically registers all custom commands on native client", () => {
@@ -68,6 +78,8 @@ describe("Redis Pre-compiled Commands (defineCommand)", () => {
         expect(typeof client.native.renewLock).toBe("function");
         expect(typeof client.native.throttleUser).toBe("function");
         expect(typeof client.native.schedulerPoll).toBe("function");
+        expect(typeof (client.native as any).acquireLease).toBe("function");
+        expect(typeof (client.native as any).markProcessed).toBe("function");
       } finally {
         void client.disconnect();
       }
@@ -94,6 +106,12 @@ describe("Redis Pre-compiled Commands (defineCommand)", () => {
 
       expect(LUA_SCHEDULER_POLL).toContain("redis.call('ZRANGE'");
       expect(LUA_SCHEDULER_POLL).toContain("redis.call('ZADD'");
+
+      expect(LUA_ACQUIRE_LEASE).toContain("redis.call('EXISTS'");
+      expect(LUA_ACQUIRE_LEASE).toContain("redis.call('SET'");
+
+      expect(LUA_MARK_PROCESSED).toContain("redis.call('SET'");
+      expect(LUA_MARK_PROCESSED).toContain("redis.call('DEL'");
     });
   });
 

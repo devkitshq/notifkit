@@ -8,7 +8,7 @@ import {
   StreamProducer,
   type StreamMessage,
 } from "@/index.js";
-import { BaseWorker } from "@/index.js";
+import { BaseWorker, type ProcessResult } from "@/index.js";
 import {
   STREAMS,
   CONSUMER_GROUPS,
@@ -110,7 +110,7 @@ export class AiWorker extends BaseWorker {
     this.outboundProducers = options.outboundProducers;
     this.db = options.db;
   }
-  async process(message: StreamMessage): Promise<void> {
+  async process(message: StreamMessage): Promise<ProcessResult> {
     const { event } = message;
 
     const payloadResult = this.registry.safeParsePayload("notification.ai_pending", event.payload);
@@ -126,12 +126,26 @@ export class AiWorker extends BaseWorker {
 
     // Idempotency
     const idempotencyKey = `${pending.enrichedEventId}:${pending.recipientId}:${pending.channel}:ai`;
-    if (!(await this.idempotency.checkAndMark(idempotencyKey))) {
+    const lease = this.idempotency.acquireLease
+      ? await this.idempotency.acquireLease(idempotencyKey, 30)
+      : (await this.idempotency.checkAndMark(idempotencyKey, 30))
+        ? "acquired"
+        : "locked";
+
+    if (lease === "completed") {
       this.logger.debug(
         { messageId: message.id, eventId: event.id },
-        "duplicate ai task — skipping",
+        "ai task already completed — acking message",
       );
       return;
+    }
+
+    if (lease === "locked") {
+      this.logger.debug(
+        { messageId: message.id, eventId: event.id },
+        "duplicate ai task — lock held by another worker, leaving pending in stream",
+      );
+      return { ack: false };
     }
     try {
       // Execute AI prompts. Each key is a separate billed model call, so the
@@ -254,6 +268,7 @@ export class AiWorker extends BaseWorker {
           "task dispatched after AI generation",
         );
       }
+      await this.idempotency.markProcessed?.(idempotencyKey);
     } catch (err) {
       await this.idempotency.unmark(idempotencyKey);
       if (err instanceof PermanentAiError || (err as Error)?.name === "PermanentAiError") {

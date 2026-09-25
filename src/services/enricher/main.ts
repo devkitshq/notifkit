@@ -8,7 +8,7 @@ import {
   StreamProducer,
   type StreamMessage,
 } from "@/index.js";
-import { BaseWorker } from "@/index.js";
+import { BaseWorker, type ProcessResult } from "@/index.js";
 import {
   STREAMS,
   INBOUND_STREAMS,
@@ -234,7 +234,7 @@ export class EnricherWorker extends BaseWorker {
     }
   }
 
-  async process(message: StreamMessage): Promise<void> {
+  async process(message: StreamMessage): Promise<ProcessResult> {
     const { event } = message;
     const publishPromises: Promise<void>[] = [];
 

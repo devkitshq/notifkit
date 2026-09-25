@@ -17,6 +17,8 @@ export interface StreamMessage {
   event: StreamEvent;
   /** Stream this message was read from. Required to ack/claim against the right one. */
   stream?: string;
+  /** Redis Stream PEL delivery count (1 on initial read, >1 on autoclaim/reclaim). */
+  deliveryCount?: number;
 }
 
 export interface PendingEntry {
@@ -323,6 +325,7 @@ export class StreamConsumer {
             }
             // Attach original stream name for dynamic acking
             msg.stream = streamName as StreamName;
+            msg.deliveryCount = 1;
             batch.push(msg);
           }
         }
@@ -516,6 +519,7 @@ export class PendingMessageScanner {
       if (toClaim.length === 0) continue;
 
       const ids = toClaim.map((p) => p.id);
+      const countsById = new Map<string, number>(toClaim.map((p) => [p.id, p.deliveryCount]));
       // Let Redis arbitrate rather than claiming unconditionally. Two scanners
       // routinely list the same entry, and with a min-idle of 0 both claims
       // succeed and the message is processed twice; with the threshold applied
@@ -536,6 +540,8 @@ export class PendingMessageScanner {
         const msg = parseMessage(id, fields, this.logger);
         if (msg) {
           msg.stream = s;
+          const preClaimCount = countsById.get(id) ?? 1;
+          msg.deliveryCount = preClaimCount + 1;
           recovered.push(msg);
         }
       }

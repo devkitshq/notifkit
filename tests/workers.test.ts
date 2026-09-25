@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AiWorker, PermanentAiError } from "@/services/ai/main.js";
 import { DeliveryWorker } from "@/services/delivery/main.js";
 import { PreferenceRepository } from "@/repositories/index.js";
-import { BaseWorker, NonRetryableError } from "@/workers/index.js";
+import {
+  BaseWorker,
+  NonRetryableError,
+  LockHeldError,
+  type ProcessResult,
+} from "@/workers/index.js";
 import type { StreamMessage } from "@/queue/index.js";
 import { createMockDb, type MockDb } from "./helpers/mock-db.js";
 import { suppressions } from "@/db/schema.js";
@@ -117,7 +122,7 @@ describe("BaseWorker Retry and DLQ Logic", () => {
     };
   });
 
-  it("increments retry count on failure and does not ack", async () => {
+  it("does not ack or nack on failure, leaving message pending in stream", async () => {
     const worker = new TestWorker({
       consumer: mockConsumer,
       pendingScanner: mockPendingScanner,
@@ -127,6 +132,7 @@ describe("BaseWorker Retry and DLQ Logic", () => {
 
     const msg: StreamMessage = {
       id: "msg-1",
+      deliveryCount: 1,
       event: {
         id: "evt-123",
         type: "notification.created",
@@ -147,9 +153,7 @@ describe("BaseWorker Retry and DLQ Logic", () => {
     expect(mockConsumer.nack).not.toHaveBeenCalled();
   });
 
-  it("DLQs message and acks when retry count exceeds max limit", async () => {
-    mockRedis.incr.mockResolvedValue(4);
-
+  it("DLQs message and nacks when retry count exceeds max limit", async () => {
     const worker = new TestWorker({
       consumer: mockConsumer,
       pendingScanner: mockPendingScanner,
@@ -159,6 +163,7 @@ describe("BaseWorker Retry and DLQ Logic", () => {
 
     const msg: StreamMessage = {
       id: "msg-1",
+      deliveryCount: 4,
       event: {
         id: "evt-123",
         type: "notification.created",
@@ -172,23 +177,9 @@ describe("BaseWorker Retry and DLQ Logic", () => {
       },
     };
 
-    mockRedis.multi = vi.fn().mockReturnValue({
-      incr: function () {
-        return this;
-      },
-      expire: function () {
-        return this;
-      },
-      exec: vi.fn().mockResolvedValue([
-        [null, 4],
-        [null, true],
-      ]),
-    });
-
     await (worker as any).processWithTracking(msg);
 
     expect(mockConsumer.nack).toHaveBeenCalledWith("msg-1", msg.event, undefined);
-    expect(mockRedis.del).toHaveBeenCalledWith("notif:worker:retries:TestWorker:default:msg-1");
   });
 
   it("immediately moves to DLQ on attempt 1 when process throws NonRetryableError", async () => {
@@ -208,6 +199,7 @@ describe("BaseWorker Retry and DLQ Logic", () => {
 
     const msg: StreamMessage = {
       id: "msg-perm-1",
+      deliveryCount: 1,
       event: {
         id: "evt-perm-1",
         type: "notification.created",
@@ -220,9 +212,100 @@ describe("BaseWorker Retry and DLQ Logic", () => {
     await (worker as any).processWithTracking(msg);
 
     expect(mockConsumer.nack).toHaveBeenCalledWith("msg-perm-1", msg.event, undefined);
-    expect(mockRedis.del).toHaveBeenCalledWith(
-      "notif:worker:retries:PermanentFailWorker:default:msg-perm-1",
-    );
+  });
+
+  it("processes successfully without touching Redis retry keys on happy path", async () => {
+    class SuccessWorker extends BaseWorker {
+      protected async process(): Promise<void> {}
+    }
+
+    const multiSpy = vi.spyOn(mockRedis, "multi");
+    const worker = new SuccessWorker({
+      consumer: mockConsumer,
+      pendingScanner: mockPendingScanner,
+      logger: mockLogger,
+      maxRetriesBeforeDlq: 3,
+    });
+
+    const msg: StreamMessage = {
+      id: "msg-happy-1",
+      deliveryCount: 1,
+      event: {
+        id: "evt-happy-1",
+        type: "notification.created",
+        timestamp: new Date().toISOString(),
+        metadata: { traceId: "t-1", source: "test", retryCount: 0 },
+        payload: {},
+      },
+    };
+
+    await (worker as any).processWithTracking(msg);
+
+    expect(mockConsumer.ack).toHaveBeenCalledWith("msg-happy-1", undefined);
+    expect(multiSpy).not.toHaveBeenCalled();
+    expect(mockRedis.del).not.toHaveBeenCalled();
+  });
+
+  it("does not ack or nack when process returns { ack: false } (leaving message pending in stream)", async () => {
+    class SkipWorker extends BaseWorker {
+      protected async process(): Promise<ProcessResult> {
+        return { ack: false };
+      }
+    }
+
+    const worker = new SkipWorker({
+      consumer: mockConsumer,
+      pendingScanner: mockPendingScanner,
+      logger: mockLogger,
+      maxRetriesBeforeDlq: 3,
+    });
+
+    const msg: StreamMessage = {
+      id: "msg-skip-1",
+      event: {
+        id: "evt-skip-1",
+        type: "notification.created",
+        timestamp: new Date().toISOString(),
+        metadata: { traceId: "t-1", source: "test", retryCount: 0 },
+        payload: {},
+      },
+    };
+
+    await (worker as any).processWithTracking(msg);
+
+    expect(mockConsumer.ack).not.toHaveBeenCalled();
+    expect(mockConsumer.nack).not.toHaveBeenCalled();
+  });
+
+  it("does not ack or nack when process throws LockHeldError (leaving message pending in stream)", async () => {
+    class LockHeldWorker extends BaseWorker {
+      protected async process(): Promise<ProcessResult> {
+        throw new LockHeldError("lock held");
+      }
+    }
+
+    const worker = new LockHeldWorker({
+      consumer: mockConsumer,
+      pendingScanner: mockPendingScanner,
+      logger: mockLogger,
+      maxRetriesBeforeDlq: 3,
+    });
+
+    const msg: StreamMessage = {
+      id: "msg-lock-1",
+      event: {
+        id: "evt-lock-1",
+        type: "notification.created",
+        timestamp: new Date().toISOString(),
+        metadata: { traceId: "t-1", source: "test", retryCount: 0 },
+        payload: {},
+      },
+    };
+
+    await (worker as any).processWithTracking(msg);
+
+    expect(mockConsumer.ack).not.toHaveBeenCalled();
+    expect(mockConsumer.nack).not.toHaveBeenCalled();
   });
 });
 
@@ -1096,6 +1179,65 @@ describe("DeliveryWorker", () => {
 
     expect(mockLogger.warn).toHaveBeenCalled();
     expect(mockTransportRegistry.getAll).not.toHaveBeenCalled();
+  });
+
+  it("returns { ack: false } when checkAndMark returns false (duplicate delivery in progress)", async () => {
+    (worker as any).idempotency.checkAndMark.mockResolvedValueOnce(false);
+    const sendFn = vi.fn();
+    mockTransportRegistry.getAll.mockReturnValue([{ send: sendFn }]);
+
+    const result = await worker.process(dispatched() as any);
+
+    expect(result).toEqual({ ack: false });
+    expect(sendFn).not.toHaveBeenCalled();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: "123e4567-e89b-12d3-a456-426614174001" }),
+      "duplicate delivery — skipping and leaving pending in stream",
+    );
+  });
+
+  it("returns void and acks duplicate when acquireLease returns 'completed' (already delivered)", async () => {
+    (worker as any).idempotency.acquireLease = vi.fn().mockResolvedValueOnce("completed");
+    const sendFn = vi.fn();
+    mockTransportRegistry.getAll.mockReturnValue([{ send: sendFn }]);
+
+    const result = await worker.process(dispatched() as any);
+
+    expect(result).toBeUndefined(); // Void return signals BaseWorker to ack
+    expect(sendFn).not.toHaveBeenCalled();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: "123e4567-e89b-12d3-a456-426614174001" }),
+      "duplicate delivery — already completed, acking message",
+    );
+  });
+
+  it("returns { ack: false } when acquireLease returns 'locked' (delivery in progress)", async () => {
+    (worker as any).idempotency.acquireLease = vi.fn().mockResolvedValueOnce("locked");
+    const sendFn = vi.fn();
+    mockTransportRegistry.getAll.mockReturnValue([{ send: sendFn }]);
+
+    const result = await worker.process(dispatched() as any);
+
+    expect(result).toEqual({ ack: false });
+    expect(sendFn).not.toHaveBeenCalled();
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: "123e4567-e89b-12d3-a456-426614174001" }),
+      "duplicate delivery — skipping and leaving pending in stream",
+    );
+  });
+
+  it("synchronously calls markProcessed immediately upon transport success", async () => {
+    (worker as any).idempotency.acquireLease = vi.fn().mockResolvedValueOnce("acquired");
+    (worker as any).idempotency.markProcessed = vi.fn().mockResolvedValueOnce(undefined);
+    mockTransportRegistry.getAll.mockReturnValue([
+      { send: vi.fn().mockResolvedValue({ success: true, providerMessageId: "prov-sync-1" }) },
+    ]);
+
+    await worker.process(dispatched() as any);
+
+    expect((worker as any).idempotency.markProcessed).toHaveBeenCalledWith(
+      "123e4567-e89b-12d3-a456-426614174001",
+    );
   });
 
   it("reports a failure when no transport is registered for the channel", async () => {
