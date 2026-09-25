@@ -1,7 +1,7 @@
 import type { DeliveryResult, Transport } from "notifkit";
 import type { NotificationDispatchedPayload, Logger } from "notifkit";
-import type { App } from "firebase-admin/app";
-import type { Messaging } from "firebase-admin/messaging";
+import { initializeApp, getApp, cert, type App } from "firebase-admin/app";
+import { getMessaging, type Messaging } from "firebase-admin/messaging";
 
 export interface FcmTransportOptions {
   serviceAccountJson: string;
@@ -27,11 +27,8 @@ export class FcmTransport implements Transport {
     this.limits = limits;
   }
 
-  private async getMessaging(): Promise<Messaging> {
+  private getMessaging(): Messaging {
     if (this.messaging) return this.messaging;
-
-    const { initializeApp, getApp, cert } = await import("firebase-admin/app");
-    const { getMessaging } = await import("firebase-admin/messaging");
 
     let app: App;
     try {

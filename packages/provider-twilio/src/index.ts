@@ -1,7 +1,7 @@
 import type { DeliveryResult, Transport } from "notifkit";
 import type { NotificationDispatchedPayload, Logger } from "notifkit";
 import type { WebhookEvent } from "notifkit";
-import type { Twilio } from "twilio";
+import twilio, { type Twilio } from "twilio";
 
 /**
  * Codes `messages.create` rejects with for a destination that is permanently
@@ -108,9 +108,8 @@ export class TwilioTransport implements Transport {
    * import time — a process that registers this transport but never sends SMS
    * should not pay for it.
    */
-  private async getClient(): Promise<Twilio> {
+  private getClient(): Twilio {
     if (this.client) return this.client;
-    const { default: twilio } = await import("twilio");
     this.client = twilio(this.accountSid, this.authToken);
     return this.client;
   }
@@ -194,7 +193,6 @@ export class TwilioTransport implements Transport {
       return false;
     }
 
-    const { default: twilio } = await import("twilio");
     const valid = twilio.validateRequest(
       this.authToken,
       signature,

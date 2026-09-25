@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { z, type ZodTypeAny } from "zod";
 import type { LanguageModel } from "ai";
 
-import { ValidationError } from "@/index.js";
+import { ValidationError } from "@/shared/index.js";
 
 export function loadEnv(path?: string): void {
   const envPath = path ?? resolve(process.cwd(), ".env");

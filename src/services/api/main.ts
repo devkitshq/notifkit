@@ -24,6 +24,7 @@ import { projects, messageLogs, projectApiKeys, suppressions } from "@/db/schema
 import { eq, inArray } from "drizzle-orm";
 import { randomBytes, timingSafeEqual, createHash } from "node:crypto";
 import { LRUCache, normaliseTarget } from "@/shared/index.js";
+import { transportRegistry } from "@/transport/index.js";
 import type { Redis } from "@/redis/index.js";
 import { z } from "zod";
 import { getMetricsRegistry } from "@/metrics/index.js";
@@ -678,7 +679,6 @@ export async function startApiServer() {
     logger.info({ tokenHash }, "api key cache invalidated");
   });
 
-  const { transportRegistry } = await import("../../transport/index.js");
   for (const channel of transportRegistry.registeredChannels()) {
     const transport = transportRegistry.get(channel as any);
     if (!transport?.webhookPath) continue;

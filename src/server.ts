@@ -2,6 +2,8 @@ import { EventEmitter } from "node:events";
 import { registerTransport, type Transport } from "./transport/index.js";
 import { globalEmitter } from "./shared/index.js";
 import { createLogger, type Logger } from "./logger/index.js";
+import { setGlobalConfig, readBaseConfig, setAiConfig } from "./config/index.js";
+import { createDatabase, runMigrations } from "./db/index.js";
 import type { LanguageModel } from "ai";
 
 export interface NotifkitOptions {
@@ -70,7 +72,6 @@ export class NotifkitServer extends EventEmitter {
 
   async start() {
     // 1. Initial configuration setup for environment overrides
-    const { setGlobalConfig, readBaseConfig } = await import("./config/index.js");
     if (this.options.port) process.env.PORT = String(this.options.port);
     if (this.options.logLevel) process.env.LOG_LEVEL = this.options.logLevel;
     if (this.options.nodeEnv) process.env.NODE_ENV = this.options.nodeEnv;
@@ -130,14 +131,12 @@ export class NotifkitServer extends EventEmitter {
     const finalConfig = readBaseConfig();
     setGlobalConfig(finalConfig);
     if (this.options.aiModel) {
-      const { setAiConfig } = await import("./config/index.js");
       setAiConfig({ aiModel: this.options.aiModel });
     }
 
     // 4. Run database migrations if enabled
     if (this.options.autoMigrate !== false) {
       this.logger.info("Running database migrations...");
-      const { createDatabase, runMigrations } = await import("./db/index.js");
       const { db, sql } = createDatabase({ url: this.options.databaseUrl! });
       await runMigrations(db);
       await sql.end();

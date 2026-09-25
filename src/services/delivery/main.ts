@@ -19,6 +19,7 @@ import {
 import { type StreamName } from "@/contracts/streams.js";
 import { createDatabase } from "@/db/index.js";
 import { deliveryOutbox, scheduledPayloads } from "@/db/schema.js";
+import { sql as drizzleSql } from "drizzle-orm";
 import { ContactRepository, IdempotencyGuard } from "@/index.js";
 import { transportRegistry } from "@/index.js";
 import { globalEmitter, getPriorityBucket, type WorkerOptions } from "@/shared/index.js";
@@ -107,7 +108,6 @@ export class DeliveryWorker extends BaseWorker {
     });
 
     this.outboxUpdateProcessor = new BatchProcessor<any, void>(batchSize, 5, async (updates) => {
-      const { sql } = await import("drizzle-orm");
       const values = updates.map((update) => ({
         taskId: update.taskId,
         channel: update.channel,
@@ -121,7 +121,7 @@ export class DeliveryWorker extends BaseWorker {
         .values(values)
         .onConflictDoUpdate({
           target: [deliveryOutbox.taskId, deliveryOutbox.channel, deliveryOutbox.destination],
-          set: { providerMessageId: sql`EXCLUDED.provider_message_id` },
+          set: { providerMessageId: drizzleSql`EXCLUDED.provider_message_id` },
         })
         .catch((e: any) => this.logger.error({ err: e }, "background update failed"));
 
@@ -309,7 +309,6 @@ export class DeliveryWorker extends BaseWorker {
           return;
         }
 
-        const { sql } = await import("drizzle-orm");
         await this.db
           .insert(scheduledPayloads)
           .values({
@@ -318,7 +317,7 @@ export class DeliveryWorker extends BaseWorker {
           })
           .onConflictDoUpdate({
             target: scheduledPayloads.taskId,
-            set: { payload: sql`EXCLUDED.payload` },
+            set: { payload: drizzleSql`EXCLUDED.payload` },
           });
 
         await this.scheduledProducer.publish(

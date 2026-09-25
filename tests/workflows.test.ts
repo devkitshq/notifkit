@@ -45,13 +45,17 @@ vi.mock("../src/db/index.js", () => ({
   createDatabase: () => ({ db: mockDb, sql: { end: vi.fn() } }),
 }));
 
-vi.mock("../src/redis/index.js", () => ({
-  RedisClient: vi.fn().mockImplementation(() => ({
-    native: mockRedisNative,
-    healthCheck: vi.fn().mockResolvedValue(true),
-    disconnect: vi.fn(),
-  })),
-}));
+vi.mock("../src/redis/index.js", async (importOriginal) => {
+  const actual = (await importOriginal()) as any;
+  return {
+    ...actual,
+    RedisClient: vi.fn().mockImplementation(() => ({
+      native: mockRedisNative,
+      healthCheck: vi.fn().mockResolvedValue(true),
+      disconnect: vi.fn(),
+    })),
+  };
+});
 
 vi.mock("../src/logger/index.js", () => ({
   createLogger: () => ({

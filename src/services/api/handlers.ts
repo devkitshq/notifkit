@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, randomBytes, createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Logger } from "@/logger/index.js";
 import type { RedisClient } from "@/redis/index.js";
@@ -1096,7 +1096,6 @@ export function createHandlers(deps: Deps) {
       .safeParse(await readJsonBody(req));
     const role = parsed.success ? parsed.data.role : "admin";
 
-    const { randomBytes, createHash } = await import("node:crypto");
     const apiKey = `nk_live_${randomBytes(32).toString("hex")}`;
     const apiKeyHash = createHash("sha256").update(apiKey).digest("hex");
 
