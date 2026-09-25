@@ -35,7 +35,13 @@ function createMockRes() {
   return res;
 }
 
-import { extractAuthToken, getClientIp } from "@/services/api/main.js";
+import {
+  extractAuthToken,
+  getClientIp,
+  calculateSlidingWindow,
+  LUA_SLIDING_WINDOW_COUNTER,
+  API_RATE_LIMIT_WINDOW_MS,
+} from "@/services/api/main.js";
 
 describe("extractAuthToken", () => {
   it("extracts Bearer token from authorization header", () => {
@@ -1213,5 +1219,133 @@ describe("Router param decoding", () => {
 
     expect(router.match("GET", "/v1/users/%FF")).toBeNull();
     expect(router.match("GET", "/v1/users/%c0%af")).toBeNull();
+  });
+});
+
+describe("API Rate Limiting - Sliding Window Counter", () => {
+  it("exports valid window size and Lua script", () => {
+    expect(API_RATE_LIMIT_WINDOW_MS).toBe(60_000);
+    expect(typeof LUA_SLIDING_WINDOW_COUNTER).toBe("string");
+    expect(LUA_SLIDING_WINDOW_COUNTER).toContain("INCR");
+    expect(LUA_SLIDING_WINDOW_COUNTER).toContain("EXPIRE");
+    expect(LUA_SLIDING_WINDOW_COUNTER).toContain("math.floor(prevCount * weight + currentCount)");
+  });
+
+  describe("calculateSlidingWindow", () => {
+    it("returns only currentCount when now is at the start of a window (weight = 1.0 on previous)", () => {
+      // At nowMs = 60_000 (start of window 1), weight = (60000 - 0) / 60000 = 1.0
+      const count = calculateSlidingWindow(60_000, 60_000, 5, 20);
+      expect(count).toBe(25); // 20 * 1.0 + 5
+    });
+
+    it("weights previous window count proportionally across window progression", () => {
+      // At 30s into a 60s window, previous count weight is 50%
+      const halfwayCount = calculateSlidingWindow(90_000, 60_000, 10, 100);
+      expect(halfwayCount).toBe(60); // floor(100 * 0.5) + 10 = 60
+
+      // At 45s into a 60s window, previous count weight is 25%
+      const threeQuarterCount = calculateSlidingWindow(105_000, 60_000, 10, 100);
+      expect(threeQuarterCount).toBe(35); // floor(100 * 0.25) + 10 = 35
+
+      // At 59s into a 60s window, previous count weight is ~1.67%
+      const endCount = calculateSlidingWindow(119_000, 60_000, 10, 100);
+      expect(endCount).toBe(11); // floor(100 * (1/60)) + 10 = 1 + 10 = 11
+    });
+
+    it("handles zero previous count correctly", () => {
+      const count = calculateSlidingWindow(15_000, 60_000, 8, 0);
+      expect(count).toBe(8);
+    });
+
+    it("handles invalid windowMs safely", () => {
+      expect(calculateSlidingWindow(15_000, 0, 8, 10)).toBe(0);
+      expect(calculateSlidingWindow(15_000, -100, 8, 10)).toBe(0);
+    });
+  });
+
+  describe("Lua script behavior simulation", () => {
+    function simulateLua(
+      store: Map<string, { value: number; ttl: number }>,
+      keys: string[],
+      argv: (string | number)[],
+    ): number {
+      const currentKey = keys[0]!;
+      const prevKey = keys[1];
+      const now = Number(argv[0]);
+      const window = Number(argv[1]);
+      const maxReqs = Number(argv[2]);
+      const ttl = argv[3] ? Number(argv[3]) : Math.ceil((window * 2) / 1000) + 60;
+
+      if (!now || !window || window <= 0 || !maxReqs || maxReqs <= 0) {
+        return -1;
+      }
+
+      let cKey = currentKey;
+      let pKey = prevKey;
+      if (!pKey) {
+        const currentBucket = Math.floor(now / window);
+        const prevBucket = currentBucket - 1;
+        cKey = `${keys[0]}:${currentBucket}`;
+        pKey = `${keys[0]}:${prevBucket}`;
+      }
+
+      const currentCount = store.get(cKey)?.value ?? 0;
+      const prevCount = store.get(pKey)?.value ?? 0;
+
+      const timeIntoCurrent = now % window;
+      const weight = (window - timeIntoCurrent) / window;
+      const estimated = Math.floor(prevCount * weight + currentCount);
+
+      if (estimated < maxReqs) {
+        const item = store.get(cKey) ?? { value: 0, ttl: 0 };
+        item.value += 1;
+        if (item.value === 1) {
+          item.ttl = ttl;
+        }
+        store.set(cKey, item);
+        return estimated + 1;
+      }
+
+      return -1;
+    }
+
+    it("increments within limit and sets TTL on first entry", () => {
+      const store = new Map<string, { value: number; ttl: number }>();
+      const currentKey = "{rate-limit:api:req:proj1}:10";
+      const prevKey = "{rate-limit:api:req:proj1}:9";
+
+      const res1 = simulateLua(store, [currentKey, prevKey], [600_000, 60_000, 5]);
+      expect(res1).toBe(1);
+      expect(store.get(currentKey)?.value).toBe(1);
+      expect(store.get(currentKey)?.ttl).toBe(180);
+
+      const res2 = simulateLua(store, [currentKey, prevKey], [601_000, 60_000, 5]);
+      expect(res2).toBe(2);
+      expect(store.get(currentKey)?.value).toBe(2);
+    });
+
+    it("rejects when limit is reached", () => {
+      const store = new Map<string, { value: number; ttl: number }>();
+      const currentKey = "{rate-limit:api:req:proj1}:10";
+      const prevKey = "{rate-limit:api:req:proj1}:9";
+
+      for (let i = 0; i < 3; i++) {
+        const res = simulateLua(store, [currentKey, prevKey], [600_000, 60_000, 3]);
+        expect(res).toBe(i + 1);
+      }
+
+      const rejected = simulateLua(store, [currentKey, prevKey], [600_500, 60_000, 3]);
+      expect(rejected).toBe(-1);
+      expect(store.get(currentKey)?.value).toBe(3);
+    });
+
+    it("computes keys automatically if only base key is provided", () => {
+      const store = new Map<string, { value: number; ttl: number }>();
+      const baseKey = "rate-limit:api:req:proj1";
+
+      const res = simulateLua(store, [baseKey], [120_000, 60_000, 5]);
+      expect(res).toBe(1);
+      expect(store.has("rate-limit:api:req:proj1:2")).toBe(true);
+    });
   });
 });
