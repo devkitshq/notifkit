@@ -5,7 +5,7 @@ import { setGlobalDispatcher, Agent } from "undici";
 // Configure high-concurrency connection pool for client benchmark
 setGlobalDispatcher(
   new Agent({
-    connections: 300,
+    connections: 2000,
     pipelining: 1,
     keepAliveTimeout: 30000,
     keepAliveMaxTimeout: 60000,
@@ -16,6 +16,7 @@ export interface DistributedLoadTestOptions {
   serverCount?: number;
   durationSeconds?: number;
   concurrency?: number;
+  servicesCount?: number;
   adminApiKey?: string;
   dbPort?: number;
   serverCpus?: string;
@@ -28,6 +29,7 @@ export interface DistributedLoadTestOptions {
   dbMaxConnections?: number;
   providerLatencyMs?: number | string;
   serverServices?: string[];
+  serverNodes?: Array<{ name: string; port: number; services?: string }>;
   quiet?: boolean;
 }
 
@@ -38,6 +40,7 @@ export interface DistributedBenchmarkResult {
   workerConcurrency: number;
   durationSec: number;
   concurrency: number;
+  servicesCount?: number;
   requestsSent: number;
   successCount: number;
   failCount: number;
@@ -87,14 +90,29 @@ export async function runDistributedBenchmark(
     });
   }
 
-  const services = [
-    "db",
-    "redis",
-    ...Array.from({ length: serverCount }, (_, i) => `server${i + 1}`),
-  ];
+  // If explicit serverNodes are provided, use their service names and custom env vars
+  const nodes =
+    options.serverNodes && options.serverNodes.length > 0
+      ? options.serverNodes
+      : Array.from({ length: serverCount }, (_, i) => ({
+          name: `server${i + 1}`,
+          port: 35678 + i,
+          services: options.serverServices?.[i],
+        }));
+
+  for (const node of nodes) {
+    if (node.services) {
+      const envKey = `${node.name.toUpperCase().replace(/-/g, "_")}_SERVICES`;
+      composeEnv[envKey] = node.services;
+    }
+  }
+
+  const effectiveServerCount = nodes.length;
+
+  const services = ["db", "redis", ...nodes.map((n) => n.name)];
 
   console.log(
-    `🚀 Booting distributed profiling environment (${serverCount} Server Instances: ${serverCpus} vCPU each, ${serverMemory} RAM | DB: ${composeEnv.DB_CPUS ?? "2.0"} vCPU | Redis: ${composeEnv.REDIS_CPUS ?? "1.5"} vCPU | Provider Latency: ${providerLatency}ms)...`,
+    `🚀 Booting distributed profiling environment (${effectiveServerCount} Server Instances: [${nodes.map((n) => n.name).join(", ")}] | ${serverCpus} vCPU each, ${serverMemory} RAM | DB: ${composeEnv.DB_CPUS ?? "2.0"} vCPU | Redis: ${composeEnv.REDIS_CPUS ?? "1.5"} vCPU | Provider Latency: ${providerLatency}ms)...`,
   );
 
   const environment = await new DockerComposeEnvironment(".", "docker-compose.distributed.yml")
@@ -102,14 +120,13 @@ export async function runDistributedBenchmark(
     .withBuild()
     .up(services);
 
-  const serverPorts = Array.from({ length: serverCount }, (_, i) => 35678 + i);
-  const serverUrls = serverPorts.map((p) => `http://localhost:${p}`);
+  const serverUrls = nodes.map((n) => `http://localhost:${n.port}`);
   const dbUrl = `postgres://notifkit:password@localhost:${dbPort}/notifkit`;
 
   const apiLatencies: number[] = [];
   const deliveryLatencies: number[] = [];
 
-  console.log(`⏳ Waiting for ${serverCount} server instances health checks...`);
+  console.log(`⏳ Waiting for ${effectiveServerCount} server instances health checks...`);
   const apiUrls: string[] = [];
   for (const url of serverUrls) {
     let ready = false;
@@ -135,8 +152,8 @@ export async function runDistributedBenchmark(
   let lastDeliveryTimestamp: number | null = null;
 
   // Hook into container logs of all active servers
-  for (let i = 1; i <= serverCount; i++) {
-    const serverContainer = environment.getContainer(`server${i}-1`);
+  for (const node of nodes) {
+    const serverContainer = environment.getContainer(`${node.name}-1`);
     const stream = await serverContainer.logs();
     let logBuffer = "";
     stream.on("data", (chunk) => {
@@ -213,8 +230,28 @@ export async function runDistributedBenchmark(
     }),
   });
 
+  const MICROSERVICES = [
+    { name: "order-service", priority: "critical", event: "order_confirmation" },
+    { name: "payments-service", priority: "critical", event: "payment_receipt" },
+    { name: "billing-service", priority: "normal", event: "invoice_ready" },
+    { name: "auth-service", priority: "critical", event: "password_reset" },
+    { name: "shipping-service", priority: "normal", event: "tracking_update" },
+    { name: "account-service", priority: "normal", event: "security_alert" },
+    { name: "inventory-service", priority: "low", event: "stock_replenished" },
+    { name: "fraud-service", priority: "critical", event: "suspicious_login" },
+    { name: "marketing-service", priority: "low", event: "promotional_blast" },
+    { name: "support-service", priority: "normal", event: "ticket_reply" },
+  ];
+
+  const activeServicesCount = options.servicesCount ?? (concurrency <= 10 ? concurrency : 10);
+  const activeServices = MICROSERVICES.slice(
+    0,
+    Math.min(activeServicesCount, MICROSERVICES.length),
+  );
+  const workersPerService = Math.max(1, Math.round(concurrency / activeServices.length));
+
   console.log(
-    `\n🔥 Starting Distributed Load Generation: ${concurrency} virtual users across ${targetApiUrls.length} API ingress node(s) for ${durationSec}s`,
+    `\n🔥 Starting Distributed Load Generation: ${activeServices.length} microservices blasting concurrently (${concurrency} parallel workers, ~${workersPerService} workers/service) across ${targetApiUrls.length} API ingress node(s) for ${durationSec}s`,
   );
 
   let requestsSent = 0;
@@ -224,8 +261,19 @@ export async function runDistributedBenchmark(
   const startTime = Date.now();
   const endTime = startTime + durationSec * 1000;
 
+  const progressInterval = setInterval(() => {
+    const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(0);
+    const remainingSec = Math.max(0, Math.round((endTime - Date.now()) / 1000));
+    const curReqRate = (requestsSent / Math.max(1, Number(elapsedSec))).toFixed(1);
+    const curDeliv = deliveryLatencies.length;
+    console.log(
+      `⚡ Blasting: ${elapsedSec}s elapsed (${remainingSec}s remaining) | Sent: ${requestsSent} (${curReqRate} req/s) | Delivered so far: ${curDeliv} msgs`,
+    );
+  }, 10000);
+
   async function worker(workerIndex: number) {
     const targetUrl = targetApiUrls[workerIndex % targetApiUrls.length]!;
+    const svc = activeServices[workerIndex % activeServices.length]!;
     while (Date.now() < endTime) {
       requestsSent++;
       try {
@@ -240,8 +288,13 @@ export async function runDistributedBenchmark(
             user: "perf-user-1",
             template: "perf-email",
             channels: ["email"],
-            priority: "critical",
-            data: { name: "Load Tester", requestTime: reqStart },
+            priority: svc.priority,
+            data: {
+              name: "Load Tester",
+              service: svc.name,
+              event: svc.event,
+              requestTime: reqStart,
+            },
           }),
         });
 
@@ -260,6 +313,7 @@ export async function runDistributedBenchmark(
 
   const workers = Array.from({ length: concurrency }).map((_, i) => worker(i));
   await Promise.all(workers);
+  clearInterval(progressInterval);
 
   const activeWindowSec = durationSec;
   const ingestionThroughput = (requestsSent / activeWindowSec).toFixed(2);
@@ -270,9 +324,10 @@ export async function runDistributedBenchmark(
 
   const flushStart = Date.now();
   let lastLogged = 0;
+  const flushTimeoutMs = Math.max(1800000, durationSec * 3000);
 
   while (deliveryLatencies.length < successCount) {
-    if (Date.now() - flushStart > 600000) {
+    if (Date.now() - flushStart > flushTimeoutMs) {
       console.log(
         `⚠️ Flush timeout! Delivered ${deliveryLatencies.length}/${successCount} messages.`,
       );
@@ -315,7 +370,7 @@ export async function runDistributedBenchmark(
   console.log("     📊 LOAD TEST RESULTS 📊     ");
   console.log("=================================");
   console.log(`Topology:             ${serverCount} Distributed Servers`);
-  console.log(`Generation Window:    ${activeWindowSec}s (${concurrency} virtual users)`);
+  console.log(`Generation Window:    ${activeWindowSec}s (${concurrency} microservice callers)`);
   console.log(`Total Ingestion:      ${requestsSent} requests (${ingestionThroughput} req/sec)`);
   console.log(
     `Accepted (202):       ${successCount} (${((successCount / requestsSent) * 100).toFixed(1)}%)`,
@@ -356,6 +411,7 @@ export async function runDistributedBenchmark(
     workerConcurrency,
     durationSec: activeWindowSec,
     concurrency,
+    servicesCount: activeServices.length,
     requestsSent,
     successCount,
     failCount,

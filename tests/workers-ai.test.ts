@@ -81,8 +81,8 @@ describe("AiWorker Edge Cases", () => {
       event: buildStreamEvent(
         "notification.ai_pending",
         {
-          projectId: "00000000-0000-0000-0000-000000000001",
-          enrichedEventId: "00000000-0000-0000-0000-000000000002",
+          projectId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+          enrichedEventId: "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
           recipientId: "usr1",
           channel: "email",
           priority: "normal",
@@ -105,8 +105,8 @@ describe("AiWorker Edge Cases", () => {
       event: buildStreamEvent(
         "notification.ai_pending",
         {
-          projectId: "00000000-0000-0000-0000-000000000001",
-          enrichedEventId: "00000000-0000-0000-0000-000000000002",
+          projectId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+          enrichedEventId: "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
           recipientId: "usr1",
           channel: "email",
           priority: "normal",
@@ -130,8 +130,8 @@ describe("AiWorker Edge Cases", () => {
       event: buildStreamEvent(
         "notification.ai_pending",
         {
-          projectId: "00000000-0000-0000-0000-000000000001",
-          enrichedEventId: "00000000-0000-0000-0000-000000000002",
+          projectId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+          enrichedEventId: "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
           recipientId: "usr1",
           channel: "email",
           priority: "normal",
@@ -157,8 +157,8 @@ describe("AiWorker Edge Cases", () => {
       event: buildStreamEvent(
         "notification.ai_pending",
         {
-          projectId: "00000000-0000-0000-0000-000000000001",
-          enrichedEventId: "00000000-0000-0000-0000-000000000002",
+          projectId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+          enrichedEventId: "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
           recipientId: "usr1",
           channel: "email",
           priority: "normal",
@@ -174,7 +174,7 @@ describe("AiWorker Edge Cases", () => {
     await worker.process(msg);
     expect(globalEmitter.emit).toHaveBeenCalledWith(
       "notification:failed",
-      "00000000-0000-0000-0000-000000000002",
+      "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
       "Invalid prompt",
       "email",
     );
@@ -191,8 +191,8 @@ describe("AiWorker Edge Cases", () => {
       event: buildStreamEvent(
         "notification.ai_pending",
         {
-          projectId: "00000000-0000-0000-0000-000000000001",
-          enrichedEventId: "00000000-0000-0000-0000-000000000002",
+          projectId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+          enrichedEventId: "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
           recipientId: "usr1",
           channel: "email",
           priority: "normal",
@@ -215,8 +215,8 @@ describe("AiWorker Edge Cases", () => {
       event: buildStreamEvent(
         "notification.ai_pending",
         {
-          projectId: "00000000-0000-0000-0000-000000000001",
-          enrichedEventId: "00000000-0000-0000-0000-000000000002",
+          projectId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+          enrichedEventId: "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
           recipientId: "usr1",
           channel: "push",
           priority: "normal",
@@ -241,8 +241,8 @@ describe("AiWorker Edge Cases", () => {
       event: buildStreamEvent(
         "notification.ai_pending",
         {
-          projectId: "00000000-0000-0000-0000-000000000001",
-          enrichedEventId: "00000000-0000-0000-0000-000000000002",
+          projectId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+          enrichedEventId: "b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22",
           recipientId: "usr1",
           channel: "push",
           priority: "normal",

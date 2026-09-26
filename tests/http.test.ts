@@ -171,8 +171,8 @@ describe("HTTP Helpers (src/services/api/http.ts)", () => {
         const parsedBody = JSON.parse(res.body);
         expect(parsedBody.error).toBe("validation_error");
         expect(parsedBody.issues).toEqual([
-          { path: "user.email", message: "Invalid email" },
-          { path: "user.age", message: "Number must be greater than or equal to 18" },
+          { path: "user.email", message: "Invalid email address" },
+          { path: "user.age", message: "Too small: expected number to be >=18" },
         ]);
       }
     });

@@ -58,6 +58,7 @@ class ProfilingTransport implements Transport {
 }
 
 import http from "node:http";
+import cluster from "node:cluster";
 
 const rawServices = process.env.SERVICES?.trim();
 const services: (
@@ -69,39 +70,53 @@ const services: (
       )[])
     : ["api", "enricher", "engine", "delivery", "scheduler"];
 
-const server = new NotifkitServer({
-  services,
-  redisUrl: process.env.REDIS_URL || "redis://localhost:6379",
-  databaseUrl: process.env.DATABASE_URL || "postgres://notifkit:password@localhost:5432/notifkit",
-  logLevel: (process.env.LOG_LEVEL as "info" | "warn" | "error" | "debug") || "info",
-  autoMigrate: false,
-  port: PORT,
-  workerConcurrency,
-  providers: [new ProfilingTransport()],
-});
+const isApiOnly = services.length === 1 && services[0] === "api";
+const clusterWorkers = isApiOnly ? 2 : 1;
 
-server
-  .start()
-  .then(() => {
-    console.log(
-      `🚀 Profiling Server started on port ${PORT} [services: ${services.join(",")}] (concurrency: ${workerConcurrency})`,
-    );
-
-    // If API is not enabled on this worker node, expose a lightweight health responder so orchestration succeeds
-    if (!services.includes("api")) {
-      const healthServer = http.createServer((req, res) => {
-        if (req.url === "/health") {
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ status: "ok", services, isWorkerOnly: true }));
-        } else {
-          res.writeHead(404);
-          res.end();
-        }
-      });
-      healthServer.listen(PORT, "0.0.0.0");
-    }
-  })
-  .catch((err) => {
-    console.error("Failed to start profiling server:", err);
-    process.exit(1);
+if (clusterWorkers > 1 && cluster.isPrimary) {
+  console.log(`⚡ Forking ${clusterWorkers} API worker processes on port ${PORT}...`);
+  for (let i = 0; i < clusterWorkers; i++) {
+    cluster.fork();
+  }
+  cluster.on("exit", (w) => {
+    console.warn(`Worker ${w.process.pid} exited, spawning replacement...`);
+    cluster.fork();
   });
+} else {
+  const server = new NotifkitServer({
+    services,
+    redisUrl: process.env.REDIS_URL || "redis://localhost:6379",
+    databaseUrl: process.env.DATABASE_URL || "postgres://notifkit:password@localhost:5432/notifkit",
+    logLevel: (process.env.LOG_LEVEL as "info" | "warn" | "error" | "debug") || "info",
+    autoMigrate: false,
+    port: PORT,
+    workerConcurrency,
+    providers: [new ProfilingTransport()],
+  });
+
+  server
+    .start()
+    .then(() => {
+      console.log(
+        `🚀 Profiling Server started on port ${PORT} [services: ${services.join(",")}] (pid: ${process.pid})`,
+      );
+
+      // If API is not enabled on this worker node, expose a lightweight health responder so orchestration succeeds
+      if (!services.includes("api")) {
+        const healthServer = http.createServer((req, res) => {
+          if (req.url === "/health") {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ status: "ok", services, isWorkerOnly: true }));
+          } else {
+            res.writeHead(404);
+            res.end();
+          }
+        });
+        healthServer.listen(PORT, "0.0.0.0");
+      }
+    })
+    .catch((err) => {
+      console.error("Failed to start profiling server:", err);
+      process.exit(1);
+    });
+}
