@@ -69,6 +69,17 @@ export const baseConfigSchema = z.object({
    */
   IDEMPOTENCY_TTL_SECONDS: z.coerce.number().int().min(60).default(3600),
   DB_MAX_CONNECTIONS: z.coerce.number().int().min(1).default(2),
+  /**
+   * PostgreSQL schema that holds notifkit's tables and enum types. Defaults to
+   * `public`. Any other value makes migrations create every object in that
+   * schema and sets `search_path` on every connection, so notifkit can share a
+   * database with an application that owns `public`.
+   */
+  DB_SCHEMA: z
+    .string()
+    .trim()
+    .regex(/^[a-z_][a-z0-9_]{0,62}$/, "must be a lowercase PostgreSQL identifier")
+    .default("public"),
   LOG_FLUSH_INTERVAL_MS: z.coerce.number().int().min(50).default(500),
   LOG_BUFFER_MAX_SIZE: z.coerce.number().int().min(100).default(5000),
   SEGMENT_MAX_USERS: z.coerce.number().int().min(1).default(10000),

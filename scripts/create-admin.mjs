@@ -36,7 +36,14 @@ if (!email || !password) {
 
 const databaseUrl =
   process.env.DATABASE_URL || "postgres://platform:platform@localhost:5432/notifkit";
-const sql = postgres(databaseUrl);
+const schema = (process.env.DB_SCHEMA || "public").trim();
+if (!/^[a-z_][a-z0-9_]{0,62}$/.test(schema)) {
+  console.error(`Invalid DB_SCHEMA "${schema}": must be a lowercase PostgreSQL identifier.`);
+  process.exit(1);
+}
+const sql = postgres(databaseUrl, {
+  connection: schema === "public" ? {} : { search_path: `"${schema}"` },
+});
 
 try {
   const passwordHash = await hashPassword(password);

@@ -51,18 +51,21 @@
     "dashboard/dist",
     "scripts/create-project.mjs",
     "scripts/create-admin.mjs",
+    "scripts/migrate.mjs",
     "README.md",
     "LICENSE"
   ],
   "bin": {
     "notifkit-create-project": "./scripts/create-project.mjs",
-    "notifkit-create-admin": "./scripts/create-admin.mjs"
+    "notifkit-create-admin": "./scripts/create-admin.mjs",
+    "notifkit-migrate": "./scripts/migrate.mjs"
   },
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch",
     "create-project": "node scripts/create-project.mjs",
     "create-admin": "node scripts/create-admin.mjs",
+    "migrate": "node scripts/migrate.mjs",
     "build:dashboard": "npm --prefix dashboard run build",
     "test": "vitest run --coverage",
     "test:watch": "vitest",

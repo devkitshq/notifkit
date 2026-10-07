@@ -41,6 +41,8 @@ export interface NotifkitOptions {
   };
   dbOptions?: {
     maxConnections?: number;
+    /** PostgreSQL schema for notifkit's tables. Same as `DB_SCHEMA`; defaults to `public`. */
+    schema?: string;
   };
 }
 
@@ -102,6 +104,7 @@ export class NotifkitServer extends EventEmitter {
       process.env.QUEUE_MAX_LEN = String(this.options.redisOptions.maxQueueLength);
     if (this.options.dbOptions?.maxConnections)
       process.env.DB_MAX_CONNECTIONS = String(this.options.dbOptions.maxConnections);
+    if (this.options.dbOptions?.schema) process.env.DB_SCHEMA = this.options.dbOptions.schema;
 
     const isProduction = process.env.NODE_ENV === "production";
 

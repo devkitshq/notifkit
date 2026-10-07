@@ -215,7 +215,41 @@ curl -X POST http://localhost:3000/v1/notify \
 
 ### Development vs. production
 
-Locally, Docker is the only prerequisite: in development notifkit starts throwaway PostgreSQL and Redis containers for you. In production you need Node 22+, PostgreSQL, and Redis, and you run migrations by pointing `drizzle-kit` at `node_modules/notifkit/drizzle`.
+Locally, Docker is the only prerequisite: in development notifkit starts throwaway PostgreSQL and Redis containers for you. In production you need Node 22+, PostgreSQL, and Redis, and you run migrations with the bundled CLI before starting the server:
+
+```bash
+DATABASE_URL=postgres://user:pass@host:5432/db npx notifkit-migrate
+```
+
+`notifkit-migrate` reads `DATABASE_URL` and `DB_SCHEMA` (from the environment or `.env`), applies any pending migrations into that schema, and exits non-zero if anything fails, so it can gate a deploy. It is safe to run on every deploy. Do not point `drizzle-kit` at `node_modules/notifkit/drizzle` directly: that ignores `DB_SCHEMA` and always creates the tables in `public`. In the default `public` schema both use the same journal (`drizzle.__drizzle_migrations`), so an install migrated with `drizzle-kit` so far can switch to `notifkit-migrate` as is.
+
+### Installing into a custom PostgreSQL schema
+
+By default notifkit creates its tables and enum types in `public`. To share a database with an application that already owns `public`, set `DB_SCHEMA` (or `dbOptions.schema` on `NotifkitServer`):
+
+```bash
+DB_SCHEMA=notifications
+```
+
+Migrations (`notifkit-migrate`, or `autoMigrate` on start-up) then create the schema if it is missing and put every notifkit object into it, and every connection notifkit opens resolves queries against that schema only. After migrating, notifkit checks that every one of its tables exists in that schema and fails with the names of any that do not. The migration journal is kept in the same schema (`notifications.__drizzle_migrations`), so two installs in one database never share it. Pass `runMigrations(db, { schema, migrationsSchema, migrationsTable })` to run migrations yourself.
+
+The schema is set as the `search_path` startup parameter. If a connection pooler in front of PostgreSQL rejects that parameter (PgBouncer does unless `search_path` is listed in `track_extra_parameters` or `ignore_startup_parameters`), set it on the role instead: `ALTER ROLE <role> SET search_path = notifications`.
+
+> [!WARNING]
+> **Do not set `DB_SCHEMA` on an install that already runs in `public`.** Nothing is moved for you: notifkit creates a fresh, empty set of tables in the new schema and stops looking at `public`. The application then looks empty: admin logins and every project API key stop working, and users, templates and history are gone from its point of view (the data is still in `public`, just no longer read).
+>
+> To move an existing install, stop notifkit and move **every** notifkit table and enum type, plus the migration journal, into the new schema yourself **before** running `notifkit-migrate` with the new `DB_SCHEMA`, for example:
+>
+> ```sql
+> BEGIN;
+> CREATE SCHEMA notifications;
+> ALTER TABLE public.projects SET SCHEMA notifications;  -- repeat for every table in notifkitTableNames()
+> ALTER TYPE public.channel SET SCHEMA notifications;    -- and for api_key_role, workflow_status
+> ALTER TABLE drizzle.__drizzle_migrations SET SCHEMA notifications;
+> COMMIT;
+> ```
+>
+> Then `notifkit-migrate` finds the journal, applies nothing it has already applied, and confirms that every table is in place.
 
 ## Running in production
 
@@ -347,6 +381,8 @@ You can also create or update admin users at any time via the CLI:
 ```bash
 npx notifkit-create-admin admin@example.com supersecretpassword123
 ```
+
+Like `notifkit-migrate`, it reads `DATABASE_URL` and `DB_SCHEMA`.
 
 In production, the pre-built dashboard bundle in `dashboard/dist` is served automatically. In development, run `npm --prefix dashboard run dev` to start the Vite development server with hot module replacement (the API server automatically proxies `/admin` requests to port 5173).
 
