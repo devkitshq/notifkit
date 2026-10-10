@@ -13,6 +13,7 @@ import {
   FileCode2,
   LogOut,
   UserCheck,
+  Star,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/useAuth";
@@ -105,6 +106,15 @@ export default function Sidebar() {
           <LogOut className="h-3.5 w-3.5" />
           <span>Sign Out</span>
         </button>
+        <a
+          href="https://github.com/devkitshq/notifkit"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <Star className="h-3 w-3" />
+          <span>Star on GitHub</span>
+        </a>
       </div>
     </div>
   );

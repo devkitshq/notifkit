@@ -59,3 +59,4 @@ const { id, apiKey } = await res.json();
 console.log(`\nProject "${name}" created. Save the API key now — it is not recoverable.\n`);
 console.log(`NOTIFKIT_PROJECT_ID=${id}`);
 console.log(`NOTIFKIT_API_KEY=${apiKey}\n`);
+console.log("✓ Project created. If notifkit saved you time: github.com/devkitshq/notifkit ⭐");
