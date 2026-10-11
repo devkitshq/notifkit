@@ -154,8 +154,6 @@ First-party providers cover Resend, Firebase Cloud Messaging, Slack, Twilio, Tel
 
 ## Run it from your AI agent
 
-https://github.com/user-attachments/assets/4dff98bb-37d3-44b4-bf46-9607c1cd89b5
-
 Connect the notifkit MCP server to Claude Code, Cursor, or any MCP client:
 
 ```bash
