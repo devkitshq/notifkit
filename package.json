@@ -49,6 +49,7 @@
     "src",
     "drizzle",
     "dashboard/dist",
+    "scripts/notifkit.mjs",
     "scripts/create-project.mjs",
     "scripts/create-admin.mjs",
     "scripts/migrate.mjs",
@@ -56,6 +57,7 @@
     "LICENSE"
   ],
   "bin": {
+    "notifkit": "./scripts/notifkit.mjs",
     "notifkit-create-project": "./scripts/create-project.mjs",
     "notifkit-create-admin": "./scripts/create-admin.mjs",
     "notifkit-migrate": "./scripts/migrate.mjs"

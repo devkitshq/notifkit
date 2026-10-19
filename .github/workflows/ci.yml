@@ -83,6 +83,29 @@ jobs:
           git push -q --force \
             "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
 
+      # Scaffolds an app from this commit's create-notifkit, points it at this
+      # commit's notifkit, and runs the README flow end to end: dev, setup,
+      # send, then checks the console provider printed the notification.
+      - name: create-notifkit smoke test
+        run: |
+          set -euo pipefail
+          npm run build -w create-notifkit
+          npm pack --pack-destination "$RUNNER_TEMP" >/dev/null
+          npm pack -w create-notifkit --pack-destination "$RUNNER_TEMP" >/dev/null
+          cd "$RUNNER_TEMP"
+          npm exec --yes --package="$RUNNER_TEMP/$(ls create-notifkit-*.tgz)" -- \
+            create-notifkit smoke-app --no-install
+          cd smoke-app
+          npm install
+          npm install "$RUNNER_TEMP/$(cd .. && ls notifkit-*.tgz)"
+          npm run typecheck
+          npm run dev > server.log 2>&1 &
+          for _ in $(seq 1 90); do curl -sf localhost:3000/health >/dev/null && break; sleep 2; done
+          npm run setup
+          npm run send
+          for _ in $(seq 1 30); do grep -q "PUSH NOTIFICATION" server.log && break; sleep 1; done
+          grep -q "PUSH NOTIFICATION" server.log || { cat server.log; exit 1; }
+
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
