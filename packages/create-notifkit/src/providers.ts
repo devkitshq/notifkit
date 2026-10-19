@@ -6,7 +6,7 @@
  * when one falls behind its workspace package.json.
  */
 
-export const NOTIFKIT_VERSION = "0.1.12";
+export const NOTIFKIT_VERSION = "0.1.13";
 
 export type ProviderId = "console" | "resend" | "twilio" | "fcm";
 
