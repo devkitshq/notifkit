@@ -45,7 +45,26 @@ That call tries push, then email if push fails. Preferences, consent, quiet hour
 
 ## Quickstart
 
-You need Node 22+ and Docker running. In development notifkit starts throwaway PostgreSQL and Redis containers for you. The [full quickstart](https://notifkit.dev/docs/quickstart.html) explains each step.
+You need Node 22+ and Docker running. In development notifkit starts throwaway PostgreSQL and Redis containers for you.
+
+```bash
+npm create notifkit@latest my-app   # or: npx notifkit create my-app
+cd my-app
+npm run dev                         # leave it running
+```
+
+In a second terminal:
+
+```bash
+npm run setup                       # create a project, save its API key to .env
+npm run send                        # send a test notification
+```
+
+The default provider prints notifications to the server terminal, so you need no provider account to try it. Pass `--provider resend`, `twilio` or `fcm` to start with a real one. See [create-notifkit](./packages/create-notifkit) for the options.
+
+### Adding notifkit to an existing app
+
+These are the same steps the scaffold runs. The [full quickstart](https://notifkit.dev/docs/quickstart.html) explains each one.
 
 **1. Install**
 
