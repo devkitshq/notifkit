@@ -34,6 +34,14 @@ if (!email || !password) {
   process.exit(1);
 }
 
+// The API grants writes to superadmin and admin and treats every other value
+// as read-only, so a typo would quietly produce a user who cannot do anything.
+const ROLES = ["superadmin", "admin", "read_only"];
+if (!ROLES.includes(role)) {
+  console.error(`Unknown role "${role}". Use one of: ${ROLES.join(", ")}.`);
+  process.exit(1);
+}
+
 const databaseUrl =
   process.env.DATABASE_URL || "postgres://platform:platform@localhost:5432/notifkit";
 const schema = (process.env.DB_SCHEMA || "public").trim();

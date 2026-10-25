@@ -76,6 +76,15 @@ export function extractAuthToken(req: Pick<IncomingMessage, "headers">): string 
 }
 
 /**
+ * What a dashboard user's role may do. `admin_users.role` is free text (the
+ * create-admin script takes any value), so only the roles known to grant
+ * writes do; anything else, `read_only` included, is read-only.
+ */
+export function sessionKeyRole(role: string): "admin" | "read_only" {
+  return role === "superadmin" || role === "admin" ? "admin" : "read_only";
+}
+
+/**
  * Resolves client IP address, respecting reverse proxy headers only when TRUST_PROXY is enabled.
  */
 export function getClientIp(req: IncomingMessage, trustProxy: boolean): string {
@@ -443,7 +452,7 @@ export async function startApiServer() {
         const session = await getAdminSession(redis.native, token);
         if (session) {
           isAdminToken = true;
-          keyRole = session.role === "superadmin" ? "admin" : (session.role as any);
+          keyRole = sessionKeyRole(session.role);
         }
       } else if (config.ADMIN_API_KEY) {
         const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
@@ -559,7 +568,15 @@ export async function startApiServer() {
       let authorized = false;
       if (token.startsWith("nk_sess_")) {
         const session = await getAdminSession(redis.native, token);
-        if (session) authorized = true;
+        if (session) {
+          // Creating projects and minting keys hands out admin credentials, so
+          // a read-only dashboard user gets to look and nothing more.
+          if (sessionKeyRole(session.role) === "read_only" && req.method !== "GET") {
+            sendJson(res, 403, { error: "forbidden", message: "Session is read-only" });
+            return;
+          }
+          authorized = true;
+        }
       } else if (config.ADMIN_API_KEY) {
         const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
         const providedBuffer = Buffer.from(token);

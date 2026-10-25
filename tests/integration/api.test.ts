@@ -183,6 +183,56 @@ describe("authentication", () => {
       expect((await anon("GET", "/v1/auth/me")).status).toBe(401);
     });
 
+    /** Signs in as a new dashboard user with `role`, returning a client for the session. */
+    async function sessionWithRole(role: string) {
+      await clearRateLimits();
+      const name = `${role}-${randomUUID().slice(0, 8)}`;
+      await new AdminUserRepository(infra.db).create({
+        email: `${name}@example.com`,
+        username: name,
+        passwordHash: await hashPassword("correct horse"),
+        role,
+      });
+      const login = await apiClient(app.baseUrl)("POST", "/v1/auth/login", {
+        identifier: name,
+        password: "correct horse",
+      });
+      expect(login.status).toBe(200);
+      return (headers: Record<string, string> = {}) =>
+        apiClient(app.baseUrl, login.body.token, headers);
+    }
+
+    it.each(["read_only", "viewer"])(
+      "lets a %s session read but not write project data",
+      async (role) => {
+        const p = await project();
+        const session = (await sessionWithRole(role))({ "x-project-id": p.id });
+        expect((await session("GET", "/v1/users")).status).toBe(200);
+        expect((await session("POST", "/v1/users", { id: "x" })).status).toBe(403);
+      },
+    );
+
+    it.each(["read_only", "viewer"])(
+      "keeps a %s session from managing projects and keys",
+      async (role) => {
+        const p = await project();
+        const session = (await sessionWithRole(role))();
+        expect((await session("GET", "/v1/projects")).status).toBe(200);
+        expect((await session("POST", "/v1/projects", { name: "mine" })).status).toBe(403);
+        expect((await session("POST", `/v1/projects/${p.id}/keys`, {})).status).toBe(403);
+        expect((await session("PATCH", `/v1/projects/${p.id}`, { rateLimitRpm: 1 })).status).toBe(
+          403,
+        );
+        expect((await session("DELETE", `/v1/projects/${p.id}`)).status).toBe(403);
+        expect((await app.admin("GET", `/v1/projects/${p.id}/keys`)).body.keys).toHaveLength(1);
+      },
+    );
+
+    it("lets an admin session manage projects", async () => {
+      const session = (await sessionWithRole("admin"))();
+      expect((await session("POST", "/v1/projects", { name: "theirs" })).status).toBe(201);
+    });
+
     it("throttles repeated login attempts from one address", async () => {
       await clearRateLimits();
       const statuses: number[] = [];
