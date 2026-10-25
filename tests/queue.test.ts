@@ -90,6 +90,50 @@ describe("StreamConsumer", () => {
   });
 });
 
+describe("StreamConsumer dead-connection recovery", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps reading after a stalled XREADGROUP forces a disconnect", async () => {
+    vi.useFakeTimers();
+    let closed = false;
+    let reads = 0;
+    const blocking = {
+      xreadgroup: vi.fn(() => {
+        if (closed) return Promise.reject(new Error("Connection is closed."));
+        reads++;
+        // The first read never answers: a half-open socket.
+        if (reads === 1) return new Promise(() => {});
+        return Promise.resolve(reply("s", "1-0", JSON.stringify(validEvent())));
+      }),
+      // As ioredis: disconnect() without `true` ends the connection for good.
+      disconnect: vi.fn((reconnect = false) => {
+        if (!reconnect) closed = true;
+      }),
+      quit: vi.fn().mockResolvedValue("OK"),
+    };
+    const consumer = new StreamConsumer({
+      redis: { duplicate: vi.fn().mockReturnValue(blocking) } as any,
+      stream: "s" as any,
+      group: "g" as any,
+      consumer: "c",
+      blockMs: 100,
+      logger: silentLogger() as any,
+    });
+
+    let batch: any;
+    void consumer
+      .readBatch()
+      .next()
+      .then((r) => (batch = r.value));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(batch?.[0]?.id).toBe("1-0");
+    await consumer.stop();
+  });
+});
+
 describe("StreamConsumer.ensureGroup", () => {
   it("treats an existing group as success and carries on to the next stream", async () => {
     const mockRedis = {

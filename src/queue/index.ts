@@ -282,7 +282,13 @@ export class StreamConsumer {
     coalesceMs = 0,
   }: StreamConsumerOptions) {
     this.redis = redis;
-    this.blockingRedis = redis.duplicate({ enableAutoPipelining: false });
+    // No resending on reconnect: a read abandoned at its deadline would run
+    // again on the new connection and claim messages into this consumer's
+    // pending list with nobody left to receive the reply.
+    this.blockingRedis = redis.duplicate({
+      enableAutoPipelining: false,
+      autoResendUnfulfilledCommands: false,
+    });
     this.streams = Array.isArray(stream) ? stream : [stream];
     this.group = group;
     this.consumer = consumer;
@@ -357,7 +363,10 @@ export class StreamConsumer {
             this.logger?.warn(
               "XREADGROUP took too long, assuming dead connection. Disconnecting...",
             );
-            this.blockingRedis.disconnect();
+            // `true` drops the socket and reconnects. Without it ioredis treats
+            // the close as final and every later read fails with "Connection
+            // is closed", leaving the worker stuck in its backoff loop.
+            this.blockingRedis.disconnect(true);
             throw err;
           }
           throw err;

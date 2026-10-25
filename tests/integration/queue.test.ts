@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { createServer, connect, type Socket, type AddressInfo } from "node:net";
+import { Redis } from "ioredis";
 import { randomUUID } from "node:crypto";
 import { StreamProducer, StreamConsumer, PendingMessageScanner } from "@/queue/index.js";
 import { STREAMS, CONSUMER_GROUPS, buildStreamEvent, type StreamName } from "@/contracts/index.js";
@@ -483,5 +485,75 @@ describe("PendingMessageScanner", () => {
     await deliverUnacked(A, 10);
     await settle(150);
     expect(await scanner().autoclaim(100, 3)).toHaveLength(3);
+  });
+});
+
+/**
+ * A TCP relay to the test Redis that can stop handing replies back, the way a
+ * half-open socket does: the client's commands go out and nothing comes in.
+ * Replies held while stalled are released when it resumes.
+ */
+async function stallableRedisProxy(redisUrl: string) {
+  const target = new URL(redisUrl);
+  let stalled = false;
+  const held: { socket: Socket; data: Buffer }[] = [];
+  const sockets = new Set<Socket>();
+  let clientsClosed = 0;
+  const server = createServer((client) => {
+    const upstream = connect(Number(target.port), target.hostname);
+    sockets.add(client).add(upstream);
+    client.on("data", (d) => upstream.write(d));
+    upstream.on("data", (d) =>
+      stalled ? held.push({ socket: client, data: d }) : client.write(d),
+    );
+    const close = () => {
+      client.destroy();
+      upstream.destroy();
+    };
+    client.on("close", () => clientsClosed++);
+    client.on("close", close).on("error", close);
+    upstream.on("close", close).on("error", close);
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `redis://127.0.0.1:${port}${target.pathname}`,
+    /** Client connections that have hung up, e.g. one given up as dead. */
+    clientsClosed: () => clientsClosed,
+    stall: () => (stalled = true),
+    resume: () => {
+      stalled = false;
+      for (const { socket, data } of held.splice(0)) if (!socket.destroyed) socket.write(data);
+    },
+    close: async () => {
+      for (const s of sockets) s.destroy();
+      await new Promise<void>((r) => server.close(() => r()));
+    },
+  };
+}
+
+describe("StreamConsumer on a dead connection", () => {
+  it("reconnects and keeps reading after a read stalls past its deadline", async () => {
+    const proxy = await stallableRedisProxy(infra.redisUrl);
+    const viaProxy = new Redis(proxy.url, { maxRetriesPerRequest: null });
+    try {
+      const c = consumer({ redis: viaProxy });
+      await c.ensureGroup();
+
+      proxy.stall();
+      const read = readN(c, 1, 60_000);
+      // The read's blockMs + 5s guard gives the connection up.
+      await waitFor("stalled connection given up", () => proxy.clientsClosed() > 0, 30_000);
+      proxy.resume();
+
+      const producer = new StreamProducer({ redis: infra.redis, stream: A, logger, maxLen: 1000 });
+      await producer.publish(event(42));
+
+      const got = await read;
+      expect(got.map((m) => m.event.payload.n)).toEqual([42]);
+    } finally {
+      viaProxy.disconnect();
+      await proxy.close();
+    }
   });
 });
