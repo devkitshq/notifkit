@@ -570,4 +570,33 @@ describe("StreamConsumer on a dead connection", () => {
       await proxy.close();
     }
   });
+
+  it("does not let a read queued before the connection was ready claim messages later", async () => {
+    // Redis unreachable from the start (a restart, a failover): the read sits
+    // in ioredis's offline queue rather than on the wire, so the deadline
+    // abandons it before it was ever sent. Run on a later connection, it
+    // would claim messages into this consumer's pending list with nobody
+    // left to receive them.
+    const proxy = await stallableRedisProxy(infra.redisUrl);
+    const viaProxy = new Redis(proxy.url, { maxRetriesPerRequest: null });
+    try {
+      await viaProxy.ping();
+      await infra.redis.xgroup("CREATE", A, GROUP, "0", "MKSTREAM");
+
+      proxy.stall();
+      const c = consumer({ redis: viaProxy });
+      const read = readN(c, 1, 60_000);
+      await waitFor("stalled connection given up", () => proxy.clientsClosed() > 0, 30_000);
+      proxy.resume();
+
+      const producer = new StreamProducer({ redis: infra.redis, stream: A, logger, maxLen: 1000 });
+      await producer.publish(event(42));
+
+      const got = await read;
+      expect(got.map((m) => m.event.payload.n)).toEqual([42]);
+    } finally {
+      viaProxy.disconnect();
+      await proxy.close();
+    }
+  });
 });

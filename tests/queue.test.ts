@@ -97,24 +97,27 @@ describe("StreamConsumer dead-connection recovery", () => {
 
   it("keeps reading after a stalled XREADGROUP forces a disconnect", async () => {
     vi.useFakeTimers();
-    let closed = false;
     let reads = 0;
-    const blocking = {
-      xreadgroup: vi.fn(() => {
-        if (closed) return Promise.reject(new Error("Connection is closed."));
-        reads++;
-        // The first read never answers: a half-open socket.
-        if (reads === 1) return new Promise(() => {});
-        return Promise.resolve(reply("s", "1-0", JSON.stringify(validEvent())));
-      }),
-      // As ioredis: disconnect() without `true` ends the connection for good.
-      disconnect: vi.fn((reconnect = false) => {
-        if (!reconnect) closed = true;
-      }),
-      quit: vi.fn().mockResolvedValue("OK"),
+    // As ioredis: each duplicate() is a new client, and disconnect() without
+    // `true` ends that client for good.
+    const connection = () => {
+      let closed = false;
+      return {
+        xreadgroup: vi.fn(() => {
+          if (closed) return Promise.reject(new Error("Connection is closed."));
+          reads++;
+          // The first read never answers: a half-open socket.
+          if (reads === 1) return new Promise(() => {});
+          return Promise.resolve(reply("s", "1-0", JSON.stringify(validEvent())));
+        }),
+        disconnect: vi.fn((reconnect = false) => {
+          if (!reconnect) closed = true;
+        }),
+        quit: vi.fn().mockResolvedValue("OK"),
+      };
     };
     const consumer = new StreamConsumer({
-      redis: { duplicate: vi.fn().mockReturnValue(blocking) } as any,
+      redis: { duplicate: vi.fn(connection) } as any,
       stream: "s" as any,
       group: "g" as any,
       consumer: "c",

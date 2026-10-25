@@ -241,7 +241,7 @@ type XReadGroupResult = Array<[string, Array<[string, string[] | null]>]> | null
 
 export class StreamConsumer {
   readonly redis: Redis;
-  private readonly blockingRedis: Redis;
+  private blockingRedis: Redis;
   private readonly streams: StreamName[];
   private readonly group: ConsumerGroup;
   private readonly consumer: string;
@@ -270,13 +270,7 @@ export class StreamConsumer {
     coalesceMs = 0,
   }: StreamConsumerOptions) {
     this.redis = redis;
-    // No resending on reconnect: a read abandoned at its deadline would run
-    // again on the new connection and claim messages into this consumer's
-    // pending list with nobody left to receive the reply.
-    this.blockingRedis = redis.duplicate({
-      enableAutoPipelining: false,
-      autoResendUnfulfilledCommands: false,
-    });
+    this.blockingRedis = redis.duplicate({ enableAutoPipelining: false });
     this.streams = Array.isArray(stream) ? stream : [stream];
     this.group = group;
     this.consumer = consumer;
@@ -349,12 +343,17 @@ export class StreamConsumer {
         } catch (err: any) {
           if (err.message === "XREADGROUP_TIMEOUT_DEAD_CONNECTION") {
             this.logger?.warn(
-              "XREADGROUP took too long, assuming dead connection. Disconnecting...",
+              "XREADGROUP took too long, assuming dead connection. Reconnecting...",
             );
-            // `true` drops the socket and reconnects. Without it ioredis treats
-            // the close as final and every later read fails with "Connection
-            // is closed", leaving the worker stuck in its backoff loop.
-            this.blockingRedis.disconnect(true);
+            // Read on a fresh connection and close the old one for good. The
+            // abandoned read is still queued on it (on the wire, or in the
+            // offline queue if the connection never came up), and reconnecting
+            // the same client would run it later, claiming messages into this
+            // consumer's pending list with nobody left to receive them. A
+            // closed client rejects what it still holds instead.
+            const dead = this.blockingRedis;
+            this.blockingRedis = this.redis.duplicate({ enableAutoPipelining: false });
+            dead.disconnect();
             throw err;
           }
           throw err;
