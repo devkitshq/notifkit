@@ -215,6 +215,38 @@ describe("DeliveryWorker", () => {
     expect(await infra.redis.exists(`notif:processed:delivery:${ev.payload.taskId}`)).toBe(0);
   });
 
+  it("keeps sending to a provider that rejected addresses, rather than tripping its breaker", async () => {
+    // A run of dead addresses in a list is the provider answering correctly;
+    // opening the breaker on it held up everyone else's mail.
+    const provider = new FakeProvider("email", () => ({ success: true, providerMessageId: "ok" }));
+    const send = provider.send.bind(provider);
+    provider.send = async (task?: any) =>
+      task?.destination === "dead@x.com"
+        ? { success: false, error: "422 invalid recipient", retryable: false }
+        : send();
+    const w = worker(registry(provider));
+
+    for (let i = 0; i < 6; i++) {
+      await w.processInline(dispatched({ destination: "dead@x.com" }) as any).catch(() => {});
+    }
+    const good = dispatched();
+    await w.processInline(good as any);
+    await w.stop();
+
+    const delivered = (await events()).filter((e) => e.type === "notification.delivered");
+    expect(delivered.map((e) => e.payload.taskId)).toEqual([good.payload.taskId]);
+    expect(await parked()).toEqual([]);
+  });
+
+  it("still opens the breaker on a provider that keeps failing", async () => {
+    const down = new FakeProvider("email", () => ({ success: false, error: "503" }));
+    const w = worker(registry(down));
+    for (let i = 0; i < 6; i++) await w.processInline(dispatched() as any);
+    await w.stop();
+    // Five failures open it; the sixth send never reaches the provider.
+    expect(down.calls).toBe(5);
+  });
+
   it("fails over to the next provider for the channel, in priority order", async () => {
     const primary = new FakeProvider("email", () => ({
       success: false,

@@ -620,7 +620,9 @@ export class DeliveryWorker extends BaseWorker {
                     );
                   }),
                 ]);
-                if (!res.success && !res.invalidToken) {
+                // A permanent rejection is the provider working: returned, not
+                // thrown, so the breaker does not count it.
+                if (!res.success && !res.invalidToken && res.retryable !== false) {
                   throw providerFailure(res);
                 }
                 return res;
@@ -833,7 +835,10 @@ export class DeliveryWorker extends BaseWorker {
                     );
                   }),
                 ]);
-                if (!res.success) {
+                // A permanent rejection (a bad address) is the provider working:
+                // returned, not thrown, so the breaker does not count it. A run
+                // of them in one list used to open it for every project.
+                if (!res.success && res.retryable !== false) {
                   throw providerFailure(res);
                 }
                 return res;
