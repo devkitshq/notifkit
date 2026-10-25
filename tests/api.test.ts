@@ -83,45 +83,64 @@ describe("extractAuthToken", () => {
 });
 
 describe("getClientIp", () => {
-  it("ignores X-Forwarded-For when trustProxy is false", () => {
+  it("ignores X-Forwarded-For when no proxy is trusted", () => {
     const req = {
       headers: { "x-forwarded-for": "198.51.100.1" },
       socket: { remoteAddress: "203.0.113.195" },
     };
-    expect(getClientIp(req as any, false)).toBe("203.0.113.195");
+    expect(getClientIp(req as any, 0)).toBe("203.0.113.195");
   });
 
-  it("respects X-Forwarded-For when trustProxy is true", () => {
+  it("takes the address the one trusted proxy appended, not one the client wrote", () => {
     const req = {
-      headers: { "x-forwarded-for": "198.51.100.1, 10.0.0.1" },
+      headers: { "x-forwarded-for": "6.6.6.6, 198.51.100.1" },
       socket: { remoteAddress: "10.0.0.1" },
     };
-    expect(getClientIp(req as any, true)).toBe("198.51.100.1");
+    expect(getClientIp(req as any, 1)).toBe("198.51.100.1");
   });
 
-  it("falls back to remoteAddress if X-Forwarded-For is missing even when trustProxy is true", () => {
+  it("walks back one entry per trusted proxy", () => {
+    const req = {
+      headers: { "x-forwarded-for": "6.6.6.6, 198.51.100.1, 10.0.0.2" },
+      socket: { remoteAddress: "10.0.0.1" },
+    };
+    expect(getClientIp(req as any, 2)).toBe("198.51.100.1");
+  });
+
+  it("stops at the furthest address when the chain is shorter than the trusted hops", () => {
+    const req = {
+      headers: { "x-forwarded-for": "198.51.100.1" },
+      socket: { remoteAddress: "10.0.0.1" },
+    };
+    expect(getClientIp(req as any, 3)).toBe("198.51.100.1");
+  });
+
+  it("falls back to remoteAddress if X-Forwarded-For is missing even when a proxy is trusted", () => {
     const req = {
       headers: {},
       socket: { remoteAddress: "203.0.113.195" },
     };
-    expect(getClientIp(req as any, true)).toBe("203.0.113.195");
+    expect(getClientIp(req as any, 1)).toBe("203.0.113.195");
   });
 
   it("returns unknown when no remoteAddress or forwarded header exists", () => {
     const req = { headers: {}, socket: {} };
-    expect(getClientIp(req as any, false)).toBe("unknown");
+    expect(getClientIp(req as any, 0)).toBe("unknown");
   });
 });
 
 // z.coerce.boolean() is Boolean(value), so the string "false" coerced to true
 // and an operator who wrote TRUST_PROXY=false got a spoofable client IP.
+// TRUST_PROXY is the number of proxies in front of the API; "true" is one.
 describe("TRUST_PROXY parsing", () => {
   it.each([
-    ["false", false],
-    ["0", false],
-    ["", false],
-    ["true", true],
-    ["1", true],
+    ["false", 0],
+    ["0", 0],
+    ["", 0],
+    ["yes", 0],
+    ["true", 1],
+    ["1", 1],
+    ["2", 2],
   ])("TRUST_PROXY=%j parses as %s", async (value, expected) => {
     const { parseConfig, baseConfigSchema } = await import("@/config/index.js");
 
@@ -130,10 +149,10 @@ describe("TRUST_PROXY parsing", () => {
     expect(config.TRUST_PROXY).toBe(expected);
   });
 
-  it("defaults to false when unset", async () => {
+  it("defaults to no trusted proxy when unset", async () => {
     const { parseConfig, baseConfigSchema } = await import("@/config/index.js");
 
-    expect(parseConfig(baseConfigSchema, {}).TRUST_PROXY).toBe(false);
+    expect(parseConfig(baseConfigSchema, {}).TRUST_PROXY).toBe(0);
   });
 });
 

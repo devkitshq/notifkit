@@ -85,17 +85,25 @@ export function sessionKeyRole(role: string): "admin" | "read_only" {
 }
 
 /**
- * Resolves client IP address, respecting reverse proxy headers only when TRUST_PROXY is enabled.
+ * Resolves the client address, given how many proxies (TRUST_PROXY) are in
+ * front of the API. Each one appends the address it saw to X-Forwarded-For,
+ * so the client is `trustedHops` back from the connecting peer. The leftmost
+ * entry is the one a client can write itself, so it is used only when the
+ * chain is shorter than the configured hops.
  */
-export function getClientIp(req: IncomingMessage, trustProxy: boolean): string {
-  if (trustProxy) {
-    const forwarded = req.headers["x-forwarded-for"];
-    if (typeof forwarded === "string") {
-      const first = forwarded.split(",")[0]?.trim();
-      if (first) return first;
-    }
-  }
-  return req.socket.remoteAddress || "unknown";
+export function getClientIp(req: IncomingMessage, trustedHops: number): string {
+  const peer = req.socket.remoteAddress || "unknown";
+  const forwarded = req.headers["x-forwarded-for"];
+  if (trustedHops <= 0 || typeof forwarded !== "string") return peer;
+
+  const chain = [
+    ...forwarded
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+    peer,
+  ];
+  return chain[Math.max(chain.length - 1 - trustedHops, 0)]!;
 }
 
 async function handleCreateProject(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -600,7 +608,7 @@ export async function startApiServer() {
     // an open endpoint cannot be used to hammer the process. Generous, because
     // a shared corporate egress IP can legitimately produce a burst.
     if (isPublicUnsubscribe) {
-      const clientIp = getClientIp(req, Boolean(config.TRUST_PROXY));
+      const clientIp = getClientIp(req, config.TRUST_PROXY);
       try {
         const key = `rate-limit:api:unsub:${clientIp}`;
         const count = await redis.native.incr(key);
@@ -620,7 +628,7 @@ export async function startApiServer() {
     // The login route is unauthenticated and CPU-intensive due to password hashing (scrypt).
     // Throttle login attempts per IP to prevent credential brute-forcing and CPU exhaustion.
     if (isPublicAuth) {
-      const clientIp = getClientIp(req, Boolean(config.TRUST_PROXY));
+      const clientIp = getClientIp(req, config.TRUST_PROXY);
       try {
         const key = `rate-limit:api:auth:${clientIp}`;
         const count = await redis.native.incr(key);

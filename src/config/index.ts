@@ -97,13 +97,16 @@ export const baseConfigSchema = z.object({
    */
   UNSUBSCRIBE_SECRET: z.string().min(16).optional(),
   /**
-   * When true, trusts X-Forwarded-For headers from reverse proxies for client IP resolution.
-   * Defaults to false to prevent client-spoofed headers from bypassing rate limits.
+   * How many reverse proxies sit in front of the API, for reading the client
+   * address out of X-Forwarded-For. `true` means one. Each proxy appends the
+   * address it saw, so the client is that many entries from the right; the
+   * entries further left are whatever the client sent. Defaults to 0, which
+   * ignores the header so it cannot be used to get around rate limits.
    */
   TRUST_PROXY: z
     .string()
     .optional()
-    .transform((v) => v === "true" || v === "1"),
+    .transform((v) => (v === "true" ? 1 : v && /^\d+$/.test(v) ? Number(v) : 0)),
   /**
    * Comma-separated list of allowed origins for CORS on session-authenticated admin routes.
    */
