@@ -123,24 +123,15 @@ export class StreamProducer {
     this.pendingQueue = [];
     if (batch.length === 0) return;
 
+    // No MAXLEN trimming. Consumers delete entries as they ack them, so a
+    // stream only ever holds work that has not been done; trimming it threw
+    // away unsent notifications whenever the backlog passed maxLen. maxLen is
+    // the threshold monitorMaxLen warns at instead.
     try {
       if (typeof this.redis.pipeline === "function") {
         const pipeline = this.redis.pipeline();
-        for (let i = 0; i < batch.length; i++) {
-          const item = batch[i]!;
-          if (i === batch.length - 1) {
-            pipeline.xadd(
-              this.stream,
-              "MAXLEN",
-              "~",
-              String(this.maxLen),
-              "*",
-              "data",
-              JSON.stringify(item.event),
-            );
-          } else {
-            pipeline.xadd(this.stream, "*", "data", JSON.stringify(item.event));
-          }
+        for (const item of batch) {
+          pipeline.xadd(this.stream, "*", "data", JSON.stringify(item.event));
         }
 
         const results = await pipeline.exec();
@@ -160,9 +151,6 @@ export class StreamProducer {
           try {
             const msgId = await this.redis.xadd(
               this.stream,
-              "MAXLEN",
-              "~",
-              String(this.maxLen),
               "*",
               "data",
               JSON.stringify(item.event),
@@ -195,7 +183,7 @@ export class StreamProducer {
       if (len > this.maxLen * 0.8) {
         this.logger?.warn(
           { stream, len, maxLen: this.maxLen },
-          "stream is nearing MAXLEN limit (80%+)",
+          "stream backlog is past 80% of QUEUE_MAX_LEN — consumers are falling behind",
         );
       }
 
@@ -461,7 +449,7 @@ export class StreamConsumer {
   /**
    * Acks and then deletes the entries. Every stream is read by exactly one
    * consumer group, so an acked entry is never read again; leaving it in place
-   * holds Redis memory until MAXLEN trims it, and a group recreated from "0"
+   * holds Redis memory for good, and a group recreated from "0"
    * (ensureGroup) would process it a second time. Both commands are issued
    * before either is awaited, so auto-pipelining sends them in one round trip,
    * and Redis runs them in order.

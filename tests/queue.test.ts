@@ -791,15 +791,8 @@ describe("StreamProducer", () => {
     });
 
     expect(msgId).toBe("123-0");
-    expect(mockRedis.xadd).toHaveBeenCalledWith(
-      "my-stream",
-      "MAXLEN",
-      "~",
-      "100000",
-      "*",
-      "data",
-      expect.any(String),
-    );
+    // Untrimmed: the stream holds only unprocessed work.
+    expect(mockRedis.xadd).toHaveBeenCalledWith("my-stream", "*", "data", expect.any(String));
   });
 
   it("publishes a batch of events via pipeline", async () => {

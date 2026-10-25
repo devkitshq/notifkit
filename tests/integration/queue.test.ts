@@ -98,14 +98,28 @@ describe("StreamProducer", () => {
     );
   });
 
-  it("trims the stream towards maxLen", async () => {
+  it("keeps every unprocessed message when the backlog grows past maxLen", async () => {
+    // Acked entries are deleted, so whatever is in a stream is work not yet
+    // done. Trimming it to maxLen dropped notifications nobody had sent.
     const producer = new StreamProducer({ redis: infra.redis, stream: A, logger, maxLen: 10 });
     for (let batch = 0; batch < 10; batch++) {
       await Promise.all(Array.from({ length: 100 }, (_, n) => producer.publish(event(n))));
     }
-    // "~" trims whole radix-tree nodes (100 entries by default), so the length
-    // lands near, not at, the cap — but nowhere near the 1000 written.
-    expect(await infra.redis.xlen(A)).toBeLessThanOrEqual(200);
+    expect(await infra.redis.xlen(A)).toBe(1000);
+  });
+
+  it("keeps a message that was read but not yet acked when the backlog grows past maxLen", async () => {
+    const producer = new StreamProducer({ redis: infra.redis, stream: A, logger, maxLen: 10 });
+    await infra.redis.xgroup("CREATE", A, GROUP, "0", "MKSTREAM");
+    const inFlight = await producer.publish(event(-1));
+    await infra.redis.xreadgroup("GROUP", GROUP, "busy", "COUNT", 1, "STREAMS", A, ">");
+
+    for (let batch = 0; batch < 5; batch++) {
+      await Promise.all(Array.from({ length: 100 }, (_, n) => producer.publish(event(n))));
+    }
+
+    // The worker holding it must still be able to re-read it after a crash.
+    expect(await infra.redis.xrange(A, inFlight, inFlight)).toHaveLength(1);
   });
 
   it("rejects the publish when Redis refuses the write", async () => {
@@ -264,8 +278,8 @@ describe("StreamConsumer", () => {
   });
 
   // Each stream has exactly one consumer group, so once that group has acked an
-  // entry nothing will read it again. Left in place it holds Redis memory until
-  // MAXLEN trims it, which under load is the bulk of what Redis stores.
+  // entry nothing will read it again. Left in place it holds Redis memory for
+  // good, which under load is the bulk of what Redis stores.
   describe("deletes entries once they are acked", () => {
     async function ids(stream: string) {
       return (await infra.redis.xrange(stream, "-", "+")).map((e) => e[0]);
