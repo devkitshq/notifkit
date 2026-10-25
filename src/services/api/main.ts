@@ -615,8 +615,7 @@ export async function startApiServer() {
       const clientIp = getClientIp(req, config.TRUST_PROXY);
       try {
         const key = `rate-limit:api:unsub:${clientIp}`;
-        const count = await redis.native.incr(key);
-        if (count === 1) await redis.native.expire(key, 60);
+        const count = await redis.native.countRequest(key, 60);
         if (count > 60) {
           res.setHeader("Retry-After", "60");
           sendJson(res, 429, { error: "too_many_requests" });
@@ -635,8 +634,7 @@ export async function startApiServer() {
       const clientIp = getClientIp(req, config.TRUST_PROXY);
       try {
         const key = `rate-limit:api:auth:${clientIp}`;
-        const count = await redis.native.incr(key);
-        if (count === 1) await redis.native.expire(key, 60);
+        const count = await redis.native.countRequest(key, 60);
         if (count > 10) {
           res.setHeader("Retry-After", "60");
           sendJson(res, 429, {

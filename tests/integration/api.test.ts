@@ -233,6 +233,32 @@ describe("authentication", () => {
       expect((await session("POST", "/v1/projects", { name: "theirs" })).status).toBe(201);
     });
 
+    it.each([
+      [
+        "login",
+        "auth",
+        () => apiClient(app.baseUrl)("POST", "/v1/auth/login", { identifier: "x", password: "y" }),
+      ],
+      ["unsubscribe", "unsub", () => apiClient(app.baseUrl)("GET", "/v1/unsubscribe?token=x")],
+    ] as const)(
+      "lets an address back in once a minute is up, even if its %s counter lost its expiry",
+      async (_name, prefix, attempt) => {
+        await clearRateLimits();
+        await attempt();
+        const [key] = await infra.redis.keys(`rate-limit:api:${prefix}:*`);
+        // What the counter looks like if the process died, or EXPIRE failed,
+        // between incrementing it and setting its expiry: over the limit, forever.
+        await infra.redis.set(key!, "1000");
+        expect(await infra.redis.ttl(key!)).toBe(-1);
+
+        expect((await attempt()).status).toBe(429);
+        const ttl = await infra.redis.ttl(key!);
+        expect(ttl).toBeGreaterThan(0);
+        expect(ttl).toBeLessThanOrEqual(60);
+        await clearRateLimits();
+      },
+    );
+
     it("throttles repeated login attempts from one address", async () => {
       await clearRateLimits();
       const statuses: number[] = [];

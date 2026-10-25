@@ -13,6 +13,7 @@ declare module "ioredis" {
       ttl?: number | string,
     ): Promise<number>;
     releaseLock(lockKey: string, lockToken: string): Promise<number>;
+    countRequest(key: string, ttlSeconds: number | string): Promise<number>;
     renewLock(lockKey: string, lockToken: string, ttlSeconds: number | string): Promise<number>;
     throttleUser(
       key: string,
@@ -155,6 +156,20 @@ export const LUA_SCHEDULER_POLL = `
   return tasks
 `;
 
+/**
+ * Fixed-window request counter: INCR, and an expiry whenever the key has none.
+ * One script so the two cannot come apart. With INCR and EXPIRE sent
+ * separately, a failure between them left a counter with no expiry, and the
+ * address it counted stayed over its limit for good.
+ */
+export const LUA_COUNT_REQUEST = `
+  local count = redis.call('INCR', KEYS[1])
+  if redis.call('TTL', KEYS[1]) < 0 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+  end
+  return count
+`;
+
 /** Two-phase idempotency lease acquisition. Checks sent/legacy, then attempts SET NX lock. */
 export const LUA_ACQUIRE_LEASE = `
   if redis.call('EXISTS', KEYS[1]) == 1 or redis.call('EXISTS', KEYS[3]) == 1 then
@@ -212,6 +227,11 @@ export function registerCustomCommands(redis: Redis): void {
   redis.defineCommand("acquireLease", {
     numberOfKeys: 3,
     lua: LUA_ACQUIRE_LEASE,
+  });
+
+  redis.defineCommand("countRequest", {
+    numberOfKeys: 1,
+    lua: LUA_COUNT_REQUEST,
   });
 
   redis.defineCommand("markProcessed", {
