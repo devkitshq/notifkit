@@ -868,6 +868,9 @@ describe("events", () => {
     const mine = email.for(p.id).map((t) => t.taskId);
     expect(taskIds.length).toBeGreaterThan(0);
     expect(taskIds.every((id) => mine.includes(id!))).toBe(true);
+    // Delivery runs in this process too: each outcome arrives once, not once
+    // per path it could have taken.
+    expect(new Set(taskIds).size).toBe(taskIds.length);
   });
 });
 

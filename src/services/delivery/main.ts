@@ -35,6 +35,7 @@ import {
   uniqueConsumerId,
 } from "@/workers/bootstrap.js";
 import { BatchProcessor, CircuitBreaker } from "@/shared/index.js";
+import { publishDeliveryEvents } from "./live-events.js";
 import { ProviderThrottle } from "./throttle.js";
 import { metrics } from "@/metrics/index.js";
 
@@ -59,6 +60,7 @@ let scheduledProducer: StreamProducer;
 let enrichedProducers: Record<string, StreamProducer>;
 let healthInterval: NodeJS.Timeout | null = null;
 let subscriber: Redis | null = null;
+let stopLiveEvents: (() => void) | null = null;
 
 (global as any)._telemetry = (global as any)._telemetry || {
   count: 0,
@@ -1083,6 +1085,9 @@ export async function startDeliveryWorker() {
 
   // ─── Health check interval ──────────────────────────────────────────────────
 
+  // Outcomes for the API's live event stream, which may be in another process.
+  stopLiveEvents = publishDeliveryEvents(redis.native, globalEmitter);
+
   healthInterval = startHealthReporter("delivery", worker, redis, logger);
 
   logger.info(
@@ -1109,4 +1114,6 @@ export async function stopDeliveryWorker(): Promise<void> {
   });
   healthInterval = null;
   subscriber = null;
+  stopLiveEvents?.();
+  stopLiveEvents = null;
 }

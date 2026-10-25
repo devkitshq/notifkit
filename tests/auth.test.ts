@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { fakeLiveEvents } from "./helpers/live-events.js";
 import {
   hashPassword,
   verifyPassword,
@@ -166,6 +167,7 @@ describe("Auth Handlers", () => {
     };
 
     handlers = createHandlers({
+      liveEvents: fakeLiveEvents(),
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
       redis: mockRedis,
       producers: {} as any,

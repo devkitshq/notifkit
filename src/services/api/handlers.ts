@@ -41,6 +41,7 @@ import {
 } from "@/contracts/index.js";
 import { readJsonBody, sendJson, sendNoContent, sendValidationError } from "./http.js";
 import type { RouteContext } from "./router.js";
+import type { LiveDeliveryEvents } from "./live-events.js";
 import { globalEmitter, getPriorityBucket, normaliseTarget } from "@/shared/index.js";
 import { metrics } from "@/metrics/index.js";
 import { eq, desc, and, lte, gte, sql, like, or, isNotNull, inArray } from "drizzle-orm";
@@ -75,6 +76,8 @@ export interface Deps {
   segmentRepo: SegmentRepository;
   adminUserRepo?: AdminUserRepository;
   db: Db;
+  /** Delivery outcomes for GET /v1/events/stream. */
+  liveEvents: LiveDeliveryEvents;
 }
 
 // Inline user shape (email/phone/pushToken already normalised to string[] by Zod).
@@ -715,37 +718,35 @@ export function createHandlers(deps: Deps) {
     res: ServerResponse,
     ctx: RouteContext,
   ): Promise<void> {
+    let open = true;
+    let stop: (() => void) | undefined;
+    req.on("close", () => {
+      open = false;
+      stop?.();
+    });
+
+    const unlisten = await deps.liveEvents.listen((e) => {
+      // Only events that name this project. One naming none belongs to no
+      // tenant, so it goes to nobody rather than to everybody.
+      if (!ctx.projectId || e.projectId !== ctx.projectId) return;
+      res.write(`event: ${e.event}\n`);
+      const data =
+        e.event === "delivery:delivered"
+          ? { taskId: e.taskId, providerMessageId: e.providerMessageId, channel: e.channel }
+          : { taskId: e.taskId, error: e.error, channel: e.channel };
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    });
+    if (!open) return unlisten();
+    stop = unlisten;
+
+    // Only once subscribed: a client that has the headers is already listening,
+    // so whatever it triggers next cannot be missed.
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
     res.write("retry: 10000\n\n");
-
-    const onDelivered = (
-      taskId: string,
-      providerMessageId: string,
-      channel: string,
-      eventProjectId: string,
-    ) => {
-      if (eventProjectId && eventProjectId !== ctx.projectId) return;
-      res.write(`event: delivery:delivered\n`);
-      res.write(`data: ${JSON.stringify({ taskId, providerMessageId, channel })}\n\n`);
-    };
-
-    const onFailed = (taskId: string, error: string, channel: string, eventProjectId: string) => {
-      if (eventProjectId && eventProjectId !== ctx.projectId) return;
-      res.write(`event: delivery:failed\n`);
-      res.write(`data: ${JSON.stringify({ taskId, error, channel })}\n\n`);
-    };
-
-    globalEmitter.on("delivery:delivered", onDelivered);
-    globalEmitter.on("delivery:failed", onFailed);
-
-    req.on("close", () => {
-      globalEmitter.off("delivery:delivered", onDelivered);
-      globalEmitter.off("delivery:failed", onFailed);
-    });
   }
 
   // ── GET /v1/notifications/logs — getNotificationLogs ────────────────────

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { fakeLiveEvents } from "./helpers/live-events.js";
 import { createHandlers, type Deps } from "@/services/api/handlers.js";
 
 function createMockReq(body: any) {
@@ -168,6 +169,7 @@ describe("API Handlers", () => {
       }),
     );
     deps = {
+      liveEvents: fakeLiveEvents(),
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
       producers: {
         normal: {

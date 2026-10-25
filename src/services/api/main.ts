@@ -18,6 +18,7 @@ import { readJsonBody, readRawBody, sendJson, HttpError } from "./http.js";
 import { Router } from "./router.js";
 import { createHandlers } from "./handlers.js";
 import { handleAdminRequest } from "./admin-static.js";
+import { RedisLiveDeliveryEvents } from "./live-events.js";
 import { getAdminSession, hashPassword } from "@/services/auth/index.js";
 import { projects, messageLogs, projectApiKeys, suppressions } from "@/db/schema.js";
 import { eq, inArray } from "drizzle-orm";
@@ -61,6 +62,7 @@ let authCache = new LRUCache<string, CachedAuthKey>(1000, AUTH_CACHE_TTL_MS);
 let tokenHashToToken = new Map<string, string>();
 let authSubscriber: Redis | null = null;
 let router: Router;
+let liveEvents: RedisLiveDeliveryEvents | null = null;
 let apiRateLimiter: ApiRateLimiter;
 
 export function extractAuthToken(req: Pick<IncomingMessage, "headers">): string | undefined {
@@ -294,9 +296,11 @@ export async function startApiServer() {
     }
   }
 
+  liveEvents = new RedisLiveDeliveryEvents(redis.native, logger);
   deps = {
     logger,
     redis,
+    liveEvents,
     producers,
     userRepo: new UserRepository(db),
     contactRepo: new ContactRepository(db),
@@ -898,6 +902,8 @@ export async function stopApiServer(): Promise<void> {
     authSubscriber.disconnect();
     authSubscriber = null;
   }
+  await liveEvents?.close();
+  liveEvents = null;
   // These are module-scoped, so a restart in the same process must not inherit
   // the previous instance's cached auth or health.
   authCache = new LRUCache<string, CachedAuthKey>(1000, AUTH_CACHE_TTL_MS);
