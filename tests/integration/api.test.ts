@@ -496,6 +496,29 @@ describe("users", () => {
     });
     expect(details.contacts.map((c: any) => c.target)).toEqual(["detail@x.com"]);
   });
+
+  it("shows a user's details however many messages they have been sent", async () => {
+    const p = await project();
+    await p.client.addUser({ id: "busy", email: "busy@x.com" });
+    // More sends than Postgres takes bind parameters (65,535), which is what
+    // listing every task id the address was ever sent and passing them back in
+    // ran into.
+    await infra.sql`
+      INSERT INTO delivery_outbox (task_id, channel, destination)
+      SELECT 'busy-' || n, 'email', 'busy@x.com' FROM generate_series(1, 70000) n`;
+    await infra.sql`
+      INSERT INTO message_logs (project_id, task_id, channel, attempt, status)
+      VALUES (${p.id}, 'busy-70000', 'email', 1, 'delivered')`;
+
+    const details = await p.client.getUserDetails("busy");
+    expect(details.logs.map((l: any) => l.taskId)).toEqual(["busy-70000"]);
+  });
+
+  it("finds an address's sends by index rather than by reading the whole outbox", async () => {
+    const indexes = await infra.sql<{ indexdef: string }[]>`
+      SELECT indexdef FROM pg_indexes WHERE tablename = 'delivery_outbox'`;
+    expect(indexes.some((i) => /\(destination\)/.test(i.indexdef))).toBe(true);
+  });
 });
 
 // ─── Notify ─────────────────────────────────────────────────────────────────

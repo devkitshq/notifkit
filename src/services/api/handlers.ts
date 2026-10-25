@@ -1563,21 +1563,18 @@ export function createHandlers(deps: Deps) {
     const contactTargets = contacts.map((c) => c.target);
     let logs: any[] = [];
     if (contactTargets.length > 0) {
-      const outboxRows = await deps.db
+      // One statement: fetching every task id the addresses were ever sent and
+      // passing them back as parameters failed outright past 65,535 sends.
+      const sentTo = deps.db
         .select({ taskId: deliveryOutbox.taskId })
         .from(deliveryOutbox)
         .where(inArray(deliveryOutbox.destination, contactTargets));
-      const taskIds = Array.from(new Set(outboxRows.map((r: any) => r.taskId)));
-      if (taskIds.length > 0) {
-        logs = await deps.db
-          .select()
-          .from(messageLogs)
-          .where(
-            and(eq(messageLogs.projectId, ctx.projectId!), inArray(messageLogs.taskId, taskIds)),
-          )
-          .orderBy(desc(messageLogs.timestamp))
-          .limit(50);
-      }
+      logs = await deps.db
+        .select()
+        .from(messageLogs)
+        .where(and(eq(messageLogs.projectId, ctx.projectId!), inArray(messageLogs.taskId, sentTo)))
+        .orderBy(desc(messageLogs.timestamp))
+        .limit(50);
     }
 
     sendJson(res, 200, { ...user, contacts, logs });
