@@ -6,8 +6,8 @@ import twilio, { type Twilio } from "twilio";
 /**
  * Codes `messages.create` rejects with for a destination that is permanently
  * bad, as opposed to one that is merely temporarily rejected (rate limits,
- * account issues, Twilio outages). Only these suppress the contact — anything
- * else is worth retrying.
+ * account issues, Twilio outages). Only these suppress the contact; whether
+ * any other failure is retried depends on its HTTP status (see `send`).
  * https://www.twilio.com/docs/api/errors
  */
 const INVALID_DESTINATION_CODES = new Set([
@@ -120,13 +120,17 @@ export class TwilioTransport implements Transport {
     // `undefined` to Twilio costs an opaque provider rejection and a retry cycle.
     const to = task.destination;
     if (!to) {
-      return { success: false, error: "No destination (recipient phone number) on task" };
+      return {
+        success: false,
+        retryable: false,
+        error: "No destination (recipient phone number) on task",
+      };
     }
 
     const content = task.renderedContent.content as any;
     const body = content.text || content.body;
     if (!body) {
-      return { success: false, error: "No message body on task" };
+      return { success: false, retryable: false, error: "No message body on task" };
     }
 
     // A template may carry its own sender, so one transport can serve a
@@ -153,14 +157,22 @@ export class TwilioTransport implements Transport {
       );
       return { success: true, providerMessageId: message.sid };
     } catch (err) {
-      const error = err as Error & { code?: number };
+      // A RestException carries the HTTP status; a network error has none,
+      // and is worth retrying.
+      const error = err as Error & { code?: number; status?: number };
       const invalidToken = error.code !== undefined && INVALID_DESTINATION_CODES.has(error.code);
+      const permanent = invalidToken || isPermanentStatus(error.status);
 
       this.logger?.warn(
         { taskId: task.taskId, code: error.code, error: error.message, invalidToken },
         "Twilio send failed",
       );
-      return { success: false, invalidToken, error: error.message };
+      return {
+        success: false,
+        invalidToken,
+        ...(permanent ? { retryable: false } : {}),
+        error: error.message,
+      };
     }
   }
 
@@ -300,4 +312,15 @@ function parseFormBody(rawBody: string): Record<string, string> {
     params[key] = value;
   }
   return params;
+}
+
+/**
+ * Whether a refusal with this HTTP status is final. A 4xx says the request
+ * itself is wrong, so sending it again cannot succeed; 408 and 429 are the
+ * exceptions (the request was fine, the moment was not), as is every 5xx.
+ */
+function isPermanentStatus(status: number | undefined): boolean {
+  return (
+    typeof status === "number" && status >= 400 && status < 500 && status !== 408 && status !== 429
+  );
 }

@@ -262,8 +262,54 @@ describe("FcmTransport (Push Provider)", () => {
     expect(result).toEqual({
       success: false,
       invalidToken: true,
+      retryable: false,
       error: "Requested entity was not found.",
     });
+  });
+
+  const fcmTask: any = {
+    taskId: "t",
+    enrichedEventId: "e",
+    destination: "token",
+    priority: "normal",
+    renderedContent: { content: { subject: "S", body: "B" } },
+  };
+  const fcmFailure = (code: string) => Object.assign(new Error(code), { code });
+
+  it.each([
+    "messaging/invalid-argument",
+    "messaging/payload-size-limit-exceeded",
+    "messaging/sender-id-mismatch",
+  ])("gives up on a request FCM refused (%s)", async (code) => {
+    mockSendPush.mockRejectedValueOnce(fcmFailure(code));
+    const transport = new FcmTransport({
+      serviceAccountJson: JSON.stringify({ project_id: "test-project" }),
+    });
+    expect(await transport.send(fcmTask)).toMatchObject({ success: false, retryable: false });
+  });
+
+  it.each([
+    "messaging/quota-exceeded",
+    "messaging/message-rate-exceeded",
+    "messaging/internal-error",
+    "messaging/server-unavailable",
+    "app/network-error",
+  ])("tries again after %s", async (code) => {
+    mockSendPush.mockRejectedValueOnce(fcmFailure(code));
+    const transport = new FcmTransport({
+      serviceAccountJson: JSON.stringify({ project_id: "test-project" }),
+    });
+    const result = await transport.send(fcmTask);
+    expect(result.success).toBe(false);
+    expect(result.retryable).not.toBe(false);
+  });
+
+  it("tries again after an error that carries no FCM code", async () => {
+    mockSendPush.mockRejectedValueOnce(new Error("socket hang up"));
+    const transport = new FcmTransport({
+      serviceAccountJson: JSON.stringify({ project_id: "test-project" }),
+    });
+    expect((await transport.send(fcmTask)).retryable).not.toBe(false);
   });
 });
 
@@ -610,6 +656,7 @@ describe("TwilioTransport (SMS Provider)", () => {
     expect(mockCreateMessage).not.toHaveBeenCalled();
     expect(result).toEqual({
       success: false,
+      retryable: false,
       error: "No destination (recipient phone number) on task",
     });
   });
@@ -620,7 +667,7 @@ describe("TwilioTransport (SMS Provider)", () => {
     );
 
     expect(mockCreateMessage).not.toHaveBeenCalled();
-    expect(result).toEqual({ success: false, error: "No message body on task" });
+    expect(result).toEqual({ success: false, retryable: false, error: "No message body on task" });
   });
 
   it.each([
@@ -629,19 +676,46 @@ describe("TwilioTransport (SMS Provider)", () => {
     [21612, "Not reachable via SMS"],
     [21614, "'To' number is not a valid mobile number"],
   ])("flags a dead destination (%i) as an invalid token", async (code, message) => {
-    mockCreateMessage.mockRejectedValueOnce(Object.assign(new Error(message), { code }));
+    mockCreateMessage.mockRejectedValueOnce(
+      Object.assign(new Error(message), { code, status: 400 }),
+    );
 
     await expect(twilioTransport().send(smsTask())).resolves.toEqual({
       success: false,
       invalidToken: true,
+      retryable: false,
       error: message,
     });
+  });
+
+  it("gives up on any other request Twilio refused", async () => {
+    // 21602: message body is required. Sending it again changes nothing.
+    mockCreateMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Message body is required"), { code: 21602, status: 400 }),
+    );
+
+    await expect(twilioTransport().send(smsTask())).resolves.toEqual({
+      success: false,
+      invalidToken: false,
+      retryable: false,
+      error: "Message body is required",
+    });
+  });
+
+  it("tries again after a server error on Twilio's side", async () => {
+    mockCreateMessage.mockRejectedValueOnce(
+      Object.assign(new Error("Internal Server Error"), { code: 20500, status: 500 }),
+    );
+
+    const result = await twilioTransport().send(smsTask());
+    expect(result).toMatchObject({ success: false, invalidToken: false });
+    expect(result.retryable).not.toBe(false);
   });
 
   it("leaves a retryable failure retryable rather than suppressing the number", async () => {
     // 20429 is Twilio's rate limit: the number is fine, this attempt was not.
     mockCreateMessage.mockRejectedValueOnce(
-      Object.assign(new Error("Too Many Requests"), { code: 20429 }),
+      Object.assign(new Error("Too Many Requests"), { code: 20429, status: 429 }),
     );
 
     await expect(twilioTransport().send(smsTask())).resolves.toEqual({
@@ -1118,6 +1192,7 @@ describe("TelegramTransport (Telegram Provider)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result).toEqual({
       success: false,
+      retryable: false,
       error: "No destination (Telegram chat id) on task",
     });
   });
@@ -1139,6 +1214,7 @@ describe("TelegramTransport (Telegram Provider)", () => {
     expect(result).toEqual({
       success: false,
       invalidToken: true,
+      retryable: false,
       error: "Forbidden: bot was blocked",
     });
     expect(log.warn).toHaveBeenCalledWith(
@@ -1156,7 +1232,8 @@ describe("TelegramTransport (Telegram Provider)", () => {
 
     const result = await telegramTransport().send(telegramTask());
 
-    expect(result).toEqual({ success: false, invalidToken, error: description });
+    // A 400 is the request being refused, whether or not the chat is gone.
+    expect(result).toEqual({ success: false, invalidToken, retryable: false, error: description });
   });
 
   it("falls back to a synthetic message when the API omits a description", async () => {
@@ -1180,9 +1257,11 @@ describe("TelegramTransport (Telegram Provider)", () => {
     // dead-target patterns without throwing on the missing string.
     stubTelegram({ ok: false, error_code: 400 });
 
+    // Not a dead chat, but still a refused request: no point sending it again.
     expect(await telegramTransport().send(telegramTask())).toEqual({
       success: false,
       invalidToken: false,
+      retryable: false,
       error: "Telegram API error 400",
     });
   });
@@ -1365,6 +1444,7 @@ describe("DiscordTransport (Discord Provider)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result).toEqual({
       success: false,
+      retryable: false,
       error: "No destination (Discord webhook URL) on task",
     });
   });
@@ -1405,21 +1485,25 @@ describe("DiscordTransport (Discord Provider)", () => {
   });
 
   it.each([
-    [404, true],
-    [401, true],
-    [500, false],
-    [429, false],
-  ])("classifies a %i response as dead=%s", async (status, invalidToken) => {
-    stubDiscord("rate limited or gone", status);
+    [404, true, false],
+    [401, true, false],
+    [500, false, undefined],
+    [429, false, undefined],
+  ])(
+    "classifies a %i response as dead=%s, retryable=%s",
+    async (status, invalidToken, retryable) => {
+      stubDiscord("rate limited or gone", status);
 
-    const result = await new DiscordTransport().send(discordTask());
+      const result = await new DiscordTransport().send(discordTask());
 
-    expect(result).toEqual({
-      success: false,
-      invalidToken,
-      error: `Discord webhook error ${status}: rate limited or gone`,
-    });
-  });
+      expect(result).toEqual({
+        success: false,
+        invalidToken,
+        ...(retryable === false ? { retryable } : {}),
+        error: `Discord webhook error ${status}: rate limited or gone`,
+      });
+    },
+  );
 
   it("logs a rejected send", async () => {
     const log = logger();
@@ -1621,6 +1705,7 @@ describe("SlackTransport (Slack Provider)", () => {
       expect(fetchMock).not.toHaveBeenCalled();
       expect(result).toEqual({
         success: false,
+        retryable: false,
         error: "No destination (Slack channel/user ID, or webhook URL) on task",
       });
     });
@@ -1633,6 +1718,7 @@ describe("SlackTransport (Slack Provider)", () => {
       expect(fetchMock).not.toHaveBeenCalled();
       expect(result).toEqual({
         success: false,
+        retryable: false,
         error: "Destination is a Slack channel/user ID but no botToken (or token) is configured",
       });
     });
@@ -1712,21 +1798,30 @@ describe("SlackTransport (Slack Provider)", () => {
     });
 
     it.each([
-      ["channel_not_found", true],
-      ["is_archived", true],
-      ["channel_is_archived", true],
-      ["user_not_found", true],
-      ["account_inactive", true],
-      ["not_in_channel", true],
-      ["ratelimited", false],
-      ["invalid_auth", false],
-    ])("classifies %s as dead-destination=%s", async (error, invalidToken) => {
-      stubSlackApi({ ok: false, error });
+      ["channel_not_found", true, false],
+      ["is_archived", true, false],
+      ["channel_is_archived", true, false],
+      ["user_not_found", true, false],
+      ["account_inactive", true, false],
+      ["not_in_channel", true, false],
+      ["ratelimited", false, undefined],
+      // Not the destination's fault, but no later attempt gets past a bad token.
+      ["invalid_auth", false, false],
+    ])(
+      "classifies %s as dead-destination=%s, retryable=%s",
+      async (error, invalidToken, retryable) => {
+        stubSlackApi({ ok: false, error });
 
-      const result = await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(slackTask());
+        const result = await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(slackTask());
 
-      expect(result).toEqual({ success: false, invalidToken, error });
-    });
+        expect(result).toEqual({
+          success: false,
+          invalidToken,
+          ...(retryable === false ? { retryable } : {}),
+          error,
+        });
+      },
+    );
 
     it("falls back to a generic message when the API names no error", async () => {
       stubSlackApi({ ok: false });
@@ -1827,7 +1922,8 @@ describe("SlackTransport (Slack Provider)", () => {
 
       const result = await new SlackTransport().send(hookTask());
 
-      expect(result).toEqual({ success: false, invalidToken, error: body });
+      // Sent with a 400: whatever the body says, Slack refused the request.
+      expect(result).toEqual({ success: false, invalidToken, retryable: false, error: body });
     });
 
     it("falls back to the status code when the body is empty", async () => {
@@ -1919,6 +2015,7 @@ describe("WhatsAppTransport (WhatsApp Provider)", () => {
     const result = await whatsappTransport().send(whatsappTask({ destination: undefined }));
     expect(result).toEqual({
       success: false,
+      retryable: false,
       error: "No phone number on recipient; cannot send WhatsApp message.",
     });
   });
@@ -1929,6 +2026,7 @@ describe("WhatsAppTransport (WhatsApp Provider)", () => {
     );
     expect(result).toEqual({
       success: false,
+      retryable: false,
       error: "Template has no 'text' content for the whatsapp channel.",
     });
   });
@@ -1985,6 +2083,7 @@ describe("WhatsAppTransport (WhatsApp Provider)", () => {
       success: false,
       error: "Invalid OAuth access token",
       invalidToken: true,
+      retryable: false,
     });
   });
 

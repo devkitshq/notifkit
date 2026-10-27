@@ -48,7 +48,11 @@ export class FcmTransport implements Transport {
     // `undefined` to FCM costs an opaque provider rejection and a retry cycle.
     const token = task.destination;
     if (!token) {
-      return { success: false, error: "No destination (FCM registration token) on task" };
+      return {
+        success: false,
+        retryable: false,
+        error: "No destination (FCM registration token) on task",
+      };
     }
 
     const messaging = await this.getMessaging();
@@ -92,6 +96,12 @@ export class FcmTransport implements Transport {
         "messaging/invalid-argument",
       ];
       const isInvalidToken = invalidTokenCodes.includes(error.code ?? "");
+      // FCM reports by code, not status. A `messaging/` code is FCM's answer
+      // to this message, final unless it is a rate limit or an outage; any
+      // other error (the network, the SDK) never reached that answer.
+      const permanent =
+        isInvalidToken ||
+        (error.code?.startsWith("messaging/") === true && !RETRYABLE_CODES.has(error.code));
 
       this.logger?.warn(
         { taskId: task.taskId, code: error.code, invalidToken: isInvalidToken },
@@ -101,8 +111,25 @@ export class FcmTransport implements Transport {
       return {
         success: false,
         invalidToken: isInvalidToken,
+        ...(permanent ? { retryable: false } : {}),
         error: error.message ?? "FCM error",
       };
     }
   }
 }
+
+/**
+ * The `messaging/` errors a later attempt can get past: quota and rate limits,
+ * and FCM's own failures.
+ * https://firebase.google.com/docs/cloud-messaging/send/admin-sdk#admin
+ */
+const RETRYABLE_CODES = new Set([
+  "messaging/quota-exceeded",
+  "messaging/message-rate-exceeded",
+  "messaging/device-message-rate-exceeded",
+  "messaging/topics-message-rate-exceeded",
+  "messaging/internal-error",
+  "messaging/server-unavailable",
+  "messaging/unavailable",
+  "messaging/unknown-error",
+]);

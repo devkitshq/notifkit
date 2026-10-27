@@ -47,7 +47,11 @@ export class TelegramTransport implements Transport {
     // retry cycle.
     const chatId = task.destination;
     if (!chatId) {
-      return { success: false, error: "No destination (Telegram chat id) on task" };
+      return {
+        success: false,
+        retryable: false,
+        error: "No destination (Telegram chat id) on task",
+      };
     }
 
     const content = task.renderedContent.content as any;
@@ -59,7 +63,7 @@ export class TelegramTransport implements Transport {
     // word "undefined" underneath it.
     const text = [subject, body].filter((part) => typeof part === "string" && part).join("\n\n");
     if (!text) {
-      return { success: false, error: "No message text on task" };
+      return { success: false, retryable: false, error: "No message text on task" };
     }
     const parseMode = typeof content.parseMode === "string" ? content.parseMode : this.parseMode;
 
@@ -100,6 +104,11 @@ export class TelegramTransport implements Transport {
         return {
           success: false,
           invalidToken,
+          // error_code mirrors the HTTP status, but a gateway page in front of
+          // the API carries none, so fall back to the response's own.
+          ...(invalidToken || isPermanentStatus(data.error_code ?? res.status)
+            ? { retryable: false }
+            : {}),
           error: data.description ?? `Telegram API error ${data.error_code ?? "unknown"}`,
         };
       }
@@ -117,4 +126,13 @@ export class TelegramTransport implements Transport {
       return { success: false, error: error.message };
     }
   }
+}
+
+/**
+ * Whether a refusal with this HTTP status is final. A 4xx says the request
+ * itself is wrong, so sending it again cannot succeed; 408 and 429 are the
+ * exceptions (the request was fine, the moment was not), as is every 5xx.
+ */
+function isPermanentStatus(status: number | undefined): boolean {
+  return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
 }

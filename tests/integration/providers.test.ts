@@ -583,6 +583,161 @@ describe("ConsoleTransport", () => {
   });
 });
 
+// ─── Which failures are worth retrying ─────────────────────────────────────
+//
+// `retryable: false` tells delivery that sending again cannot help: it fails
+// the task at once, and the circuit breaker does not count it against the
+// provider. A request the provider refused as wrong (4xx) is that; a timeout,
+// a rate limit, a 5xx or a dropped connection is not.
+
+type Reply = Parameters<FakeInternet["on"]>[1];
+const permanent = { success: false, retryable: false };
+const notPermanent = (r: { success: boolean; retryable?: boolean }) =>
+  r.success === false && r.retryable !== false;
+
+describe("which failures are worth retrying", () => {
+  describe("Telegram", () => {
+    const t = new TelegramTransport({ botToken: "123:abc" });
+    const reply =
+      (status: number, description: string): Reply =>
+      () => ({
+        status,
+        json: { ok: false, error_code: status, description },
+      });
+
+    it("gives up on a request Telegram refused, or a chat that is gone", async () => {
+      net.on("api.telegram.org", reply(400, "Bad Request: message is too long"));
+      expect(await t.send(task({ destination: "1" }))).toMatchObject(permanent);
+      net.on("api.telegram.org", reply(403, "Forbidden: bot was blocked by the user"));
+      expect(await t.send(task({ destination: "1" }))).toMatchObject({
+        ...permanent,
+        invalidToken: true,
+      });
+      expect(await t.send(task({ destination: undefined }))).toMatchObject(permanent);
+    });
+
+    it("tries again after a rate limit, a server error or a dropped connection", async () => {
+      net.on("api.telegram.org", reply(429, "Too Many Requests: retry after 5"));
+      expect(notPermanent(await t.send(task({ destination: "1" })))).toBe(true);
+      net.on("api.telegram.org", () => ({ status: 502, text: "<html>Bad Gateway</html>" }));
+      expect(notPermanent(await t.send(task({ destination: "1" })))).toBe(true);
+      net.on("api.telegram.org", () => "hang-up");
+      expect(notPermanent(await t.send(task({ destination: "1" })))).toBe(true);
+    });
+  });
+
+  describe("Discord", () => {
+    const d = new DiscordTransport();
+    const hook = "https://discord.com/api/webhooks/1/abc";
+
+    it("gives up on a request Discord refused, or a webhook that is gone", async () => {
+      net.on("discord.com", () => ({
+        status: 400,
+        json: { message: "Cannot send an empty message" },
+      }));
+      expect(await d.send(task({ destination: hook }))).toMatchObject(permanent);
+      net.on("discord.com", () => ({ status: 404, json: { message: "Unknown Webhook" } }));
+      expect(await d.send(task({ destination: hook }))).toMatchObject({
+        ...permanent,
+        invalidToken: true,
+      });
+      expect(await d.send(task({ destination: "https://evil.com/x" }))).toMatchObject(permanent);
+    });
+
+    it("tries again after a rate limit or a server error", async () => {
+      net.on("discord.com", () => ({
+        status: 429,
+        json: { message: "You are being rate limited." },
+      }));
+      expect(notPermanent(await d.send(task({ destination: hook })))).toBe(true);
+      net.on("discord.com", () => ({ status: 503, text: "unavailable" }));
+      expect(notPermanent(await d.send(task({ destination: hook })))).toBe(true);
+    });
+  });
+
+  describe("Slack", () => {
+    // The Web API answers almost every error with HTTP 200 and a code.
+    const s = new SlackTransport({ botToken: "xoxb" });
+    const webhook = new SlackTransport({ webhookUrl: "https://hooks.slack.com/services/T/B/x" });
+
+    it("gives up on a request Slack refused", async () => {
+      for (const error of ["is_archived", "invalid_blocks", "msg_too_long", "invalid_auth"]) {
+        net.on("slack.com", () => ({ json: { ok: false, error } }));
+        expect(await s.send(task({ destination: "C" }))).toMatchObject(permanent);
+      }
+      net.on("hooks.slack.com", () => ({ status: 400, text: "invalid_payload" }));
+      expect(await webhook.send(task({ destination: undefined }))).toMatchObject(permanent);
+      expect(await new SlackTransport().send(task({ destination: "C1" }))).toMatchObject(permanent);
+    });
+
+    it("tries again after a rate limit, an outage on Slack's side or a dropped connection", async () => {
+      for (const error of ["ratelimited", "internal_error", "service_unavailable"]) {
+        net.on("slack.com", () => ({ json: { ok: false, error } }));
+        expect(notPermanent(await s.send(task({ destination: "C" })))).toBe(true);
+      }
+      net.on("hooks.slack.com", () => ({ status: 500, text: "oops" }));
+      expect(notPermanent(await webhook.send(task({ destination: undefined })))).toBe(true);
+      net.on("hooks.slack.com", () => "hang-up");
+      expect(notPermanent(await webhook.send(task({ destination: undefined })))).toBe(true);
+    });
+  });
+
+  describe("WhatsApp", () => {
+    const w = new WhatsAppTransport({ phoneNumberId: "PN1", accessToken: "tok" });
+    const send = () => w.send(task({ destination: "+1555", content: { text: "x" } }));
+    const graphError =
+      (status: number, code: number): Reply =>
+      () => ({
+        status,
+        json: { error: { code, message: `error ${code}` } },
+      });
+
+    it("gives up on a request Meta refused", async () => {
+      net.on("graph.facebook.com", graphError(400, 131009)); // parameter value is not valid
+      expect(await send()).toMatchObject(permanent);
+      expect(await w.send(task({ destination: undefined }))).toMatchObject(permanent);
+    });
+
+    it("tries again after a rate limit, even the ones Meta sends as a 400", async () => {
+      for (const code of [4, 80007, 130429, 131048, 131056]) {
+        net.on("graph.facebook.com", graphError(400, code));
+        expect(notPermanent(await send())).toBe(true);
+      }
+      net.on("graph.facebook.com", graphError(429, 130429));
+      expect(notPermanent(await send())).toBe(true);
+      net.on("graph.facebook.com", graphError(500, 131000));
+      expect(notPermanent(await send())).toBe(true);
+    });
+  });
+
+  describe("Resend", () => {
+    const r = new ResendTransport({ apiKey: "re_test", from: "a@acme.test" });
+    const rejection =
+      (statusCode: number, name: string): Reply =>
+      () => ({
+        status: statusCode,
+        json: { statusCode, name, message: name },
+      });
+
+    it("gives up on a request Resend refused", async () => {
+      net.on("api.resend.com", rejection(422, "validation_error"));
+      expect(await r.send(task({ destination: "nope" }))).toMatchObject(permanent);
+      net.on("api.resend.com", rejection(403, "invalid_from_address"));
+      expect(await r.send(task({ destination: "u@x.com" }))).toMatchObject(permanent);
+      expect(await r.send(task({ destination: undefined }))).toMatchObject(permanent);
+    });
+
+    it("tries again after a rate limit, a server error or a dropped connection", async () => {
+      net.on("api.resend.com", rejection(429, "rate_limit_exceeded"));
+      expect(notPermanent(await r.send(task({ destination: "u@x.com" })))).toBe(true);
+      net.on("api.resend.com", rejection(500, "internal_server_error"));
+      expect(notPermanent(await r.send(task({ destination: "u@x.com" })))).toBe(true);
+      net.on("api.resend.com", () => "hang-up");
+      expect(notPermanent(await r.send(task({ destination: "u@x.com" })))).toBe(true);
+    });
+  });
+});
+
 // ─── A provider end to end ─────────────────────────────────────────────────
 
 describe("Resend inside notifkit", () => {
