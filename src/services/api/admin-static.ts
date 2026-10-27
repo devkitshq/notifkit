@@ -3,6 +3,7 @@ import { resolve, extname, join, relative, isAbsolute, dirname } from "node:path
 import { existsSync, statSync, createReadStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { request as httpRequest } from "node:http";
+import { pipeline } from "node:stream";
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -254,7 +255,10 @@ export async function handleAdminRequest(
     "Cache-Control": cacheControl,
   });
 
-  const stream = createReadStream(filePath);
-  stream.pipe(res);
+  // pipeline, not pipe: a file that vanished or turned unreadable after the
+  // stat above fails the read, and pipe left that error unhandled (crashing
+  // the process) and the response open. pipeline destroys the response, so
+  // the client sees it cut short, and the error stops here.
+  pipeline(createReadStream(filePath), res, () => {});
   return true;
 }
