@@ -2074,7 +2074,14 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
     const { identifier, password } = parsed.data;
     const user = await deps.adminUserRepo.findByEmailOrUsername(identifier);
     const targetHash = user ? user.passwordHash : DUMMY_PASSWORD_HASH;
-    const isValid = await verifyPassword(password, targetHash);
+    let isValid = await verifyPassword(password, targetHash);
+    // The startup admin's ADMIN_PASSWORD is stored trimmed (a Windows `set`
+    // leaves a trailing space in it), so one configured with spaces at either
+    // end would otherwise never match what is typed. Only a failed attempt
+    // with such spaces pays the second check.
+    if (!isValid && password.trim() !== password && password.trim()) {
+      isValid = await verifyPassword(password.trim(), targetHash);
+    }
     if (!user || !isValid) {
       sendJson(res, 401, { error: "unauthorized", message: "Invalid credentials" });
       return;
