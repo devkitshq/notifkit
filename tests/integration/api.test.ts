@@ -589,6 +589,20 @@ describe("notify", () => {
       .catch((err) => ({ status: 413, err }));
     expect(res.status).toBe(413);
   });
+
+  it("measures the 5MB limit in bytes, not characters", async () => {
+    const p = await project();
+    // 2M three-byte characters: ~6MB on the wire, under 5M characters.
+    const res = await p
+      .api("POST", "/v1/notify", {
+        user: "u",
+        template: "t",
+        data: { blob: "€".repeat(2 * 1024 * 1024) },
+      })
+      .then((r) => r.status)
+      .catch(() => "connection cut");
+    expect([413, "connection cut"]).toContain(res);
+  });
 });
 
 // ─── Scheduled notifications ────────────────────────────────────────────────
