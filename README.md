@@ -11,7 +11,8 @@ Self-hosted notification infrastructure for product notifications. One API call 
 [Documentation](https://notifkit.dev/docs/) · [Quickstart](https://notifkit.dev/docs/quickstart.html) · [Examples](https://notifkit.dev/docs/examples.html) · [notifkit.dev](https://notifkit.dev)
 
 https://github.com/user-attachments/assets/ad8955bd-4205-4d47-8dfc-9010abd3ad62
-[note: this video is generated using claude]
+
+(note: this video is generated using claude)
 
 </div>
 
