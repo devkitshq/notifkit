@@ -1165,6 +1165,35 @@ describe("admin dashboard", () => {
     }
   });
 
+  it("does not proxy to whatever listens on the dev port unless a dev URL is set", async (ctx) => {
+    // A deployment that never set NODE_ENV used to send every /admin request,
+    // Authorization header included, to 127.0.0.1:5173 first.
+    const http = await import("node:http");
+    const seen: string[] = [];
+    const squatter = http.createServer((req, res) => {
+      seen.push(String(req.headers.authorization));
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("not the dashboard");
+    });
+    const listening = await new Promise<boolean>((r) => {
+      squatter.once("error", () => r(false));
+      squatter.listen(5173, "127.0.0.1", () => r(true));
+    });
+    if (!listening) return ctx.skip(); // something real already has the port
+    const before = process.env.VITE_DEV_URL;
+    delete process.env.VITE_DEV_URL;
+    try {
+      const res = await fetch(`${app.baseUrl}/admin/`, {
+        headers: { authorization: "Bearer nk_sess_secret" },
+      });
+      expect(await res.text()).toContain('data-fixture="notifkit-test"');
+      expect(seen).toEqual([]);
+    } finally {
+      process.env.VITE_DEV_URL = before;
+      await new Promise((r) => squatter.close(r));
+    }
+  });
+
   it("proxies to the dashboard dev server when one is running", async () => {
     const http = await import("node:http");
     const dev = http.createServer((req, res) => {

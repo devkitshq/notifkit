@@ -127,14 +127,20 @@ export async function handleAdminRequest(
     return true;
   }
 
-  // In development, attempt to proxy to local Vite dev server on port 5173 (or VITE_DEV_URL) if active
-  if (process.env.NODE_ENV !== "production") {
-    const devProxyUrl =
-      process.env.VITE_DEV_URL || process.env.ADMIN_DEV_URL || process.env.NEXT_DEV_URL;
-    const targetPort = devProxyUrl ? parseInt(new URL(devProxyUrl).port, 10) : 5173;
-    const targetHost = devProxyUrl ? new URL(devProxyUrl).hostname : "127.0.0.1";
-
-    const proxied = await proxyToDevServer(req, res, targetHost, targetPort);
+  // Proxy to the dashboard's dev server only when one is named. Defaulting to
+  // 127.0.0.1:5173 outside production meant a deployment that never set
+  // NODE_ENV sent every /admin request, credentials included, to whatever
+  // listened there, and served its reply as the dashboard.
+  const devProxyUrl =
+    process.env.VITE_DEV_URL || process.env.ADMIN_DEV_URL || process.env.NEXT_DEV_URL;
+  if (devProxyUrl && process.env.NODE_ENV !== "production") {
+    const target = new URL(devProxyUrl);
+    const proxied = await proxyToDevServer(
+      req,
+      res,
+      target.hostname,
+      parseInt(target.port, 10) || 80,
+    );
     if (proxied) {
       return true;
     }
@@ -163,7 +169,7 @@ export async function handleAdminRequest(
           <p>The dashboard static bundle has not been built yet.</p>
           <p>Please build it by running:</p>
           <p><code>npm run build:dashboard</code></p>
-          <p>or run the dev server with <code>npm --prefix dashboard run dev</code>.</p>
+          <p>or run the dev server with <code>npm --prefix dashboard run dev</code> and start notifkit with <code>VITE_DEV_URL=http://127.0.0.1:5173</code>.</p>
         </div>
       </body>
       </html>
