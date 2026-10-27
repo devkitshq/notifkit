@@ -965,8 +965,9 @@ export function createHandlers(deps: Deps) {
         });
       sendJson(res, 201, { name: input.name });
     } catch (error: any) {
+      // Logged, not returned: driver errors name tables, constraints and values.
       deps.logger.error({ err: error }, "Failed to create workflow definition");
-      sendJson(res, 500, { error: "internal_error", message: error.message });
+      sendJson(res, 500, { error: "internal_error" });
     }
   }
 
@@ -1491,8 +1492,9 @@ export function createHandlers(deps: Deps) {
       await deps.redis.native.xdel(STREAMS.DEAD_LETTER, messageId);
 
       sendJson(res, 200, { success: true, replayedId: messageId, stream: targetStream });
-    } catch (err: any) {
-      sendJson(res, 500, { error: "replay_failed", message: err.message });
+    } catch (err) {
+      logger.error({ err, messageId }, "DLQ replay failed");
+      sendJson(res, 500, { error: "replay_failed" });
     }
   }
 
@@ -1512,8 +1514,9 @@ export function createHandlers(deps: Deps) {
       }
       await deps.redis.native.xdel(STREAMS.DEAD_LETTER, messageId);
       sendJson(res, 200, { success: true });
-    } catch (err: any) {
-      sendJson(res, 500, { error: "delete_failed", message: err.message });
+    } catch (err) {
+      logger.error({ err, messageId }, "DLQ delete failed");
+      sendJson(res, 500, { error: "delete_failed" });
     }
   }
 

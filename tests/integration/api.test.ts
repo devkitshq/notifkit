@@ -766,6 +766,14 @@ describe("provider webhooks", () => {
     expect((await hook({ events: [] }, "forged")).status).toBe(401);
   });
 
+  it("answers a webhook it failed to process with a bare 500", async () => {
+    // No `events`: the parser hands back nothing and processing throws.
+    const res = await hook({ unexpected: true });
+    expect(res.status).toBe(500);
+    // Providers log response bodies; the internal error stays in ours.
+    expect(res.body).toEqual({ error: "internal_error" });
+  });
+
   it("records engagement against the message and suppresses dead or unwilling addresses", async () => {
     const p = await project();
     await p.client.syncTemplates([{ id: "t", channel: "email", content: { subject: "s" } }]);

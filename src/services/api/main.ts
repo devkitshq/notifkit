@@ -721,6 +721,7 @@ export async function startApiServer() {
 
     if (transport.parseWebhook) {
       router.post(transport.webhookPath, async (req, res) => {
+        let deadline: NodeJS.Timeout | undefined;
         try {
           await Promise.race([
             (async () => {
@@ -862,15 +863,19 @@ export async function startApiServer() {
               }
               if (!res.headersSent) sendJson(res, 200, { success: true });
             })(),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("Webhook processing timeout")), 15000),
-            ),
+            new Promise((_, reject) => {
+              deadline = setTimeout(() => reject(new Error("Webhook processing timeout")), 15000);
+            }),
           ]);
-        } catch (err: any) {
+        } catch (err) {
+          // The detail is ours to log, not the provider's: providers keep
+          // response bodies in their delivery logs.
           logger.error({ err, channel }, "webhook processing error or timeout");
           if (!res.headersSent) {
-            sendJson(res, 500, { error: "internal_error", message: err.message });
+            sendJson(res, 500, { error: "internal_error" });
           }
+        } finally {
+          clearTimeout(deadline);
         }
       });
       logger.info(`Mounted webhook for ${channel} at ${transport.webhookPath}`);

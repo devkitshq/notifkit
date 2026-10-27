@@ -467,7 +467,18 @@ describe("API operational handlers", () => {
       await handlers.replayDLQMessage(createMockReq({ id: "1-0" }), res, ctx());
 
       expect(res.statusCode).toBe(500);
-      expect(parse(res)).toMatchObject({ error: "replay_failed", message: "redis gone" });
+      expect(parse(res)).toEqual({ error: "replay_failed" });
+      expect(deps.logger.error).toHaveBeenCalled();
+    });
+
+    it("delete surfaces a redis failure as a 500 without its detail", async () => {
+      deps.redis.native.xrange.mockRejectedValue(new Error("redis gone"));
+      const res = createMockRes();
+      await handlers.deleteDLQMessage(createMockReq(), res, ctx({ params: { id: "1-0" } }));
+
+      expect(res.statusCode).toBe(500);
+      expect(parse(res)).toEqual({ error: "delete_failed" });
+      expect(deps.logger.error).toHaveBeenCalled();
     });
 
     it("delete removes the entry", async () => {
@@ -535,7 +546,9 @@ describe("API operational handlers", () => {
       );
 
       expect(res.statusCode).toBe(500);
-      expect(parse(res)).toMatchObject({ error: "internal_error", message: "constraint" });
+      // The cause is logged, not handed to the caller: driver errors name
+      // tables, constraints and sometimes values.
+      expect(parse(res)).toEqual({ error: "internal_error" });
       expect(deps.logger.error).toHaveBeenCalled();
     });
 
