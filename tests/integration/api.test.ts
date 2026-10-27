@@ -183,6 +183,82 @@ describe("authentication", () => {
       expect((await anon("GET", "/v1/auth/me")).status).toBe(401);
     });
 
+    /** Signs in as a new dashboard user with `role`, returning a client for the session. */
+    async function sessionWithRole(role: string) {
+      await clearRateLimits();
+      const name = `${role}-${randomUUID().slice(0, 8)}`;
+      await new AdminUserRepository(infra.db).create({
+        email: `${name}@example.com`,
+        username: name,
+        passwordHash: await hashPassword("correct horse"),
+        role,
+      });
+      const login = await apiClient(app.baseUrl)("POST", "/v1/auth/login", {
+        identifier: name,
+        password: "correct horse",
+      });
+      expect(login.status).toBe(200);
+      return (headers: Record<string, string> = {}) =>
+        apiClient(app.baseUrl, login.body.token, headers);
+    }
+
+    it.each(["read_only", "viewer"])(
+      "lets a %s session read but not write project data",
+      async (role) => {
+        const p = await project();
+        const session = (await sessionWithRole(role))({ "x-project-id": p.id });
+        expect((await session("GET", "/v1/users")).status).toBe(200);
+        expect((await session("POST", "/v1/users", { id: "x" })).status).toBe(403);
+      },
+    );
+
+    it.each(["read_only", "viewer"])(
+      "keeps a %s session from managing projects and keys",
+      async (role) => {
+        const p = await project();
+        const session = (await sessionWithRole(role))();
+        expect((await session("GET", "/v1/projects")).status).toBe(200);
+        expect((await session("POST", "/v1/projects", { name: "mine" })).status).toBe(403);
+        expect((await session("POST", `/v1/projects/${p.id}/keys`, {})).status).toBe(403);
+        expect((await session("PATCH", `/v1/projects/${p.id}`, { rateLimitRpm: 1 })).status).toBe(
+          403,
+        );
+        expect((await session("DELETE", `/v1/projects/${p.id}`)).status).toBe(403);
+        expect((await app.admin("GET", `/v1/projects/${p.id}/keys`)).body.keys).toHaveLength(1);
+      },
+    );
+
+    it("lets an admin session manage projects", async () => {
+      const session = (await sessionWithRole("admin"))();
+      expect((await session("POST", "/v1/projects", { name: "theirs" })).status).toBe(201);
+    });
+
+    it.each([
+      [
+        "login",
+        "auth",
+        () => apiClient(app.baseUrl)("POST", "/v1/auth/login", { identifier: "x", password: "y" }),
+      ],
+      ["unsubscribe", "unsub", () => apiClient(app.baseUrl)("GET", "/v1/unsubscribe?token=x")],
+    ] as const)(
+      "lets an address back in once a minute is up, even if its %s counter lost its expiry",
+      async (_name, prefix, attempt) => {
+        await clearRateLimits();
+        await attempt();
+        const [key] = await infra.redis.keys(`rate-limit:api:${prefix}:*`);
+        // What the counter looks like if the process died, or EXPIRE failed,
+        // between incrementing it and setting its expiry: over the limit, forever.
+        await infra.redis.set(key!, "1000");
+        expect(await infra.redis.ttl(key!)).toBe(-1);
+
+        expect((await attempt()).status).toBe(429);
+        const ttl = await infra.redis.ttl(key!);
+        expect(ttl).toBeGreaterThan(0);
+        expect(ttl).toBeLessThanOrEqual(60);
+        await clearRateLimits();
+      },
+    );
+
     it("throttles repeated login attempts from one address", async () => {
       await clearRateLimits();
       const statuses: number[] = [];
@@ -446,6 +522,29 @@ describe("users", () => {
     });
     expect(details.contacts.map((c: any) => c.target)).toEqual(["detail@x.com"]);
   });
+
+  it("shows a user's details however many messages they have been sent", async () => {
+    const p = await project();
+    await p.client.addUser({ id: "busy", email: "busy@x.com" });
+    // More sends than Postgres takes bind parameters (65,535), which is what
+    // listing every task id the address was ever sent and passing them back in
+    // ran into.
+    await infra.sql`
+      INSERT INTO delivery_outbox (task_id, channel, destination)
+      SELECT 'busy-' || n, 'email', 'busy@x.com' FROM generate_series(1, 70000) n`;
+    await infra.sql`
+      INSERT INTO message_logs (project_id, task_id, channel, attempt, status)
+      VALUES (${p.id}, 'busy-70000', 'email', 1, 'delivered')`;
+
+    const details = await p.client.getUserDetails("busy");
+    expect(details.logs.map((l: any) => l.taskId)).toEqual(["busy-70000"]);
+  });
+
+  it("finds an address's sends by index rather than by reading the whole outbox", async () => {
+    const indexes = await infra.sql<{ indexdef: string }[]>`
+      SELECT indexdef FROM pg_indexes WHERE tablename = 'delivery_outbox'`;
+    expect(indexes.some((i) => /\(destination\)/.test(i.indexdef))).toBe(true);
+  });
 });
 
 // ─── Notify ─────────────────────────────────────────────────────────────────
@@ -489,6 +588,20 @@ describe("notify", () => {
       })
       .catch((err) => ({ status: 413, err }));
     expect(res.status).toBe(413);
+  });
+
+  it("measures the 5MB limit in bytes, not characters", async () => {
+    const p = await project();
+    // 2M three-byte characters: ~6MB on the wire, under 5M characters.
+    const res = await p
+      .api("POST", "/v1/notify", {
+        user: "u",
+        template: "t",
+        data: { blob: "€".repeat(2 * 1024 * 1024) },
+      })
+      .then((r) => r.status)
+      .catch(() => "connection cut");
+    expect([413, "connection cut"]).toContain(res);
   });
 });
 
@@ -667,6 +780,14 @@ describe("provider webhooks", () => {
     expect((await hook({ events: [] }, "forged")).status).toBe(401);
   });
 
+  it("answers a webhook it failed to process with a bare 500", async () => {
+    // No `events`: the parser hands back nothing and processing throws.
+    const res = await hook({ unexpected: true });
+    expect(res.status).toBe(500);
+    // Providers log response bodies; the internal error stays in ours.
+    expect(res.body).toEqual({ error: "internal_error" });
+  });
+
   it("records engagement against the message and suppresses dead or unwilling addresses", async () => {
     const p = await project();
     await p.client.syncTemplates([{ id: "t", channel: "email", content: { subject: "s" } }]);
@@ -795,6 +916,9 @@ describe("events", () => {
     const mine = email.for(p.id).map((t) => t.taskId);
     expect(taskIds.length).toBeGreaterThan(0);
     expect(taskIds.every((id) => mine.includes(id!))).toBe(true);
+    // Delivery runs in this process too: each outcome arrives once, not once
+    // per path it could have taken.
+    expect(new Set(taskIds).size).toBe(taskIds.length);
   });
 });
 
@@ -1060,6 +1184,35 @@ describe("admin dashboard", () => {
       const res = await get(path);
       const body = await res.text();
       expect(body).not.toContain('"name": "notifkit"');
+    }
+  });
+
+  it("does not proxy to whatever listens on the dev port unless a dev URL is set", async (ctx) => {
+    // A deployment that never set NODE_ENV used to send every /admin request,
+    // Authorization header included, to 127.0.0.1:5173 first.
+    const http = await import("node:http");
+    const seen: string[] = [];
+    const squatter = http.createServer((req, res) => {
+      seen.push(String(req.headers.authorization));
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("not the dashboard");
+    });
+    const listening = await new Promise<boolean>((r) => {
+      squatter.once("error", () => r(false));
+      squatter.listen(5173, "127.0.0.1", () => r(true));
+    });
+    if (!listening) return ctx.skip(); // something real already has the port
+    const before = process.env.VITE_DEV_URL;
+    delete process.env.VITE_DEV_URL;
+    try {
+      const res = await fetch(`${app.baseUrl}/admin/`, {
+        headers: { authorization: "Bearer nk_sess_secret" },
+      });
+      expect(await res.text()).toContain('data-fixture="notifkit-test"');
+      expect(seen).toEqual([]);
+    } finally {
+      process.env.VITE_DEV_URL = before;
+      await new Promise((r) => squatter.close(r));
     }
   });
 

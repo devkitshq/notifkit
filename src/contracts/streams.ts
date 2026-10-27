@@ -47,6 +47,10 @@ export const PUBSUB_CHANNELS = {
   PROJECT_INVALIDATED: "project.invalidated",
   /** Payload: a token hash, or `*` for the whole cache. */
   API_KEY_INVALIDATED: "apikey.invalidated",
+  /** Delivery outcomes for GET /v1/events/stream; see services/delivery/live-events. */
+  DELIVERY_EVENTS: "delivery.events",
+  /** An API began listening on DELIVERY_EVENTS: delivery workers resume publishing. */
+  DELIVERY_EVENTS_WANTED: "delivery.events.wanted",
 } as const;
 export type PubSubChannel = (typeof PUBSUB_CHANNELS)[keyof typeof PUBSUB_CHANNELS];
 

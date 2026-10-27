@@ -187,3 +187,40 @@ describe("process lifecycle", () => {
     90_000,
   );
 });
+
+describe("create-admin script", () => {
+  const script = resolve(__dirname, "../../scripts/create-admin.mjs");
+
+  function createAdmin(...args: string[]) {
+    return new Promise<{ code: number | null; out: string }>((done) => {
+      const child = spawn(process.execPath, [script, ...args], {
+        env: { ...process.env, DATABASE_URL: infra.dbUrl, DB_SCHEMA: "public" },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let out = "";
+      child.stdout.on("data", (c) => (out += c));
+      child.stderr.on("data", (c) => (out += c));
+      child.on("exit", (code) => done({ code, out }));
+    });
+  }
+
+  async function roleOf(email: string) {
+    const rows = await infra.sql`SELECT role FROM admin_users WHERE email = ${email}`;
+    return rows[0]?.role as string | undefined;
+  }
+
+  it("saves a dashboard user with a known role", async () => {
+    const email = `ro-${randomUUID().slice(0, 8)}@example.com`;
+    const { code } = await createAdmin(email, "correct horse", "read_only");
+    expect(code).toBe(0);
+    expect(await roleOf(email)).toBe("read_only");
+  });
+
+  it("refuses a role it does not know, rather than saving one nothing enforces", async () => {
+    const email = `typo-${randomUUID().slice(0, 8)}@example.com`;
+    const { code, out } = await createAdmin(email, "correct horse", "readonly");
+    expect(code).not.toBe(0);
+    expect(out).toMatch(/superadmin, admin, read_only/);
+    expect(await roleOf(email)).toBeUndefined();
+  });
+});

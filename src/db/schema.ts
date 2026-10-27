@@ -358,6 +358,9 @@ export const deliveryOutbox = pgTable(
   },
   (table) => ({
     pk: primaryKey({ columns: [table.taskId, table.channel, table.destination] }),
+    // The key leads with task_id, so looking up what an address was sent
+    // (a user's details) read the whole table.
+    destinationIdx: index("delivery_outbox_destination_idx").on(table.destination),
   }),
 );
 

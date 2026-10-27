@@ -58,7 +58,11 @@ export class DiscordTransport implements Transport {
     // `undefined` as the webhook URL costs an opaque fetch failure instead.
     const webhookUrl = task.destination;
     if (!webhookUrl) {
-      return { success: false, error: "No destination (Discord webhook URL) on task" };
+      return {
+        success: false,
+        retryable: false,
+        error: "No destination (Discord webhook URL) on task",
+      };
     }
 
     const content = task.renderedContent.content as any;
@@ -97,6 +101,7 @@ export class DiscordTransport implements Transport {
         return {
           success: false,
           invalidToken: true,
+          retryable: false,
           error:
             "Invalid Discord webhook URL: destination must be an https://discord.com/api/webhooks/ URL",
         };
@@ -128,6 +133,7 @@ export class DiscordTransport implements Transport {
         return {
           success: false,
           invalidToken,
+          ...(isPermanentStatus(res.status) ? { retryable: false } : {}),
           error: `Discord webhook error ${res.status}: ${errorBody}`,
         };
       }
@@ -144,4 +150,13 @@ export class DiscordTransport implements Transport {
       return { success: false, error: error.message };
     }
   }
+}
+
+/**
+ * Whether a refusal with this HTTP status is final. A 4xx says the request
+ * itself is wrong, so sending it again cannot succeed; 408 and 429 are the
+ * exceptions (the request was fine, the moment was not), as is every 5xx.
+ */
+function isPermanentStatus(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
 }

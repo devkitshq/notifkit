@@ -90,6 +90,53 @@ describe("StreamConsumer", () => {
   });
 });
 
+describe("StreamConsumer dead-connection recovery", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps reading after a stalled XREADGROUP forces a disconnect", async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    // As ioredis: each duplicate() is a new client, and disconnect() without
+    // `true` ends that client for good.
+    const connection = () => {
+      let closed = false;
+      return {
+        xreadgroup: vi.fn(() => {
+          if (closed) return Promise.reject(new Error("Connection is closed."));
+          reads++;
+          // The first read never answers: a half-open socket.
+          if (reads === 1) return new Promise(() => {});
+          return Promise.resolve(reply("s", "1-0", JSON.stringify(validEvent())));
+        }),
+        disconnect: vi.fn((reconnect = false) => {
+          if (!reconnect) closed = true;
+        }),
+        quit: vi.fn().mockResolvedValue("OK"),
+      };
+    };
+    const consumer = new StreamConsumer({
+      redis: { duplicate: vi.fn(connection) } as any,
+      stream: "s" as any,
+      group: "g" as any,
+      consumer: "c",
+      blockMs: 100,
+      logger: silentLogger() as any,
+    });
+
+    let batch: any;
+    void consumer
+      .readBatch()
+      .next()
+      .then((r) => (batch = r.value));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(batch?.[0]?.id).toBe("1-0");
+    await consumer.stop();
+  });
+});
+
 describe("StreamConsumer.ensureGroup", () => {
   it("treats an existing group as success and carries on to the next stream", async () => {
     const mockRedis = {
@@ -747,15 +794,8 @@ describe("StreamProducer", () => {
     });
 
     expect(msgId).toBe("123-0");
-    expect(mockRedis.xadd).toHaveBeenCalledWith(
-      "my-stream",
-      "MAXLEN",
-      "~",
-      "100000",
-      "*",
-      "data",
-      expect.any(String),
-    );
+    // Untrimmed: the stream holds only unprocessed work.
+    expect(mockRedis.xadd).toHaveBeenCalledWith("my-stream", "*", "data", expect.any(String));
   });
 
   it("publishes a batch of events via pipeline", async () => {

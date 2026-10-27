@@ -57,6 +57,13 @@
       "when": 1790700000000,
       "tag": "0007_workflow_status_canceled",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790800000000,
+      "tag": "0008_delivery_outbox_destination_idx",
+      "breakpoints": true
     }
   ]
 }

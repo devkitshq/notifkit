@@ -90,6 +90,13 @@ describe("HTTP Helpers (src/services/api/http.ts)", () => {
       expect(result).toEqual({ key: "value", number: 42 });
     });
 
+    it("decodes a character split across two chunks", async () => {
+      const bytes = Buffer.from(JSON.stringify({ price: "€5" }));
+      const cut = bytes.indexOf(0xe2) + 1; // inside the euro sign's three bytes
+      const req = createMockIncomingMessage([bytes.subarray(0, cut), bytes.subarray(cut)]);
+      expect(await readJsonBody(req)).toEqual({ price: "€5" });
+    });
+
     it("returns undefined when body is empty or only whitespace", async () => {
       const req = createMockIncomingMessage(["   \n\t  "]);
       const result = await readJsonBody(req);

@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { createServer, connect, type Socket, type AddressInfo } from "node:net";
+import { Redis } from "ioredis";
 import { randomUUID } from "node:crypto";
 import { StreamProducer, StreamConsumer, PendingMessageScanner } from "@/queue/index.js";
 import { STREAMS, CONSUMER_GROUPS, buildStreamEvent, type StreamName } from "@/contracts/index.js";
@@ -96,14 +98,28 @@ describe("StreamProducer", () => {
     );
   });
 
-  it("trims the stream towards maxLen", async () => {
+  it("keeps every unprocessed message when the backlog grows past maxLen", async () => {
+    // Acked entries are deleted, so whatever is in a stream is work not yet
+    // done. Trimming it to maxLen dropped notifications nobody had sent.
     const producer = new StreamProducer({ redis: infra.redis, stream: A, logger, maxLen: 10 });
     for (let batch = 0; batch < 10; batch++) {
       await Promise.all(Array.from({ length: 100 }, (_, n) => producer.publish(event(n))));
     }
-    // "~" trims whole radix-tree nodes (100 entries by default), so the length
-    // lands near, not at, the cap — but nowhere near the 1000 written.
-    expect(await infra.redis.xlen(A)).toBeLessThanOrEqual(200);
+    expect(await infra.redis.xlen(A)).toBe(1000);
+  });
+
+  it("keeps a message that was read but not yet acked when the backlog grows past maxLen", async () => {
+    const producer = new StreamProducer({ redis: infra.redis, stream: A, logger, maxLen: 10 });
+    await infra.redis.xgroup("CREATE", A, GROUP, "0", "MKSTREAM");
+    const inFlight = await producer.publish(event(-1));
+    await infra.redis.xreadgroup("GROUP", GROUP, "busy", "COUNT", 1, "STREAMS", A, ">");
+
+    for (let batch = 0; batch < 5; batch++) {
+      await Promise.all(Array.from({ length: 100 }, (_, n) => producer.publish(event(n))));
+    }
+
+    // The worker holding it must still be able to re-read it after a crash.
+    expect(await infra.redis.xrange(A, inFlight, inFlight)).toHaveLength(1);
   });
 
   it("rejects the publish when Redis refuses the write", async () => {
@@ -262,8 +278,8 @@ describe("StreamConsumer", () => {
   });
 
   // Each stream has exactly one consumer group, so once that group has acked an
-  // entry nothing will read it again. Left in place it holds Redis memory until
-  // MAXLEN trims it, which under load is the bulk of what Redis stores.
+  // entry nothing will read it again. Left in place it holds Redis memory for
+  // good, which under load is the bulk of what Redis stores.
   describe("deletes entries once they are acked", () => {
     async function ids(stream: string) {
       return (await infra.redis.xrange(stream, "-", "+")).map((e) => e[0]);
@@ -483,5 +499,104 @@ describe("PendingMessageScanner", () => {
     await deliverUnacked(A, 10);
     await settle(150);
     expect(await scanner().autoclaim(100, 3)).toHaveLength(3);
+  });
+});
+
+/**
+ * A TCP relay to the test Redis that can stop handing replies back, the way a
+ * half-open socket does: the client's commands go out and nothing comes in.
+ * Replies held while stalled are released when it resumes.
+ */
+async function stallableRedisProxy(redisUrl: string) {
+  const target = new URL(redisUrl);
+  let stalled = false;
+  const held: { socket: Socket; data: Buffer }[] = [];
+  const sockets = new Set<Socket>();
+  let clientsClosed = 0;
+  const server = createServer((client) => {
+    const upstream = connect(Number(target.port), target.hostname);
+    sockets.add(client).add(upstream);
+    client.on("data", (d) => upstream.write(d));
+    upstream.on("data", (d) =>
+      stalled ? held.push({ socket: client, data: d }) : client.write(d),
+    );
+    const close = () => {
+      client.destroy();
+      upstream.destroy();
+    };
+    client.on("close", () => clientsClosed++);
+    client.on("close", close).on("error", close);
+    upstream.on("close", close).on("error", close);
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `redis://127.0.0.1:${port}${target.pathname}`,
+    /** Client connections that have hung up, e.g. one given up as dead. */
+    clientsClosed: () => clientsClosed,
+    stall: () => (stalled = true),
+    resume: () => {
+      stalled = false;
+      for (const { socket, data } of held.splice(0)) if (!socket.destroyed) socket.write(data);
+    },
+    close: async () => {
+      for (const s of sockets) s.destroy();
+      await new Promise<void>((r) => server.close(() => r()));
+    },
+  };
+}
+
+describe("StreamConsumer on a dead connection", () => {
+  it("reconnects and keeps reading after a read stalls past its deadline", async () => {
+    const proxy = await stallableRedisProxy(infra.redisUrl);
+    const viaProxy = new Redis(proxy.url, { maxRetriesPerRequest: null });
+    try {
+      const c = consumer({ redis: viaProxy });
+      await c.ensureGroup();
+
+      proxy.stall();
+      const read = readN(c, 1, 60_000);
+      // The read's blockMs + 5s guard gives the connection up.
+      await waitFor("stalled connection given up", () => proxy.clientsClosed() > 0, 30_000);
+      proxy.resume();
+
+      const producer = new StreamProducer({ redis: infra.redis, stream: A, logger, maxLen: 1000 });
+      await producer.publish(event(42));
+
+      const got = await read;
+      expect(got.map((m) => m.event.payload.n)).toEqual([42]);
+    } finally {
+      viaProxy.disconnect();
+      await proxy.close();
+    }
+  });
+
+  it("does not let a read queued before the connection was ready claim messages later", async () => {
+    // Redis unreachable from the start (a restart, a failover): the read sits
+    // in ioredis's offline queue rather than on the wire, so the deadline
+    // abandons it before it was ever sent. Run on a later connection, it
+    // would claim messages into this consumer's pending list with nobody
+    // left to receive them.
+    const proxy = await stallableRedisProxy(infra.redisUrl);
+    const viaProxy = new Redis(proxy.url, { maxRetriesPerRequest: null });
+    try {
+      await viaProxy.ping();
+      await infra.redis.xgroup("CREATE", A, GROUP, "0", "MKSTREAM");
+
+      proxy.stall();
+      const c = consumer({ redis: viaProxy });
+      const read = readN(c, 1, 60_000);
+      await waitFor("stalled connection given up", () => proxy.clientsClosed() > 0, 30_000);
+      proxy.resume();
+
+      const producer = new StreamProducer({ redis: infra.redis, stream: A, logger, maxLen: 1000 });
+      await producer.publish(event(42));
+
+      const got = await read;
+      expect(got.map((m) => m.event.payload.n)).toEqual([42]);
+    } finally {
+      viaProxy.disconnect();
+      await proxy.close();
+    }
   });
 });

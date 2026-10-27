@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createHandlers } from "@/services/api/handlers.js";
-import { globalEmitter } from "@/shared/index.js";
+import { fakeLiveEvents } from "./helpers/live-events.js";
 import { STREAMS } from "@/contracts/index.js";
 
 /**
@@ -76,10 +76,13 @@ describe("API operational handlers", () => {
   let handlers: ReturnType<typeof createHandlers>;
   /** Rows handed to successive `db.select()` calls, in order. */
   let selectRows: any[];
+  let live: ReturnType<typeof fakeLiveEvents>;
 
   beforeEach(() => {
     selectRows = [];
+    live = fakeLiveEvents();
     deps = {
+      liveEvents: live,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       producers: { normal: { publish: vi.fn(), publishBatch: vi.fn() } },
       userRepo: { findRecordById: vi.fn().mockResolvedValue({ id: "usr_1", language: "en" }) },
@@ -464,7 +467,18 @@ describe("API operational handlers", () => {
       await handlers.replayDLQMessage(createMockReq({ id: "1-0" }), res, ctx());
 
       expect(res.statusCode).toBe(500);
-      expect(parse(res)).toMatchObject({ error: "replay_failed", message: "redis gone" });
+      expect(parse(res)).toEqual({ error: "replay_failed" });
+      expect(deps.logger.error).toHaveBeenCalled();
+    });
+
+    it("delete surfaces a redis failure as a 500 without its detail", async () => {
+      deps.redis.native.xrange.mockRejectedValue(new Error("redis gone"));
+      const res = createMockRes();
+      await handlers.deleteDLQMessage(createMockReq(), res, ctx({ params: { id: "1-0" } }));
+
+      expect(res.statusCode).toBe(500);
+      expect(parse(res)).toEqual({ error: "delete_failed" });
+      expect(deps.logger.error).toHaveBeenCalled();
     });
 
     it("delete removes the entry", async () => {
@@ -532,7 +546,9 @@ describe("API operational handlers", () => {
       );
 
       expect(res.statusCode).toBe(500);
-      expect(parse(res)).toMatchObject({ error: "internal_error", message: "constraint" });
+      // The cause is logged, not handed to the caller: driver errors name
+      // tables, constraints and sometimes values.
+      expect(parse(res)).toEqual({ error: "internal_error" });
       expect(deps.logger.error).toHaveBeenCalled();
     });
 
@@ -612,8 +628,20 @@ describe("API operational handlers", () => {
       expect(res.headers["Content-Type"]).toBe("text/event-stream");
       expect(res.written[0]).toBe("retry: 10000\n\n");
 
-      globalEmitter.emit("delivery:delivered", "task-1", "prov-1", "email", "proj_1");
-      globalEmitter.emit("delivery:failed", "task-2", "boom", "sms", "proj_1");
+      live.emit({
+        event: "delivery:delivered",
+        taskId: "task-1",
+        providerMessageId: "prov-1",
+        channel: "email",
+        projectId: "proj_1",
+      });
+      live.emit({
+        event: "delivery:failed",
+        taskId: "task-2",
+        error: "boom",
+        channel: "sms",
+        projectId: "proj_1",
+      });
 
       const stream = res.written.join("");
       expect(stream).toContain("event: delivery:delivered");
@@ -632,8 +660,20 @@ describe("API operational handlers", () => {
       await handlers.getEventsStream(req, res, ctx());
       const before = res.written.length;
 
-      globalEmitter.emit("delivery:delivered", "task-1", "prov-1", "email", "other_project");
-      globalEmitter.emit("delivery:failed", "task-2", "boom", "sms", "other_project");
+      live.emit({
+        event: "delivery:delivered",
+        taskId: "task-1",
+        providerMessageId: "prov-1",
+        channel: "email",
+        projectId: "other_project",
+      });
+      live.emit({
+        event: "delivery:failed",
+        taskId: "task-2",
+        error: "boom",
+        channel: "sms",
+        projectId: "other_project",
+      });
 
       expect(res.written.length).toBe(before);
 
@@ -649,9 +689,7 @@ describe("API operational handlers", () => {
       const close = req.on.mock.calls.find((c: any[]) => c[0] === "close")![1];
       close();
 
-      const before = res.written.length;
-      globalEmitter.emit("delivery:delivered", "task-1", "prov-1", "email", "proj_1");
-      expect(res.written.length).toBe(before);
+      expect(live.listening()).toBe(0);
     });
   });
 });

@@ -5,8 +5,8 @@ const WEB_API_URL = "https://slack.com/api/chat.postMessage";
 const INCOMING_WEBHOOK_PREFIX = "https://hooks.slack.com/";
 
 // Errors chat.postMessage returns for a destination that is dead, not one
-// that is merely temporarily rejected (rate limits, auth hiccups). Only these
-// suppress the contact — anything else is worth retrying.
+// that is merely temporarily rejected (rate limits, outages). Only these
+// suppress the contact.
 // https://api.slack.com/methods/chat.postMessage#errors
 const INVALID_DESTINATION_ERRORS = new Set([
   "channel_not_found",
@@ -15,6 +15,20 @@ const INVALID_DESTINATION_ERRORS = new Set([
   "user_not_found",
   "account_inactive",
   "not_in_channel",
+]);
+
+// The chat.postMessage errors a later attempt can get past. The Web API
+// answers nearly every error with HTTP 200 and a code, so the code, not the
+// status, says whether to try again; every other code (a bad token, a
+// malformed message, a dead channel) will be refused again.
+const RETRYABLE_ERRORS = new Set([
+  "ratelimited",
+  "rate_limited",
+  "internal_error",
+  "fatal_error",
+  "service_unavailable",
+  "request_timeout",
+  "team_added_to_org",
 ]);
 
 // Incoming webhooks report the same class of failure as plain-text response
@@ -113,6 +127,7 @@ export class SlackTransport implements Transport {
     if (!destination) {
       return {
         success: false,
+        retryable: false,
         error: "No destination (Slack channel/user ID, or webhook URL) on task",
       };
     }
@@ -130,6 +145,7 @@ export class SlackTransport implements Transport {
     if (!this.botToken) {
       return {
         success: false,
+        retryable: false,
         error: "Destination is a Slack channel/user ID but no botToken (or token) is configured",
       };
     }
@@ -166,7 +182,18 @@ export class SlackTransport implements Transport {
           { taskId: task.taskId, appId: this.appId, error: body.error, invalidToken },
           "Slack chat.postMessage failed",
         );
-        return { success: false, invalidToken, error: body.error ?? "Slack API error" };
+        // No code at all is a malformed answer, not a refusal: try again.
+        const retryable =
+          !body.error ||
+          RETRYABLE_ERRORS.has(body.error) ||
+          response.status === 429 ||
+          response.status >= 500;
+        return {
+          success: false,
+          invalidToken,
+          ...(retryable ? {} : { retryable: false }),
+          error: body.error ?? "Slack API error",
+        };
       }
 
       const providerMessageId = body.ts ? `${body.channel ?? channel}:${body.ts}` : undefined;
@@ -203,7 +230,12 @@ export class SlackTransport implements Transport {
           { taskId: task.taskId, appId: this.appId, status: response.status, body, invalidToken },
           "Slack incoming webhook failed",
         );
-        return { success: false, invalidToken, error: body || `HTTP ${response.status}` };
+        return {
+          success: false,
+          invalidToken,
+          ...(invalidToken || isPermanentStatus(response.status) ? { retryable: false } : {}),
+          error: body || `HTTP ${response.status}`,
+        };
       }
 
       const providerMessageId = `slack-webhook-${task.taskId}`;
@@ -218,4 +250,13 @@ export class SlackTransport implements Transport {
       return { success: false, error: error.message };
     }
   }
+}
+
+/**
+ * Whether a refusal with this HTTP status is final. A 4xx says the request
+ * itself is wrong, so sending it again cannot succeed; 408 and 429 are the
+ * exceptions (the request was fine, the moment was not), as is every 5xx.
+ */
+function isPermanentStatus(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
 }

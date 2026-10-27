@@ -45,7 +45,11 @@ export class ResendTransport implements Transport {
     // `undefined` to Resend costs an opaque provider rejection and a retry cycle.
     const to = task.destination;
     if (!to) {
-      return { success: false, error: "No destination (recipient address) on task" };
+      return {
+        success: false,
+        retryable: false,
+        error: "No destination (recipient address) on task",
+      };
     }
 
     const content = task.renderedContent.content as any;
@@ -84,8 +88,10 @@ export class ResendTransport implements Transport {
 
       if (error) {
         this.logger?.warn({ taskId: task.taskId, error: error.message }, "Resend send failed");
+        // statusCode is null when no response arrived, which is worth retrying.
         return {
           success: false,
+          ...(isPermanentStatus(error.statusCode) ? { retryable: false } : {}),
           error: error.message,
         };
       }
@@ -261,4 +267,15 @@ function textToHtml(text: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
   return `<p>${escaped.replace(/\r?\n/g, "<br>")}</p>`;
+}
+
+/**
+ * Whether a refusal with this HTTP status is final. A 4xx says the request
+ * itself is wrong, so sending it again cannot succeed; 408 and 429 are the
+ * exceptions (the request was fine, the moment was not), as is every 5xx.
+ */
+function isPermanentStatus(status: number | null | undefined): boolean {
+  return (
+    typeof status === "number" && status >= 400 && status < 500 && status !== 408 && status !== 429
+  );
 }

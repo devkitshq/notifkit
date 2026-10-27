@@ -18,6 +18,7 @@ import { readJsonBody, readRawBody, sendJson, HttpError } from "./http.js";
 import { Router } from "./router.js";
 import { createHandlers } from "./handlers.js";
 import { handleAdminRequest } from "./admin-static.js";
+import { RedisLiveDeliveryEvents } from "./live-events.js";
 import { getAdminSession, hashPassword } from "@/services/auth/index.js";
 import { projects, messageLogs, projectApiKeys, suppressions } from "@/db/schema.js";
 import { eq, inArray } from "drizzle-orm";
@@ -61,6 +62,7 @@ let authCache = new LRUCache<string, CachedAuthKey>(1000, AUTH_CACHE_TTL_MS);
 let tokenHashToToken = new Map<string, string>();
 let authSubscriber: Redis | null = null;
 let router: Router;
+let liveEvents: RedisLiveDeliveryEvents | null = null;
 let apiRateLimiter: ApiRateLimiter;
 
 export function extractAuthToken(req: Pick<IncomingMessage, "headers">): string | undefined {
@@ -76,17 +78,34 @@ export function extractAuthToken(req: Pick<IncomingMessage, "headers">): string 
 }
 
 /**
- * Resolves client IP address, respecting reverse proxy headers only when TRUST_PROXY is enabled.
+ * What a dashboard user's role may do. `admin_users.role` is free text (the
+ * create-admin script takes any value), so only the roles known to grant
+ * writes do; anything else, `read_only` included, is read-only.
  */
-export function getClientIp(req: IncomingMessage, trustProxy: boolean): string {
-  if (trustProxy) {
-    const forwarded = req.headers["x-forwarded-for"];
-    if (typeof forwarded === "string") {
-      const first = forwarded.split(",")[0]?.trim();
-      if (first) return first;
-    }
-  }
-  return req.socket.remoteAddress || "unknown";
+export function sessionKeyRole(role: string): "admin" | "read_only" {
+  return role === "superadmin" || role === "admin" ? "admin" : "read_only";
+}
+
+/**
+ * Resolves the client address, given how many proxies (TRUST_PROXY) are in
+ * front of the API. Each one appends the address it saw to X-Forwarded-For,
+ * so the client is `trustedHops` back from the connecting peer. The leftmost
+ * entry is the one a client can write itself, so it is used only when the
+ * chain is shorter than the configured hops.
+ */
+export function getClientIp(req: IncomingMessage, trustedHops: number): string {
+  const peer = req.socket.remoteAddress || "unknown";
+  const forwarded = req.headers["x-forwarded-for"];
+  if (trustedHops <= 0 || typeof forwarded !== "string") return peer;
+
+  const chain = [
+    ...forwarded
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+    peer,
+  ];
+  return chain[Math.max(chain.length - 1 - trustedHops, 0)]!;
 }
 
 async function handleCreateProject(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -277,9 +296,11 @@ export async function startApiServer() {
     }
   }
 
+  liveEvents = new RedisLiveDeliveryEvents(redis.native, logger);
   deps = {
     logger,
     redis,
+    liveEvents,
     producers,
     userRepo: new UserRepository(db),
     contactRepo: new ContactRepository(db),
@@ -443,7 +464,7 @@ export async function startApiServer() {
         const session = await getAdminSession(redis.native, token);
         if (session) {
           isAdminToken = true;
-          keyRole = session.role === "superadmin" ? "admin" : (session.role as any);
+          keyRole = sessionKeyRole(session.role);
         }
       } else if (config.ADMIN_API_KEY) {
         const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
@@ -559,7 +580,15 @@ export async function startApiServer() {
       let authorized = false;
       if (token.startsWith("nk_sess_")) {
         const session = await getAdminSession(redis.native, token);
-        if (session) authorized = true;
+        if (session) {
+          // Creating projects and minting keys hands out admin credentials, so
+          // a read-only dashboard user gets to look and nothing more.
+          if (sessionKeyRole(session.role) === "read_only" && req.method !== "GET") {
+            sendJson(res, 403, { error: "forbidden", message: "Session is read-only" });
+            return;
+          }
+          authorized = true;
+        }
       } else if (config.ADMIN_API_KEY) {
         const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
         const providedBuffer = Buffer.from(token);
@@ -583,11 +612,10 @@ export async function startApiServer() {
     // an open endpoint cannot be used to hammer the process. Generous, because
     // a shared corporate egress IP can legitimately produce a burst.
     if (isPublicUnsubscribe) {
-      const clientIp = getClientIp(req, Boolean(config.TRUST_PROXY));
+      const clientIp = getClientIp(req, config.TRUST_PROXY);
       try {
         const key = `rate-limit:api:unsub:${clientIp}`;
-        const count = await redis.native.incr(key);
-        if (count === 1) await redis.native.expire(key, 60);
+        const count = await redis.native.countRequest(key, 60);
         if (count > 60) {
           res.setHeader("Retry-After", "60");
           sendJson(res, 429, { error: "too_many_requests" });
@@ -603,11 +631,10 @@ export async function startApiServer() {
     // The login route is unauthenticated and CPU-intensive due to password hashing (scrypt).
     // Throttle login attempts per IP to prevent credential brute-forcing and CPU exhaustion.
     if (isPublicAuth) {
-      const clientIp = getClientIp(req, Boolean(config.TRUST_PROXY));
+      const clientIp = getClientIp(req, config.TRUST_PROXY);
       try {
         const key = `rate-limit:api:auth:${clientIp}`;
-        const count = await redis.native.incr(key);
-        if (count === 1) await redis.native.expire(key, 60);
+        const count = await redis.native.countRequest(key, 60);
         if (count > 10) {
           res.setHeader("Retry-After", "60");
           sendJson(res, 429, {
@@ -694,6 +721,7 @@ export async function startApiServer() {
 
     if (transport.parseWebhook) {
       router.post(transport.webhookPath, async (req, res) => {
+        let deadline: NodeJS.Timeout | undefined;
         try {
           await Promise.race([
             (async () => {
@@ -835,15 +863,19 @@ export async function startApiServer() {
               }
               if (!res.headersSent) sendJson(res, 200, { success: true });
             })(),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error("Webhook processing timeout")), 15000),
-            ),
+            new Promise((_, reject) => {
+              deadline = setTimeout(() => reject(new Error("Webhook processing timeout")), 15000);
+            }),
           ]);
-        } catch (err: any) {
+        } catch (err) {
+          // The detail is ours to log, not the provider's: providers keep
+          // response bodies in their delivery logs.
           logger.error({ err, channel }, "webhook processing error or timeout");
           if (!res.headersSent) {
-            sendJson(res, 500, { error: "internal_error", message: err.message });
+            sendJson(res, 500, { error: "internal_error" });
           }
+        } finally {
+          clearTimeout(deadline);
         }
       });
       logger.info(`Mounted webhook for ${channel} at ${transport.webhookPath}`);
@@ -873,6 +905,8 @@ export async function stopApiServer(): Promise<void> {
     authSubscriber.disconnect();
     authSubscriber = null;
   }
+  await liveEvents?.close();
+  liveEvents = null;
   // These are module-scoped, so a restart in the same process must not inherit
   // the previous instance's cached auth or health.
   authCache = new LRUCache<string, CachedAuthKey>(1000, AUTH_CACHE_TTL_MS);

@@ -74,6 +74,7 @@ export class WhatsAppTransport implements Transport {
     if (!to) {
       return {
         success: false,
+        retryable: false,
         error: "No phone number on recipient; cannot send WhatsApp message.",
       };
     }
@@ -83,6 +84,7 @@ export class WhatsAppTransport implements Transport {
     if (!text) {
       return {
         success: false,
+        retryable: false,
         error: "Template has no 'text' content for the whatsapp channel.",
       };
     }
@@ -114,10 +116,14 @@ export class WhatsAppTransport implements Transport {
         // notifkit doesn't retry an auth failure like a transient one.
         const invalidToken = res.status === 401 || errorCode === 190;
         this.logger?.error({ status: res.status, error: data?.error }, "WhatsApp send failed");
+        // Meta sends several rate limits and outages as a 400, so the
+        // error code decides before the status does.
+        const permanent = !RETRYABLE_GRAPH_CODES.has(errorCode) && isPermanentStatus(res.status);
         return {
           success: false,
           error: data?.error?.message ?? `HTTP ${res.status}`,
           invalidToken,
+          ...(permanent ? { retryable: false } : {}),
         };
       }
 
@@ -232,4 +238,23 @@ function normalizeToE164Digits(phone: string | undefined): string | undefined {
   if (!phone) return undefined;
   const digits = phone.replace(/[^\d]/g, "");
   return digits || undefined;
+}
+
+/**
+ * Graph API error codes a later attempt can get past: throttling at the app,
+ * account, pair or spam level, and Meta's own temporary failures. Meta sends
+ * several of these with HTTP 400, which would otherwise read as a refusal.
+ * https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes
+ */
+const RETRYABLE_GRAPH_CODES = new Set([
+  1, 2, 4, 17, 32, 613, 80007, 130429, 131000, 131016, 131048, 131056, 133004,
+]);
+
+/**
+ * Whether a refusal with this HTTP status is final. A 4xx says the request
+ * itself is wrong, so sending it again cannot succeed; 408 and 429 are the
+ * exceptions (the request was fine, the moment was not), as is every 5xx.
+ */
+function isPermanentStatus(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
 }

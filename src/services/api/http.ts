@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { StringDecoder } from "node:string_decoder";
 import type { ZodError } from "zod";
 
 export async function readRawBody(req: IncomingMessage): Promise<string> {
@@ -23,26 +24,28 @@ export async function readRawBody(req: IncomingMessage): Promise<string> {
 
 export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   return new Promise<unknown>((resolve, reject) => {
-    // Read as UTF-8 strings directly: avoids the Buffer.concat + toString() copy
-    // that readRawBody pays. readRawBody is kept for webhook callers that need
-    // raw bytes for HMAC verification.
-    if (typeof req.setEncoding === "function") {
-      req.setEncoding("utf8");
-    }
+    // Decode chunk by chunk: avoids the Buffer.concat + toString() copy that
+    // readRawBody pays. readRawBody is kept for webhook callers that need raw
+    // bytes for HMAC verification. The limit counts bytes as they arrive;
+    // counting decoded characters let multibyte text through at up to three
+    // times the limit. StringDecoder keeps a character split across two
+    // chunks intact.
+    const decoder = new StringDecoder("utf8");
     let body = "";
     let totalLength = 0;
     const MAX_PAYLOAD_SIZE = 5 * 1024 * 1024;
     req.on("data", (chunk: string | Buffer) => {
-      const str = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      totalLength += str.length;
+      const bytes = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      totalLength += bytes.length;
       if (totalLength > MAX_PAYLOAD_SIZE) {
         if (typeof req.destroy === "function") req.destroy();
         reject(new HttpError(413, "payload_too_large"));
         return;
       }
-      body += str;
+      body += decoder.write(bytes);
     });
     req.on("end", () => {
+      body += decoder.end();
       const trimmed = body.trim();
       if (!trimmed) {
         resolve(undefined);
