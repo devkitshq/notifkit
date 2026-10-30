@@ -6,7 +6,7 @@
  * when one falls behind its workspace package.json.
  */
 
-export const NOTIFKIT_VERSION = "0.1.13";
+export const NOTIFKIT_VERSION = "0.1.14";
 
 export type ProviderId = "console" | "resend" | "twilio" | "fcm";
 
@@ -54,7 +54,7 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     id: "resend",
     label: "Resend (email)",
     packageName: "@notifkit/provider-resend",
-    version: "0.1.4",
+    version: "0.1.5",
     className: "ResendTransport",
     channel: "email",
     options: `{
@@ -72,7 +72,7 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     id: "twilio",
     label: "Twilio (SMS)",
     packageName: "@notifkit/provider-twilio",
-    version: "0.1.1",
+    version: "0.1.2",
     className: "TwilioTransport",
     channel: "sms",
     options: `{
@@ -92,7 +92,7 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     id: "fcm",
     label: "Firebase Cloud Messaging (push)",
     packageName: "@notifkit/provider-fcm",
-    version: "0.1.2",
+    version: "0.1.3",
     className: "FcmTransport",
     channel: "push",
     options: `{
