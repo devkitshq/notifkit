@@ -1,4 +1,4 @@
-import { loadEnv, parseConfig, baseConfigSchema } from "@/index.js";
+import { loadEnv, readBaseConfig } from "@/index.js";
 import type { Logger } from "@/index.js";
 import type { RedisClient, Redis } from "@/index.js";
 import {
@@ -39,14 +39,10 @@ import { publishDeliveryEvents } from "./live-events.js";
 import { ProviderThrottle } from "./throttle.js";
 import { metrics } from "@/metrics/index.js";
 
-// ─── App-specific config ────────────────────────────────────────────────────
-
-const deliveryConfigSchema = baseConfigSchema.extend({});
-
 // ─── Bootstrap ─────────────────────────────────────────────────────────────
 
 loadEnv();
-const config = parseConfig(deliveryConfigSchema, process.env);
+const config = readBaseConfig();
 
 let logger: Logger;
 let redis: RedisClient;
