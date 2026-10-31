@@ -77,6 +77,17 @@ export function extractAuthToken(req: Pick<IncomingMessage, "headers">): string 
   return undefined;
 }
 
+/** Whether `token` is ADMIN_API_KEY, compared in constant time. */
+function isAdminApiKey(token: string): boolean {
+  if (!config.ADMIN_API_KEY) return false;
+  const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
+  const providedBuffer = Buffer.from(token);
+  return (
+    expectedBuffer.length === providedBuffer.length &&
+    timingSafeEqual(expectedBuffer, providedBuffer)
+  );
+}
+
 /**
  * What a dashboard user's role may do. `admin_users.role` is free text (the
  * create-admin script takes any value), so only the roles known to grant
@@ -192,15 +203,8 @@ async function handleMetrics(req: IncomingMessage, res: ServerResponse): Promise
       if (token.startsWith("nk_sess_") && redis?.native) {
         const session = await getAdminSession(redis.native, token);
         if (session) authorized = true;
-      } else if (config.ADMIN_API_KEY) {
-        const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
-        const providedBuffer = Buffer.from(token);
-        if (
-          expectedBuffer.length === providedBuffer.length &&
-          timingSafeEqual(expectedBuffer, providedBuffer)
-        ) {
-          authorized = true;
-        }
+      } else if (isAdminApiKey(token)) {
+        authorized = true;
       }
     }
   }
@@ -466,15 +470,8 @@ export async function startApiServer() {
           isAdminToken = true;
           keyRole = sessionKeyRole(session.role);
         }
-      } else if (config.ADMIN_API_KEY) {
-        const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
-        const providedBuffer = Buffer.from(token);
-        if (
-          expectedBuffer.length === providedBuffer.length &&
-          timingSafeEqual(expectedBuffer, providedBuffer)
-        ) {
-          isAdminToken = true;
-        }
+      } else if (isAdminApiKey(token)) {
+        isAdminToken = true;
       }
 
       if (isAdminToken) {
@@ -581,15 +578,8 @@ export async function startApiServer() {
           }
           authorized = true;
         }
-      } else if (config.ADMIN_API_KEY) {
-        const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
-        const providedBuffer = Buffer.from(token);
-        if (
-          expectedBuffer.length === providedBuffer.length &&
-          timingSafeEqual(expectedBuffer, providedBuffer)
-        ) {
-          authorized = true;
-        }
+      } else if (isAdminApiKey(token)) {
+        authorized = true;
       }
 
       if (!authorized) {
