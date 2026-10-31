@@ -342,7 +342,7 @@ export async function startAiWorker() {
     const aiConfig = getAiConfig();
     const interpolated = prompt.replace(/\{\{(\w+)\}\}/g, (_, k: string) => String(vars[k] ?? ""));
 
-    if (!aiConfig || !aiConfig.aiModel) {
+    if (!aiConfig.aiModel) {
       logger.warn("AI worker called but no AI model was provided to NotifkitServer");
       return `[AI Disabled] ${interpolated}`;
     }
