@@ -62,17 +62,6 @@ let healthInterval: NodeJS.Timeout | null = null;
 let subscriber: Redis | null = null;
 let stopLiveEvents: (() => void) | null = null;
 
-(global as any)._telemetry = (global as any)._telemetry || {
-  count: 0,
-  insert: 0,
-  provider: 0,
-  flush: 0,
-  ack: 0,
-  dequeue: 0,
-  dbupdate: 0,
-  flushCount: 0,
-};
-
 /** How long a send may run before its dispatched log entry is published alone. */
 const DISPATCH_LOG_DELAY_MS = 1_000;
 
@@ -188,13 +177,9 @@ export class DeliveryWorker extends BaseWorker {
           providerMessageId: update.providerMessageId,
         }));
 
-        const tDbUpdateStart = Date.now();
         await upsertOutboxProviderIds(this.db, values).catch((e: any) =>
           this.logger.error({ err: e }, "background update failed"),
         );
-
-        (global as any)._telemetry.dbupdate += Date.now() - tDbUpdateStart;
-        (global as any)._telemetry.flushCount++;
         return updates.map(() => undefined as void);
       },
       flushConcurrency,
@@ -602,7 +587,6 @@ export class DeliveryWorker extends BaseWorker {
           const timeoutMs = Math.min(configuredTimeoutMs, remainingBudgetMs);
 
           try {
-            const tProv = Date.now();
             const breaker = this.getBreaker(providerKey(task.channel, transports, i));
 
             lastResult = await breaker.execute(async () => {
@@ -633,7 +617,6 @@ export class DeliveryWorker extends BaseWorker {
               }
             });
 
-            (global as any)._telemetry.provider += Date.now() - tProv;
             if (lastResult.success || lastResult.invalidToken) break;
           } catch (err: any) {
             lastResult = { success: false, error: err.message, retryable: err.retryable };
@@ -817,7 +800,6 @@ export class DeliveryWorker extends BaseWorker {
           const timeoutMs = Math.min(configuredTimeoutMs, remainingBudgetMs);
 
           try {
-            const tProv = Date.now();
             const breaker = this.getBreaker(providerKey(task.channel, transports, i));
 
             result = await breaker.execute(async () => {
@@ -849,7 +831,6 @@ export class DeliveryWorker extends BaseWorker {
               }
             });
 
-            (global as any)._telemetry.provider += Date.now() - tProv;
             if (result.success) break;
           } catch (err: any) {
             result = { success: false, error: err.message, retryable: err.retryable };
@@ -961,14 +942,12 @@ export class DeliveryWorker extends BaseWorker {
       // Every branch above publishes an outcome; this only guards one that doesn't.
       void logDispatched();
 
-      const tFlushStart = Date.now();
       await Promise.all(publishPromises).catch((err) => {
         this.logger.error(
           { err, taskId: task.taskId },
           "failed to publish post-dispatch events, swallowing error to prevent duplicate delivery",
         );
       });
-      const flushTime = Date.now() - tFlushStart;
 
       if (retryScheduled) {
         // Released so the re-queued attempt can take the lease.
@@ -977,31 +956,6 @@ export class DeliveryWorker extends BaseWorker {
         void this.idempotency.markProcessed(idempotencyKey).catch((err: any) => {
           this.logger.warn({ err, taskId: task.taskId }, "failed to upgrade idempotency TTL");
         });
-      }
-
-      const t = ((global as any)._telemetry = (global as any)._telemetry || {
-        count: 0,
-        insert: 0,
-        provider: 0,
-        flush: 0,
-        ack: 0,
-      });
-      t.count++;
-      t.insert += 0;
-      t.flush += flushTime;
-
-      if (t.count % 1000 === 0) {
-        this.logger.debug(
-          `[Metrics 1000 msgs] Dequeue: ${t.dequeue / 1000}ms, DB Insert: ${t.insert / 1000}ms, Provider: ${t.provider / 1000}ms, Wait for Flush: ${t.flush / 1000}ms, Ack: ${t.ack / 1000}ms | DB Update (avg per flush): ${t.dbupdate / Math.max(1, t.flushCount)}ms`,
-        );
-        t.count = 0;
-        t.insert = 0;
-        t.provider = 0;
-        t.flush = 0;
-        t.dequeue = 0;
-        t.ack = 0;
-        t.dbupdate = 0;
-        t.flushCount = 0;
       }
     } catch (err) {
       // The attempt happened even though it did not finish; keep it in the log.
