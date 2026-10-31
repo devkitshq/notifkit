@@ -23,10 +23,9 @@ import {
 import { IdempotencyGuard } from "@/index.js";
 import { UserThrottle, ProjectSettingsCache } from "@/index.js";
 import { TemplateRepository, ContactRepository, ProjectRepository } from "@/index.js";
-import { scheduledPayloads, suppressions } from "@/db/schema.js";
+import { suppressions } from "@/db/schema.js";
 import { and, eq } from "drizzle-orm";
 import {
-  getPriorityBucket,
   globalEmitter,
   normaliseTarget,
   type WorkerOptions,
@@ -35,6 +34,7 @@ import {
 } from "@/shared/index.js";
 import { TemplateCache } from "@/templates/index.js";
 import { buildUnsubscribeHeaders } from "@/unsubscribe/index.js";
+import { scheduleOrDispatch } from "./schedule-or-dispatch.js";
 import { startHealthReporter } from "@/workers/index.js";
 import {
   createPriorityProducers,
@@ -689,74 +689,25 @@ export class EngineWorker extends BaseWorker {
           continue;
         }
 
-        const envelope = buildStreamEvent(
-          "notification.dispatched",
-          taskPayload as Record<string, unknown>,
-          "engine",
-          event.metadata.traceId,
+        await scheduleOrDispatch(
+          {
+            db: this.db,
+            scheduledProducer: this.scheduledProducer,
+            outboundProducers: this.outboundProducers,
+            logger: this.logger,
+            inlineNext: this.inlineNext,
+          },
+          taskPayload,
+          {
+            source: "engine",
+            scheduledAt: enriched.scheduledAt,
+            messageId: message.id,
+            traceId: event.metadata.traceId,
+            logLevel: "debug",
+            scheduledMessage: "task scheduled and payload cached",
+            dispatchedMessage: "task dispatched",
+          },
         );
-
-        // Route by scheduledAt
-        const now = Date.now();
-        const scheduledAt = enriched.scheduledAt ? new Date(enriched.scheduledAt).getTime() : now;
-
-        if (scheduledAt > now) {
-          await this.db
-            .insert(scheduledPayloads)
-            .values({
-              taskId,
-              payload: {
-                ...taskPayload,
-                scheduledAt: enriched.scheduledAt,
-              },
-            })
-            .onConflictDoNothing();
-
-          const scheduledEnvelope = buildStreamEvent(
-            "notification.scheduled",
-            {
-              projectId: enriched.projectId,
-              enrichedEventId: event.id,
-              taskId,
-              scheduledAt: enriched.scheduledAt!,
-            },
-            "engine",
-            event.metadata.traceId,
-          );
-
-          await this.scheduledProducer.publish(scheduledEnvelope);
-          this.logger.debug(
-            {
-              messageId: message.id,
-              taskId,
-              scheduledAt: enriched.scheduledAt,
-              traceId: event.metadata.traceId,
-            },
-            "task scheduled and payload cached",
-          );
-        } else {
-          const p = getPriorityBucket(enriched.priority);
-          const outboundProducer = this.outboundProducers[p] ?? this.outboundProducers["normal"]!;
-
-          if (this.inlineNext) {
-            await this.inlineNext({
-              ...envelope,
-              id: randomUUID(),
-              timestamp: new Date().toISOString(),
-            } as StreamEvent);
-          } else {
-            await outboundProducer.publish(envelope);
-          }
-          this.logger.debug(
-            {
-              messageId: message.id,
-              taskId,
-              recipientId: enriched.recipientId,
-              traceId: event.metadata.traceId,
-            },
-            "task dispatched",
-          );
-        }
       }
       await idempotency.markProcessed(idempotencyKey, customTtl);
     } catch (err) {

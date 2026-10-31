@@ -12,7 +12,6 @@ import {
   STREAMS,
   CONSUMER_GROUPS,
   registry,
-  buildStreamEvent,
   type NotificationAiPendingPayload,
   type NotificationDispatchedPayload,
   getAiConfig,
@@ -21,8 +20,8 @@ import {
 import { generateText } from "ai";
 import { IdempotencyGuard } from "@/index.js";
 import { TemplateRepository } from "@/index.js";
-import { scheduledPayloads } from "@/db/schema.js";
-import { getPriorityBucket, globalEmitter, type WorkerOptions } from "@/shared/index.js";
+import { scheduleOrDispatch } from "@/services/engine/schedule-or-dispatch.js";
+import { globalEmitter, type WorkerOptions } from "@/shared/index.js";
 import { renderWithTemplate, TemplateCache } from "@/templates/index.js";
 import { startHealthReporter } from "@/workers/index.js";
 import {
@@ -228,65 +227,24 @@ export class AiWorker extends BaseWorker {
         workflowInstanceId: pending.workflowInstanceId,
       };
 
-      const envelope = buildStreamEvent(
-        "notification.dispatched",
-        taskPayload as Record<string, unknown>,
-        "ai-worker",
-        event.metadata.traceId,
+      await scheduleOrDispatch(
+        {
+          db: this.db,
+          scheduledProducer: this.scheduledProducer,
+          outboundProducers: this.outboundProducers,
+          logger: this.logger,
+        },
+        taskPayload,
+        {
+          source: "ai-worker",
+          scheduledAt: pending.scheduledAt,
+          messageId: message.id,
+          traceId: event.metadata.traceId,
+          logLevel: "info",
+          scheduledMessage: "task scheduled and payload cached after AI generation",
+          dispatchedMessage: "task dispatched after AI generation",
+        },
       );
-
-      // Route by scheduledAt
-      const now = Date.now();
-      const scheduledAt = pending.scheduledAt ? new Date(pending.scheduledAt).getTime() : now;
-
-      if (scheduledAt > now) {
-        await this.db
-          .insert(scheduledPayloads)
-          .values({
-            taskId,
-            // The send time rides in the payload so the scheduler can re-queue
-            // this from Postgres if Redis loses its data.
-            payload: { ...taskPayload, scheduledAt: pending.scheduledAt },
-          })
-          .onConflictDoNothing();
-
-        const scheduledEnvelope = buildStreamEvent(
-          "notification.scheduled",
-          {
-            projectId: pending.projectId,
-            enrichedEventId: pending.enrichedEventId,
-            taskId,
-            scheduledAt: pending.scheduledAt!,
-          },
-          "ai-worker",
-          event.metadata.traceId,
-        );
-
-        await this.scheduledProducer.publish(scheduledEnvelope);
-        this.logger.info(
-          {
-            messageId: message.id,
-            taskId,
-            scheduledAt: pending.scheduledAt,
-            traceId: event.metadata.traceId,
-          },
-          "task scheduled and payload cached after AI generation",
-        );
-      } else {
-        const p = getPriorityBucket(pending.priority);
-        const outboundProducer = this.outboundProducers[p] ?? this.outboundProducers["normal"]!;
-
-        await outboundProducer.publish(envelope);
-        this.logger.info(
-          {
-            messageId: message.id,
-            taskId,
-            recipientId: pending.recipientId,
-            traceId: event.metadata.traceId,
-          },
-          "task dispatched after AI generation",
-        );
-      }
       await this.idempotency.markProcessed?.(idempotencyKey);
     } catch (err) {
       await this.idempotency.unmark(idempotencyKey);
