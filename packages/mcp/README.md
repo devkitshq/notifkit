@@ -102,7 +102,7 @@ Because triple braces `{{{body}}}` preserve unescaped HTML, your agent in Claude
 | `get_notification`    | Status and delivery attempts for a specific task                                                                                                      |
 | `cancel_notification` | Cancel a pending scheduled or quiet-hours deferred notification                                                                                       |
 
-**Templates** — `list_templates`, `get_template`, `upsert_template`, `delete_template`, `preview_template`, `render_template`
+**Templates** — `list_templates`, `get_template`, `upsert_template`, `delete_template`, `preview_template`, `render_template` (deprecated: same as `preview_template`)
 
 **Users** — `list_users` (with `search`, `segment`, `language`, `timezone`, `channel` filters), `get_user`, `upsert_user`, `update_user`, `delete_user`, `get_user_contacts`, `add_user_contact`, `delete_user_contact`, `get_user_preferences`, `update_user_preferences`
 

@@ -791,11 +791,13 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
     handler(previewTemplateHandler),
   );
 
+  /** @deprecated Same handler as preview_template; removed at the next minor version. */
   server.registerTool(
     "render_template",
     {
       title: "Render template content",
       description:
+        "Deprecated: use preview_template, which does the same thing; this tool will be removed. " +
         "Render template content with variable data without dispatching any notifications. " +
         "Accepts either an existing template `id` or raw `content` object.",
       inputSchema: {
