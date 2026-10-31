@@ -7,6 +7,7 @@ This example measures request throughput and latency for the Notifkit REST API i
 ```bash
 export NOTIFKIT_API_URL="http://localhost:4000"
 export ADMIN_API_KEY="your_admin_api_key"
+export NOTIFKIT_PROJECT_ID="your_project_id"
 export COUNT=1000
 export CONCURRENCY=100
 

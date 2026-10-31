@@ -4,9 +4,13 @@ import { NotifkitClient } from "notifkit";
  * Example demonstrating multi-step notification workflows (Notify -> Wait -> Notify)
  */
 async function runWorkflowExample() {
+  // The admin key acts on whichever project x-project-id names.
+  const projectId = process.env.NOTIFKIT_PROJECT_ID;
+  if (!projectId) throw new Error("Set NOTIFKIT_PROJECT_ID (printed by `npm run create-project`).");
   const client = new NotifkitClient({
-    baseUrl: process.env.NOTIFKIT_API_URL || "http://localhost:4000",
+    baseUrl: process.env.NOTIFKIT_API_URL || "http://localhost:3000",
     apiKey: process.env.ADMIN_API_KEY || "your_admin_api_key",
+    headers: { "x-project-id": projectId },
   });
 
   console.log("🔄 Syncing onboarding template...");

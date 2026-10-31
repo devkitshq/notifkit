@@ -11,8 +11,9 @@ This example demonstrates how to define, sync, and trigger multi-step drip notif
 ## How to Run
 
 ```bash
-export NOTIFKIT_API_URL="http://localhost:4000"
+export NOTIFKIT_API_URL="http://localhost:3000"
 export ADMIN_API_KEY="your_admin_api_key"
+export NOTIFKIT_PROJECT_ID="your_project_id"
 
 node index.js
 ```

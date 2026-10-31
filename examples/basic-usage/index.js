@@ -7,16 +7,23 @@
  *   $ cd ../custom-server && node index.js
  *
  * To run this example:
- *   $ ADMIN_API_KEY=my_super_secret_admin_key npm start
+ *   $ ADMIN_API_KEY=my_super_secret_admin_key NOTIFKIT_PROJECT_ID=<id> npm start
  */
 
 const API_BASE = process.env.NOTIFKIT_API_URL || "http://localhost:3000/v1";
 const API_KEY = process.env.ADMIN_API_KEY || "my_super_secret_admin_key";
+const PROJECT_ID = process.env.NOTIFKIT_PROJECT_ID;
+if (!PROJECT_ID) {
+  console.error("Set NOTIFKIT_PROJECT_ID (printed by `npm run create-project`).");
+  process.exit(1);
+}
 
 // Every /v1 route is authenticated. Only /health, /live, /ready and /metrics are not.
+// The admin key acts on whichever project x-project-id names.
 const headers = {
   "Content-Type": "application/json",
   Authorization: `Bearer ${API_KEY}`,
+  "x-project-id": PROJECT_ID,
 };
 
 async function main() {

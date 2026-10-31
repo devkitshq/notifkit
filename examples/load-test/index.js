@@ -9,7 +9,10 @@ async function runLoadTest() {
   const totalNotifications = Number(process.env.COUNT || 500);
   const concurrency = Number(process.env.CONCURRENCY || 50);
 
-  const client = new NotifkitClient({ baseUrl, apiKey });
+  // The admin key acts on whichever project x-project-id names.
+  const projectId = process.env.NOTIFKIT_PROJECT_ID;
+  if (!projectId) throw new Error("Set NOTIFKIT_PROJECT_ID (printed by `npm run create-project`).");
+  const client = new NotifkitClient({ baseUrl, apiKey, headers: { "x-project-id": projectId } });
 
   console.log(
     `⚡ Starting load test: ${totalNotifications} notifications (Concurrency: ${concurrency})...`,
