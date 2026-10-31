@@ -15,18 +15,13 @@ import {
   integer,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { NotificationChannelSchema, type NotificationChannel } from "../contracts/common.js";
 
-export const channelEnum = pgEnum("channel", [
-  "email",
-  "sms",
-  "push",
-  "webhook",
-  "in-app",
-  "telegram",
-  "discord",
-  "whatsapp",
-  "slack",
-]);
+export const channelEnum = pgEnum(
+  "channel",
+  // zod types .options as a plain array; pgEnum needs a non-empty tuple.
+  NotificationChannelSchema.options as [NotificationChannel, ...NotificationChannel[]],
+);
 
 export const projects = pgTable("projects", {
   id: uuid("id").primaryKey().defaultRandom(),
