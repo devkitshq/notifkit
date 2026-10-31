@@ -66,6 +66,9 @@ export class TelegramTransport implements Transport {
       return { success: false, retryable: false, error: "No message text on task" };
     }
     const parseMode = typeof content.parseMode === "string" ? content.parseMode : this.parseMode;
+    // Only plain text is cut: slicing HTML/Markdown can leave a tag unclosed,
+    // which Telegram refuses just the same.
+    const sendText = parseMode ? text : truncate(text, TELEGRAM_MAX_TEXT);
 
     try {
       const res = await fetch(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
@@ -73,7 +76,7 @@ export class TelegramTransport implements Transport {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: chatId,
-          text,
+          text: sendText,
           ...(parseMode ? { parse_mode: parseMode } : {}),
           ...(content.disableWebPagePreview ? { link_preview_options: { is_disabled: true } } : {}),
           ...(content.disableNotification ? { disable_notification: true } : {}),
@@ -135,4 +138,19 @@ export class TelegramTransport implements Transport {
  */
 function isPermanentStatus(status: number | undefined): boolean {
   return status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
+/** Telegram rejects message text longer than this with a 400. */
+const TELEGRAM_MAX_TEXT = 4096;
+
+/**
+ * Cuts `text` to at most `max` UTF-16 units, ending in "…", without splitting
+ * a surrogate pair. Telegram refuses an over-long message outright, so a
+ * truncated message beats a permanently failed one.
+ */
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let cut = text.slice(0, max - 1);
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return `${cut}…`;
 }
