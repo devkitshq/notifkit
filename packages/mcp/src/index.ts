@@ -13,9 +13,15 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { NotifkitApi } from "./client.js";
 import { registerTools } from "./tools.js";
 
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_URL = "http://localhost:3000";
+
+// Read rather than hard-coded, so releases can't leave the reported version behind.
+const VERSION: string = JSON.parse(
+  readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+).version;
 
 export function createServer(options: {
   baseUrl: string;
@@ -23,7 +29,7 @@ export function createServer(options: {
   projectId?: string;
 }): McpServer {
   const server = new McpServer(
-    { name: "notifkit", version: "0.1.1" },
+    { name: "notifkit", version: VERSION },
     {
       instructions:
         "Tools for notifkit, a self-hosted notification service.\n\n" +
