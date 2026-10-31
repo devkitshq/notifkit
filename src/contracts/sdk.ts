@@ -85,14 +85,7 @@ export const UpdateUserSchema = z.object({
 export type UpdateUserInput = z.input<typeof UpdateUserSchema>;
 
 /** addUserContact(userId, channel, { target, preferences, label, isPrimary, enabled }) */
-export const AddContactSchema = z.object({
-  channel: ContactChannelSchema,
-  target: z.string().min(1),
-  label: z.string().optional(),
-  isPrimary: z.boolean().optional(),
-  enabled: z.boolean().optional(),
-  preferences: PreferencesSchema.optional(),
-});
+export const AddContactSchema = UserContactInputSchema;
 export type AddContactInput = z.infer<typeof AddContactSchema>;
 
 export const BatchAddContactsSchema = z.union([AddContactSchema, z.array(AddContactSchema).min(1)]);
@@ -103,10 +96,7 @@ export type BatchAddContactsInput = z.infer<typeof BatchAddContactsSchema>;
 export const TemplateSchema = z.object({
   id: z.string().min(1),
   channel: NotificationChannelSchema,
-  topic: z
-    .union([z.string().min(1), z.array(z.string().min(1))])
-    .transform((v) => (Array.isArray(v) ? v : [v]))
-    .optional(),
+  topic: stringOrArray.optional(),
   content: z.record(z.string(), z.unknown()),
   aiPrompts: z.record(z.string(), z.string()).optional(),
 });
@@ -120,17 +110,7 @@ export type SyncTemplatesInput = z.input<typeof SyncTemplatesSchema>;
 // ─── notify() ─────────────────────────────────────────────────────────────────
 
 /** Inline user object accepted by notify({ user: {...} }). */
-export const InlineUserSchema = z.object({
-  id: z.string().min(1),
-  language: z.string().optional(),
-  timezone: z.string().optional(),
-  contacts: z.array(UserContactInputSchema).optional(),
-  email: stringOrArray.optional(),
-  phone: stringOrArray.optional(),
-  pushToken: stringOrArray.optional(),
-  segments: z.array(z.string().min(1)).optional(),
-  preferences: PreferencesSchema.optional(),
-});
+export const InlineUserSchema = AddUserSchema;
 export type InlineUser = z.infer<typeof InlineUserSchema>;
 
 /**
