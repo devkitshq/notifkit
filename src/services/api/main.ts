@@ -14,21 +14,24 @@ import {
   AdminUserRepository,
 } from "@/repositories/index.js";
 import { STREAMS } from "@/contracts/index.js";
-import { readJsonBody, readRawBody, sendJson, HttpError } from "./http.js";
+import { readJsonBody, sendJson, HttpError, extractAuthToken } from "./http.js";
 import { Router } from "./router.js";
 import { createHandlers } from "./handlers.js";
 import { handleAdminRequest } from "./admin-static.js";
 import { RedisLiveDeliveryEvents } from "./live-events.js";
+import { createHealthHandlers } from "./health.js";
+import { createWebhookHandler } from "./webhooks.js";
 import { getAdminSession, hashPassword } from "@/services/auth/index.js";
-import { projects, messageLogs, projectApiKeys, suppressions } from "@/db/schema.js";
-import { eq, inArray } from "drizzle-orm";
+import { projects, projectApiKeys } from "@/db/schema.js";
+import { eq } from "drizzle-orm";
 import { randomBytes, timingSafeEqual, createHash } from "node:crypto";
-import { LRUCache, normaliseTarget } from "@/shared/index.js";
+import { LRUCache } from "@/shared/index.js";
 import { transportRegistry } from "@/transport/index.js";
 import type { Redis } from "@/redis/index.js";
 import { z } from "zod";
-import { getMetricsRegistry } from "@/metrics/index.js";
 import { ApiRateLimiter } from "@/rate-limiter/index.js";
+
+export { extractAuthToken };
 
 /** Pub/sub channel used to drop a cached API key across every API process. */
 export const API_KEY_INVALIDATION_CHANNEL = "apikey.invalidated";
@@ -64,18 +67,6 @@ let authSubscriber: Redis | null = null;
 let router: Router;
 let liveEvents: RedisLiveDeliveryEvents | null = null;
 let apiRateLimiter: ApiRateLimiter;
-
-export function extractAuthToken(req: Pick<IncomingMessage, "headers">): string | undefined {
-  const authHeader = req.headers["authorization"];
-  if (typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")) {
-    return authHeader.slice(7).trim();
-  }
-  const apiKeyHeader = req.headers["x-api-key"];
-  if (typeof apiKeyHeader === "string") {
-    return apiKeyHeader.trim();
-  }
-  return undefined;
-}
 
 /** Whether `token` is ADMIN_API_KEY, compared in constant time. */
 function isAdminApiKey(token: string): boolean {
@@ -131,120 +122,6 @@ async function handleCreateProject(req: IncomingMessage, res: ServerResponse): P
   const projectId = rows[0]!.id;
   await db.insert(projectApiKeys).values({ projectId, keyHash: apiKeyHash, role: "admin" });
   sendJson(res, 201, { id: projectId, apiKey });
-}
-
-let cachedHealth: { response: any; statusCode: number; expiresAt: number } | null = null;
-
-async function handleHealth(_req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (cachedHealth && cachedHealth.expiresAt > Date.now()) {
-    sendJson(res, cachedHealth.statusCode, cachedHealth.response);
-    return;
-  }
-
-  const [redisOk, dbOk] = await Promise.all([redis.healthCheck(), dbHealthCheck()]);
-
-  const workers: Record<string, any> = {};
-  let overallOk = redisOk && dbOk;
-
-  if (redisOk) {
-    const keys = ["enricher", "engine", "scheduler", "delivery", "ai", "workflow", "events"];
-    try {
-      const vals = await redis.native.mget(keys.map((k) => `notif:health:${k}`));
-      for (let i = 0; i < keys.length; i++) {
-        const key = keys[i] as string;
-        const val = vals[i];
-        if (val) {
-          const parsed = JSON.parse(val);
-          workers[key] = parsed;
-          if (parsed.redis === false || parsed.state === "error") {
-            overallOk = false;
-          }
-        } else {
-          workers[key] = { status: "unknown", message: "No report received from worker" };
-        }
-      }
-    } catch (err) {
-      for (const key of keys) {
-        workers[key] = { status: "error", error: err instanceof Error ? err.message : String(err) };
-      }
-    }
-  }
-
-  const statusCode = overallOk ? 200 : 503;
-  const response = {
-    service: "api",
-    status: overallOk ? "ok" : "degraded",
-    redis: redisOk,
-    database: dbOk,
-    workers,
-  };
-
-  cachedHealth = {
-    response,
-    statusCode,
-    expiresAt: Date.now() + 1000,
-  };
-
-  sendJson(res, statusCode, response);
-}
-
-async function handleMetrics(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const remoteIp = req.socket.remoteAddress ?? "";
-  const isLoopback =
-    remoteIp === "127.0.0.1" ||
-    remoteIp === "::1" ||
-    remoteIp === "::ffff:127.0.0.1" ||
-    remoteIp === "localhost";
-
-  let authorized = isLoopback;
-  if (!authorized) {
-    const token = extractAuthToken(req);
-    if (token) {
-      if (token.startsWith("nk_sess_") && redis?.native) {
-        const session = await getAdminSession(redis.native, token);
-        if (session) authorized = true;
-      } else if (isAdminApiKey(token)) {
-        authorized = true;
-      }
-    }
-  }
-
-  if (!authorized) {
-    sendJson(res, 401, {
-      error: "unauthorized",
-      message: "Metrics endpoint requires admin credentials",
-    });
-    return;
-  }
-
-  const registry = getMetricsRegistry();
-  res.writeHead(200, { "Content-Type": registry.contentType });
-  res.end(await registry.metrics());
-}
-
-async function handleLive(_req: IncomingMessage, res: ServerResponse): Promise<void> {
-  sendJson(res, 200, { status: "ok" });
-}
-
-async function handleReady(_req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (cachedHealth && cachedHealth.expiresAt > Date.now()) {
-    sendJson(res, cachedHealth.statusCode === 200 ? 200 : 503, {
-      status: cachedHealth.statusCode === 200 ? "ready" : "unready",
-    });
-    return;
-  }
-  const [redisOk, dbOk] = await Promise.all([redis.healthCheck(), dbHealthCheck()]);
-  const isReady = redisOk && dbOk;
-  sendJson(res, isReady ? 200 : 503, { status: isReady ? "ready" : "unready" });
-}
-
-async function dbHealthCheck(): Promise<boolean> {
-  try {
-    await sql`SELECT 1`;
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 // ─── HTTP server ────────────────────────────────────────────────────────────
@@ -316,6 +193,12 @@ export async function startApiServer() {
     db,
   };
   h = createHandlers(deps);
+  // Created per start, so a restart in the same process starts with no cached health.
+  const { handleHealth, handleMetrics, handleLive, handleReady } = createHealthHandlers({
+    redis,
+    sql,
+    isAdminApiKey,
+  });
 
   router = new Router();
   router
@@ -705,164 +588,7 @@ export async function startApiServer() {
     }
 
     if (transport.parseWebhook) {
-      router.post(transport.webhookPath, async (req, res) => {
-        let deadline: NodeJS.Timeout | undefined;
-        try {
-          await Promise.race([
-            (async () => {
-              const rawBody = await readRawBody(req);
-              if (!transport.verifyWebhook) {
-                if (!res.headersSent)
-                  sendJson(res, 501, {
-                    error: "not_implemented",
-                    message: "Webhook signature verification is not implemented for this provider",
-                  });
-                return;
-              }
-
-              const isValid = await transport.verifyWebhook(rawBody, req.headers);
-              if (!isValid) {
-                if (!res.headersSent)
-                  sendJson(res, 401, {
-                    error: "unauthorized",
-                    message: "Invalid webhook signature",
-                  });
-                return;
-              }
-              let body;
-              try {
-                body = rawBody ? JSON.parse(rawBody) : {};
-              } catch {
-                body = {};
-              }
-              const events = await transport.parseWebhook!(body, rawBody, req.headers);
-
-              if (events.length > 0) {
-                const providerIds = events
-                  .map((e) => e.providerMessageId)
-                  .filter(Boolean) as string[];
-                const logsToProject = new Map<string, string>();
-                const logsToTask = new Map<string, string>();
-                const logsToCampaign = new Map<string, string | null>();
-                if (providerIds.length > 0) {
-                  const existing = await db
-                    .select({
-                      providerMessageId: messageLogs.providerMessageId,
-                      projectId: messageLogs.projectId,
-                      taskId: messageLogs.taskId,
-                      campaignId: messageLogs.campaignId,
-                    })
-                    .from(messageLogs)
-                    .where(inArray(messageLogs.providerMessageId, providerIds));
-                  for (const row of existing) {
-                    if (row.providerMessageId) {
-                      logsToProject.set(row.providerMessageId, row.projectId);
-                      logsToTask.set(row.providerMessageId, row.taskId);
-                      // Inherit the campaign from the delivery this event is
-                      // about, or an open never counts toward the send that
-                      // earned it.
-                      logsToCampaign.set(row.providerMessageId, row.campaignId);
-                    }
-                  }
-                }
-
-                // Only record events we can attribute to a real message. An
-                // unresolvable providerMessageId used to be written against a
-                // zero-UUID project, which is unjoinable and leaks across tenants.
-                const attributable = events.filter(
-                  (e) => e.providerMessageId && logsToProject.has(e.providerMessageId),
-                );
-
-                const rows = attributable.map((e) => ({
-                  projectId: logsToProject.get(e.providerMessageId)!,
-                  taskId: logsToTask.get(e.providerMessageId)!,
-                  providerMessageId: e.providerMessageId,
-                  channel: transport.channel,
-                  // Engagement events are not delivery attempts.
-                  attempt: 0,
-                  kind: e.status,
-                  status: e.status,
-                  campaignId: logsToCampaign.get(e.providerMessageId) ?? null,
-                  metadata: e.metadata ?? null,
-                }));
-
-                const skipped = events.length - rows.length;
-                if (skipped > 0) {
-                  logger.warn(
-                    { channel, skipped },
-                    "webhook events skipped: unknown providerMessageId",
-                  );
-                }
-
-                if (rows.length > 0) {
-                  // Providers retry on any non-2xx, so redelivery of an event we have
-                  // already recorded must be a no-op rather than a constraint error.
-                  await db.insert(messageLogs).values(rows).onConflictDoNothing();
-                }
-
-                // An unsubscribe, a spam complaint, or a permanently dead
-                // address must stop future sends — logging it is not enough.
-                // Soft bounces are excluded: the address is still good.
-                const suppressionRows = attributable
-                  .filter(
-                    (e) =>
-                      e.recipient &&
-                      (e.status === "unsubscribed" ||
-                        e.status === "complained" ||
-                        (e.status === "bounced" && e.bounceType === "hard")),
-                  )
-                  .map((e) => ({
-                    projectId: logsToProject.get(e.providerMessageId)!,
-                    channel: transport.channel,
-                    target: normaliseTarget(e.recipient!),
-                    reason: e.status,
-                    source: channel,
-                    taskId: logsToTask.get(e.providerMessageId)!,
-                  }));
-
-                if (suppressionRows.length > 0) {
-                  // First reason wins: a later bounce should not overwrite the
-                  // record that the person actively unsubscribed.
-                  await db.insert(suppressions).values(suppressionRows).onConflictDoNothing();
-                  logger.info(
-                    { channel, count: suppressionRows.length },
-                    "addresses suppressed from provider webhook",
-                  );
-                }
-
-                const unsuppressable = attributable.filter(
-                  (e) =>
-                    !e.recipient &&
-                    (e.status === "unsubscribed" ||
-                      e.status === "complained" ||
-                      e.status === "bounced"),
-                ).length;
-                if (unsuppressable > 0) {
-                  // Worth shouting about: the event arrived, we logged it, and
-                  // we still cannot stop mailing the person.
-                  logger.warn(
-                    { channel, count: unsuppressable },
-                    "suppression events carried no recipient address — transport must set WebhookEvent.recipient",
-                  );
-                }
-              }
-              if (!res.headersSent) sendJson(res, 200, { success: true });
-            })(),
-            new Promise((_, reject) => {
-              deadline = setTimeout(() => reject(new Error("Webhook processing timeout")), 15000);
-            }),
-          ]);
-        } catch (err) {
-          // The detail is ours to log, not the provider's: providers keep
-          // response bodies in their delivery logs.
-          logger.error({ err, channel }, "webhook processing error or timeout");
-          if (!res.headersSent) {
-            sendJson(res, 500, { error: "internal_error" });
-          }
-        } finally {
-          clearTimeout(deadline);
-        }
-      });
+      router.post(transport.webhookPath, createWebhookHandler(transport, channel, { db, logger }));
       logger.info(`Mounted webhook for ${channel} at ${transport.webhookPath}`);
     }
   }
@@ -893,10 +619,9 @@ export async function stopApiServer(): Promise<void> {
   await liveEvents?.close();
   liveEvents = null;
   // These are module-scoped, so a restart in the same process must not inherit
-  // the previous instance's cached auth or health.
+  // the previous instance's cached auth.
   authCache = new LRUCache<string, CachedAuthKey>(1000, AUTH_CACHE_TTL_MS);
   tokenHashToToken.clear();
-  cachedHealth = null;
   if (sql) await sql.end();
   if (redis) await redis.disconnect();
   logger?.info("api stopped");

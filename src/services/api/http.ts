@@ -61,6 +61,18 @@ export async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
+export function extractAuthToken(req: Pick<IncomingMessage, "headers">): string | undefined {
+  const authHeader = req.headers["authorization"];
+  if (typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")) {
+    return authHeader.slice(7).trim();
+  }
+  const apiKeyHeader = req.headers["x-api-key"];
+  if (typeof apiKeyHeader === "string") {
+    return apiKeyHeader.trim();
+  }
+  return undefined;
+}
+
 export function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body);
   res.writeHead(status, {
