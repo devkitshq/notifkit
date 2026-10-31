@@ -813,14 +813,6 @@ export async function startDeliveryWorker() {
     ttlSeconds: config.IDEMPOTENCY_TTL_SECONDS,
   });
 
-  // ─── Stage 3: Delivery Worker ───────────────────────────────────────────────
-  //
-  // Pipeline:
-  //  1. Parse payload as notification.dispatched
-  //  2. Resolve active device tokens from DB
-  //  3. Send via registered transport
-  //  4. Deactivate invalid tokens in DB
-
   const eventsProducer = new StreamProducer({
     redis: redis.native,
     stream: STREAMS.EVENTS_INBOUND,
@@ -849,10 +841,10 @@ export async function startDeliveryWorker() {
   await subscriber.subscribe(PUBSUB_CHANNELS.TEMPLATE_INVALIDATED);
   subscriber.on("message", (_channel: string, key: string) => templateCache.invalidateKey(key));
 
-  // ─── Health check interval ──────────────────────────────────────────────────
-
   // Outcomes for the API's live event stream, which may be in another process.
   stopLiveEvents = publishDeliveryEvents(redis.native, globalEmitter);
+
+  // ─── Health check interval ──────────────────────────────────────────────────
 
   healthInterval = startHealthReporter("delivery", worker, redis, logger);
 
