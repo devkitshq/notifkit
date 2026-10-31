@@ -136,7 +136,11 @@ export class SlackTransport implements Transport {
     const blocks = Array.isArray(content.blocks) ? content.blocks : undefined;
     // Slack always needs `text` for notification previews and accessibility,
     // even when the visible message is carried entirely by `blocks`.
-    const fallbackText = text || content.subject || "New notification";
+    // Slack messages have no subject line, so a rendered one is bolded onto
+    // the first line rather than dropped.
+    const subject = typeof content.subject === "string" ? content.subject : undefined;
+    const fallbackText =
+      (subject && text ? `*${subject}*\n${text}` : text || subject) || "New notification";
 
     if (destination.startsWith(INCOMING_WEBHOOK_PREFIX)) {
       return this.sendViaIncomingWebhook(destination, fallbackText, blocks, task);
