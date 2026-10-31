@@ -241,6 +241,7 @@ export class EnricherWorker extends BaseWorker {
     const requestedResult = registry.safeParsePayload("notification.requested", event.payload);
     let createdResult: any = null;
     if (!requestedResult.success) {
+      // @deprecated fallback to the legacy `notification.created` payload (see below).
       createdResult = registry.safeParsePayload("notification.created", event.payload);
       isRequested = false;
     }
@@ -253,7 +254,12 @@ export class EnricherWorker extends BaseWorker {
       return;
     }
 
-    // Handle legacy notification.created
+    /**
+     * Legacy `notification.created` path.
+     * @deprecated Nothing in notifkit publishes `notification.created` any more;
+     * this branch only serves callers writing straight to the inbound stream.
+     * Removed in the next minor version.
+     */
     if (!isRequested) {
       const raw = createdResult.data as NotificationCreatedPayload;
       const dedupeId = `${raw.projectId}:${raw.idempotencyKey ?? event.id}`;
