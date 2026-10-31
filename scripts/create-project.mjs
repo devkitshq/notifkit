@@ -41,11 +41,15 @@ try {
 }
 
 if (res.status === 401) {
-  fail("admin credential rejected. It must match the server's ADMIN_API_KEY exactly.");
+  fail(
+    "admin credential rejected. It must match the server's ADMIN_API_KEY exactly, " +
+      "and the server must have been started with ADMIN_API_KEY set.",
+  );
 }
 
+// The server answers 403 only to a dashboard session whose user is read-only.
 if (res.status === 403) {
-  fail("project management is disabled. Start the server with ADMIN_API_KEY set.");
+  fail("that credential is a read-only dashboard session. Use the server's ADMIN_API_KEY.");
 }
 
 if (!res.ok) {
