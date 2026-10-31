@@ -170,7 +170,10 @@ export const LUA_COUNT_REQUEST = `
   return count
 `;
 
-/** Two-phase idempotency lease acquisition. Checks sent/legacy, then attempts SET NX lock. */
+/**
+ * Two-phase idempotency lease acquisition. Checks sent/legacy, then attempts SET NX lock.
+ * @deprecated Nothing calls the `acquireLease` command; removed in the next minor version.
+ */
 export const LUA_ACQUIRE_LEASE = `
   if redis.call('EXISTS', KEYS[1]) == 1 or redis.call('EXISTS', KEYS[3]) == 1 then
     return 'completed'
@@ -185,7 +188,10 @@ export const LUA_ACQUIRE_LEASE = `
   return 'locked'
 `;
 
-/** Two-phase idempotency completion marker. Atomically sets completed + legacy and deletes lock. */
+/**
+ * Two-phase idempotency completion marker. Atomically sets completed + legacy and deletes lock.
+ * @deprecated Nothing calls the `markProcessed` command; removed in the next minor version.
+ */
 export const LUA_MARK_PROCESSED = `
   redis.call('SET', KEYS[1], '1', 'EX', ARGV[1])
   redis.call('SET', KEYS[2], '1', 'EX', ARGV[1])
@@ -224,6 +230,7 @@ export function registerCustomCommands(redis: Redis): void {
     lua: LUA_SCHEDULER_POLL,
   });
 
+  // Deprecated: nothing calls acquireLease or markProcessed. Remove both in the next minor.
   redis.defineCommand("acquireLease", {
     numberOfKeys: 3,
     lua: LUA_ACQUIRE_LEASE,
