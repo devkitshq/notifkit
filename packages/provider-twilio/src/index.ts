@@ -103,11 +103,7 @@ export class TwilioTransport implements Transport {
     }
   }
 
-  /**
-   * The SDK is a large module, so it is loaded on first send rather than at
-   * import time — a process that registers this transport but never sends SMS
-   * should not pay for it.
-   */
+  /** Creates the client on first send. */
   private getClient(): Twilio {
     if (this.client) return this.client;
     this.client = twilio(this.accountSid, this.authToken);
