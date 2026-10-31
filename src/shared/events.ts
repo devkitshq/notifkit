@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 
 export const globalEmitter = new EventEmitter();
-// Every open SSE stream on the API listens here, so the count grows with
-// connected clients rather than signalling a leak.
+// Listeners: each NotifkitServer's event forwarding (src/server.ts) and
+// delivery's live-event publisher. Several servers in one process (tests)
+// can pass the default limit without leaking.
 globalEmitter.setMaxListeners(0);
