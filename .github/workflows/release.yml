@@ -41,6 +41,8 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
 
+      # Trusted publishing (OIDC, no token) needs npm >= 11.5.1; Node 22 ships npm 10.
+      - run: npm install -g npm@latest
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
@@ -52,8 +54,6 @@ jobs:
       # Publishes every package whose current version isn't on npm yet, so
       # packages the release didn't bump are skipped.
       - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           for dir in . packages/*; do
