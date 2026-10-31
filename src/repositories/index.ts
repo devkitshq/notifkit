@@ -1181,18 +1181,8 @@ export class ProjectRepository {
 
   async delete(id: string): Promise<boolean> {
     return await this.db.transaction(async (tx) => {
-      const userRows = await tx.select({ id: users.id }).from(users).where(eq(users.projectId, id));
-      const userIds = userRows.map((u) => u.id);
-      if (userIds.length > 0) {
-        await tx.delete(userContacts).where(inArray(userContacts.userId, userIds));
-        await tx.delete(userSegments).where(inArray(userSegments.userId, userIds));
-        await tx.delete(userTopicPreferences).where(inArray(userTopicPreferences.userId, userIds));
-        await tx
-          .delete(userChannelPreferences)
-          .where(inArray(userChannelPreferences.userId, userIds));
-        await tx.delete(quietHours).where(inArray(quietHours.userId, userIds));
-        await tx.delete(users).where(eq(users.projectId, id));
-      }
+      // Contacts, segments, preferences and quiet hours cascade on users.id.
+      await tx.delete(users).where(eq(users.projectId, id));
       await tx.delete(suppressions).where(eq(suppressions.projectId, id));
       await tx.delete(messageLogs).where(eq(messageLogs.projectId, id));
       await tx.delete(workflowInstances).where(eq(workflowInstances.projectId, id));

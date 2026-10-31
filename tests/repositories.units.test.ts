@@ -22,7 +22,6 @@ import {
   userSegments,
   userTopicPreferences,
   userChannelPreferences,
-  quietHours,
   workflowDefinitions,
 } from "@/db/schema.js";
 import { createMockDb, type MockDb } from "./helpers/mock-db.js";
@@ -291,7 +290,7 @@ describe("Repository mapping and guards", () => {
     it("reports whether a project delete matched a row", async () => {
       const repo = new ProjectRepository(mockDb.db);
 
-      mockDb.queueSelect([]); // users lookup
+      mockDb.queueDelete([]); // users (children cascade)
       mockDb.queueDelete([]); // suppressions
       mockDb.queueDelete([]); // messageLogs
       mockDb.queueDelete([]); // workflowInstances
@@ -299,7 +298,7 @@ describe("Repository mapping and guards", () => {
       mockDb.queueDelete([{ id: "proj-1" }]); // projects
       await expect(repo.delete("proj-1")).resolves.toBe(true);
 
-      mockDb.queueSelect([]); // users lookup
+      mockDb.queueDelete([]); // users (children cascade)
       mockDb.queueDelete([]); // suppressions
       mockDb.queueDelete([]); // messageLogs
       mockDb.queueDelete([]); // workflowInstances
@@ -308,15 +307,11 @@ describe("Repository mapping and guards", () => {
       await expect(repo.delete("ghost")).resolves.toBe(false);
     });
 
-    it("cascades deletions across users, contacts, suppressions, logs, and workflows on delete", async () => {
+    it("deletes users, suppressions, logs and workflows before the project", async () => {
       const repo = new ProjectRepository(mockDb.db);
 
-      // 1. User lookup returns user IDs
-      mockDb.queueSelect([{ id: "u-1" }, { id: "u-2" }]);
-      // 2. Child user tables deletes (6 deletes)
-      for (let i = 0; i < 6; i++) mockDb.queueDelete([]);
-      // 3. Project child tables deletes (4 deletes)
-      for (let i = 0; i < 4; i++) mockDb.queueDelete([]);
+      // users, then the four project-scoped tables. User children cascade in the DB.
+      for (let i = 0; i < 5; i++) mockDb.queueDelete([]);
       // 4. Final delete of project returns deleted row
       mockDb.queueDelete([{ id: "proj-1" }]);
 
@@ -325,11 +320,6 @@ describe("Repository mapping and guards", () => {
 
       // Verifies child table delete calls
       const deletedTables = mockDb.deletes.map((d) => d.table);
-      expect(deletedTables).toContain(userContacts);
-      expect(deletedTables).toContain(userSegments);
-      expect(deletedTables).toContain(userTopicPreferences);
-      expect(deletedTables).toContain(userChannelPreferences);
-      expect(deletedTables).toContain(quietHours);
       expect(deletedTables).toContain(users);
       expect(deletedTables).toContain(suppressions);
       expect(deletedTables).toContain(messageLogs);
