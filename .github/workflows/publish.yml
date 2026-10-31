@@ -3,6 +3,8 @@ name: Publish
 on:
   push:
     branches: [publish]
+  pull_request:
+    branches: [publish]
 
 permissions:
   contents: read
@@ -13,10 +15,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Make this a required status check on `publish` so only PRs from main can merge.
+  source-is-main:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ github.head_ref }}" = main || { echo "Only main can be merged into publish"; exit 1; }
+
   publish:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Backstop for direct pushes: refuse to publish anything not already on main.
+      - name: Ensure commit is on main
+        run: git merge-base --is-ancestor HEAD origin/main || { echo "publish must only contain commits from main"; exit 1; }
 
       - uses: actions/setup-node@v4
         with:
