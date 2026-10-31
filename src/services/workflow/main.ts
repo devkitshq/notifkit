@@ -32,15 +32,14 @@ import {
   shutdownWorker,
   uniqueConsumerId,
 } from "@/workers/bootstrap.js";
+import { WORKFLOW_TIMERS_KEY, pollWorkflowTimers, reapStuckInstances } from "./timers.js";
+
+export { WORKFLOW_TIMERS_KEY };
 
 /** How long a workflow instance lock is held before it self-expires. */
 const WORKFLOW_LOCK_TTL_SECONDS = 60;
 /** Renew the lock well inside its TTL so long-running handlers keep it. */
 const WORKFLOW_LOCK_RENEW_MS = (WORKFLOW_LOCK_TTL_SECONDS / 3) * 1000;
-/** How long a claimed workflow timer stays invisible to other pollers. */
-const WORKFLOW_TIMER_VISIBILITY_MS = 60_000;
-/** Wake-ups for sleeping instances: waits, event timeouts, deferred resumes. */
-export const WORKFLOW_TIMERS_KEY = "notif:workflow:timers";
 /** How soon a resume that found its instance busy is tried again. */
 const WORKFLOW_RESUME_RETRY_MS = 2_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -586,139 +585,12 @@ export async function startWorkflowWorker() {
     notificationProducer,
   });
 
-  // Polling loop for timers
   pollInterval = setInterval(() => {
-    void (async () => {
-      try {
-        const now = Date.now();
-        const tasks = await redis.native.schedulerPoll(
-          WORKFLOW_TIMERS_KEY,
-          now,
-          100,
-          WORKFLOW_TIMER_VISIBILITY_MS,
-        );
-
-        for (const taskStr of tasks) {
-          const task = JSON.parse(taskStr);
-
-          // Check if workflow is already completed/failed
-          const inst = (
-            await db
-              .select()
-              .from(workflowInstances)
-              .where(eq(workflowInstances.id, task.instanceId))
-              .limit(1)
-          )[0];
-          if (
-            !inst ||
-            inst.status === "completed" ||
-            inst.status === "failed" ||
-            inst.status === "canceled"
-          ) {
-            await redis.native.zrem(WORKFLOW_TIMERS_KEY, taskStr);
-            continue;
-          }
-          // A timer can be observed while the worker is still persisting the
-          // corresponding suspension. Leave the claimed member in place; its
-          // visibility timeout will make it eligible once the instance becomes
-          // pending instead of losing the wake-up signal.
-          if (inst.status === "running") continue;
-
-          if (task.isEventTimeout) {
-            // A timeout for one waitForEvent step. If that step already has an
-            // output the event came first and this timer is stale; acting on it
-            // would time out a later wait on the same event name.
-            if (task.stepId !== undefined) {
-              const [own] = await db
-                .select({ output: workflowSteps.output })
-                .from(workflowSteps)
-                .where(
-                  and(
-                    eq(workflowSteps.instanceId, task.instanceId),
-                    eq(workflowSteps.stepIndex, String(task.stepId)),
-                  ),
-                )
-                .limit(1);
-              if (!own || own.output !== null) {
-                await redis.native.zrem(WORKFLOW_TIMERS_KEY, taskStr);
-                continue;
-              }
-            }
-
-            // Clean up only this step's waiter
-            const deleted = await db
-              .delete(workflowWaiters)
-              .where(
-                and(
-                  eq(workflowWaiters.instanceId, task.instanceId),
-                  eq(workflowWaiters.eventName, task.eventName),
-                ),
-              )
-              .returning();
-
-            // If the waiter was already deleted (by EventWorker when event arrived before timeout),
-            // this timer is stale. Clean up from Redis and skip re-resuming the workflow.
-            if (deleted.length === 0) {
-              await redis.native.zrem(WORKFLOW_TIMERS_KEY, taskStr);
-              continue;
-            }
-
-            // Record timedOut state on the pending waitForEvent step
-            const steps = await db
-              .select()
-              .from(workflowSteps)
-              .where(
-                and(
-                  eq(workflowSteps.instanceId, task.instanceId),
-                  eq(workflowSteps.action, "waitForEvent"),
-                ),
-              );
-            const pendingStep =
-              task.stepId !== undefined
-                ? steps.find((s: any) => s.stepIndex === String(task.stepId) && s.output === null)
-                : steps.find((s: any) => s.output === null);
-            if (pendingStep) {
-              await db
-                .update(workflowSteps)
-                .set({ output: { timedOut: true } })
-                .where(eq(workflowSteps.id, pendingStep.id));
-            }
-          }
-
-          await workflowProducer.publish(
-            buildStreamEvent("workflow.resumed", task, "scheduler", undefined),
-          );
-          await redis.native.zrem(WORKFLOW_TIMERS_KEY, taskStr);
-          logger.info({ instanceId: task.instanceId }, "Workflow resumed from timer");
-        }
-      } catch (err) {
-        logger.error({ err }, "error in workflow polling loop");
-      }
-    })();
+    void pollWorkflowTimers({ redis, db, logger, workflowProducer });
   }, 5000);
 
   reaperInterval = setInterval(() => {
-    void (async () => {
-      try {
-        const runningInstances = await db
-          .select({ id: workflowInstances.id })
-          .from(workflowInstances)
-          .where(eq(workflowInstances.status, "running"));
-        for (const inst of runningInstances) {
-          const lockKey = `lock:workflow:${inst.id}`;
-          const hasLock = await redis.native.exists(lockKey);
-          if (!hasLock) {
-            await db
-              .update(workflowInstances)
-              .set({ status: "pending" })
-              .where(eq(workflowInstances.id, inst.id));
-            logger.info({ instanceId: inst.id }, "Reaped stuck workflow instance (lock expired)");
-          }
-        }
-      } catch (err) {
-        logger.error({ err }, "error in stuck workflow reaper");
-      }
-    })();
+    void reapStuckInstances({ redis, db, logger });
   }, 60000);
 
   healthInterval = startHealthReporter("workflow", worker, redis, logger);
