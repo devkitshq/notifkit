@@ -73,18 +73,23 @@ export class ResendTransport implements Transport {
     const headers = task.deliveryOptions?.headers;
 
     try {
-      const { data, error } = await this.resend.emails.send({
-        from,
-        to,
-        subject: subject ?? "Notification",
-        // A text-only template gets an HTML part built from its text. The text
-        // was rendered unescaped (it is plain text), so it is escaped here —
-        // otherwise a variable holding markup becomes live HTML in the email.
-        html: htmlBody ?? (typeof body === "string" ? textToHtml(body) : undefined),
-        text: body,
-        ...(replyTo ? { replyTo } : {}),
-        ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
-      });
+      const { data, error } = await this.resend.emails.send(
+        {
+          from,
+          to,
+          subject: subject ?? "Notification",
+          // A text-only template gets an HTML part built from its text. The text
+          // was rendered unescaped (it is plain text), so it is escaped here —
+          // otherwise a variable holding markup becomes live HTML in the email.
+          html: htmlBody ?? (typeof body === "string" ? textToHtml(body) : undefined),
+          text: body,
+          ...(replyTo ? { replyTo } : {}),
+          ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
+        },
+        // Retries reuse the taskId, so Resend drops a duplicate of an email it
+        // already accepted (e.g. when the response was lost to a timeout).
+        { idempotencyKey: task.taskId },
+      );
 
       if (error) {
         this.logger?.warn({ taskId: task.taskId, error: error.message }, "Resend send failed");
