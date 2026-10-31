@@ -4,10 +4,11 @@ import { NotificationChannelSchema, NotificationPrioritySchema } from "@/contrac
 /**
  * A high-level notification request as issued by the SDK's `notify()` call.
  *
- * Unlike `notification.created` (which targets a single resolved recipient),
+ * Unlike `notification.enriched` (which targets a single resolved address),
  * this event carries the *unresolved* target — a user id, a segment, or a
  * topic. A downstream resolver stage fans it out into one
- * `notification.created` per matching recipient, applying preference filters.
+ * `notification.enriched` per matching address and channel, applying
+ * preference filters.
  */
 export const NotificationTargetSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("user"), userId: z.string().min(1) }),
