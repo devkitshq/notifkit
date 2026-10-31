@@ -199,11 +199,17 @@ describe("API Handlers", () => {
         updatePartial: vi.fn().mockResolvedValue(true),
         findById: vi.fn().mockResolvedValue({}),
         delete: vi.fn().mockResolvedValue(true),
+        withTx() {
+          return this;
+        },
       } as any,
       contactRepo: {
         upsert: vi.fn().mockResolvedValue(undefined),
         upsertMany: vi.fn().mockResolvedValue(undefined),
         delete: vi.fn().mockResolvedValue(true),
+        withTx() {
+          return this;
+        },
       } as any,
       templateRepo: {
         upsertMany: vi.fn().mockResolvedValue(2),

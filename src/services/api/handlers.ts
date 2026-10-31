@@ -166,16 +166,8 @@ async function persistUsers(deps: Deps, users: InlineUserLike[], projectId: stri
   }
 
   await deps.db.transaction(async (tx) => {
-    const txUserRepo =
-      deps.userRepo.constructor.name === "Object"
-        ? deps.userRepo
-        : new (deps.userRepo.constructor as any)(tx);
-    const txContactRepo =
-      deps.contactRepo.constructor.name === "Object"
-        ? deps.contactRepo
-        : new (deps.contactRepo.constructor as any)(tx);
-    await txUserRepo.upsertManyFull(projectId, usersList);
-    await txContactRepo.upsertMany(projectId, contactsList);
+    await deps.userRepo.withTx(tx as Db).upsertManyFull(projectId, usersList);
+    await deps.contactRepo.withTx(tx as Db).upsertMany(projectId, contactsList);
   });
 }
 

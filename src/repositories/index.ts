@@ -86,6 +86,11 @@ export class UserRepository {
 
   constructor(private readonly db: Db) {}
 
+  /** A repository that runs its queries inside `tx`. */
+  withTx(tx: Db): UserRepository {
+    return new UserRepository(tx);
+  }
+
   async findById(projectId: string, userId: string): Promise<UserProfile | null> {
     const rows = await this.db
       .select()
@@ -736,6 +741,11 @@ export class ContactRepository {
   private readonly activeContactsCache = new LRUCache<string, UserContact[]>(5000, 30_000);
 
   constructor(private readonly db: Db) {}
+
+  /** A repository that runs its queries inside `tx`. */
+  withTx(tx: Db): ContactRepository {
+    return new ContactRepository(tx);
+  }
 
   async findByUserId(projectId: string, userId: string): Promise<UserContact[]> {
     const internalUserIdRows = await this.db
