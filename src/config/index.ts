@@ -128,6 +128,7 @@ export function readBaseConfig(data: NodeJS.ProcessEnv = process.env): BaseConfi
   return parseConfig(baseConfigSchema, data);
 }
 
+/** @deprecated Unused; removed in the next minor version. */
 export interface RateLimitConfig {
   limit: number;
   windowSeconds: number;

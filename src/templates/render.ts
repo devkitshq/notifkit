@@ -14,6 +14,7 @@ export function escapeHeader(unsafe: string): string {
     .trim();
 }
 
+/** @deprecated Unused; templates render through renderWithTemplate. Removed in the next minor version. */
 export function interpolate(
   tmpl: string,
   variables: Record<string, unknown>,

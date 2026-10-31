@@ -16,6 +16,7 @@ export type NotificationChannel = z.infer<typeof NotificationChannelSchema>;
 export const NotificationPrioritySchema = z.enum(["low", "normal", "high", "critical"]);
 export type NotificationPriority = z.infer<typeof NotificationPrioritySchema>;
 
+/** @deprecated Unused; removed in the next minor version. */
 export const NotificationStatusSchema = z.enum([
   "pending",
   "queued",
@@ -25,4 +26,5 @@ export const NotificationStatusSchema = z.enum([
   "bounced",
   "suppressed",
 ]);
+/** @deprecated Unused; removed in the next minor version. */
 export type NotificationStatus = z.infer<typeof NotificationStatusSchema>;

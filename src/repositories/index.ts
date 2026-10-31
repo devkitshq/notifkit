@@ -63,8 +63,10 @@ export interface TemplateRecord {
   aiPrompts?: Record<string, string> | null;
 }
 
+/** @deprecated Unused; removed in the next minor version. */
 export type DevicePlatform = "fcm" | "apns" | "web";
 
+/** @deprecated Unused; removed in the next minor version. */
 export interface DeviceToken {
   id: string;
   userId: string;
@@ -705,6 +707,7 @@ export class UserRepository {
 
 // ─── PreferenceRepository ────────────────────────────────────────────────────
 
+/** @deprecated Unused; removed in the next minor version. */
 export class PreferenceRepository {
   constructor(private readonly db: Db) {}
 
@@ -1383,6 +1386,7 @@ export class AdminUserRepository {
     return rows[0] as AdminUserRecord;
   }
 
+  /** @deprecated Unused; removed in the next minor version. */
   async updatePassword(id: string, passwordHash: string): Promise<boolean> {
     const rows = await this.db
       .update(adminUsers)
@@ -1392,6 +1396,7 @@ export class AdminUserRepository {
     return rows.length > 0;
   }
 
+  /** @deprecated Unused; removed in the next minor version. */
   async list(): Promise<Omit<AdminUserRecord, "passwordHash">[]> {
     const rows = await this.db
       .select({
