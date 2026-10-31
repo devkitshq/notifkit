@@ -48,8 +48,8 @@ export class ConsoleTransport implements Transport {
     console.log(
       [
         "",
-        "┌─────────────────  📲  PUSH NOTIFICATION  ─────────────────",
-        `│ to token : ${task.destination}`,
+        `┌─────────────────  📲  ${this.channel.toUpperCase()} NOTIFICATION  ─────────────────`,
+        `│ to       : ${task.destination}`,
         `│ recipient: ${task.recipientId}`,
         `│ priority : ${task.priority}`,
         `│ content  : ${JSON.stringify(task.renderedContent.content)}`,
@@ -66,7 +66,7 @@ export class ConsoleTransport implements Transport {
         destination: task.destination,
         providerMessageId,
       },
-      "push delivered (console transport)",
+      `${this.channel} delivered (console transport)`,
     );
 
     return { success: true, providerMessageId };
