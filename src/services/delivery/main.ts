@@ -293,6 +293,95 @@ export class DeliveryWorker extends BaseWorker {
     // and the transport's abort signal were attached to it.
     const original: DispatchedTaskPayload = { ...task };
 
+    // The attempt's `dispatched` log entry normally rides on its outcome event,
+    // one stream entry instead of two. A send still running after
+    // DISPATCH_LOG_DELAY_MS is logged on its own, so a slow or stuck attempt is
+    // visible while it is in flight, as it always was.
+    let dispatchStarted = false;
+    let dispatchLogged = false;
+    let dispatchedAt = "";
+    let dispatchLogTimer: NodeJS.Timeout | undefined;
+    const logDispatched = (): Promise<void> | undefined => {
+      clearTimeout(dispatchLogTimer);
+      if (!dispatchStarted || dispatchLogged) return undefined;
+      dispatchLogged = true;
+      const logged = this.eventProcessor.add(
+        buildStreamEvent(
+          "notification.dispatched",
+          {
+            projectId: task.projectId,
+            taskId: task.taskId,
+            enrichedEventId: task.enrichedEventId,
+            recipientId: task.recipientId,
+            channel: task.channel,
+            templateId: task.templateId,
+            attempt: attemptNo,
+            workflowInstanceId: task.workflowInstanceId,
+            campaignId: task.campaignId,
+          },
+          "delivery",
+          event.metadata.traceId,
+        ),
+      );
+      publishPromises.push(logged);
+      return logged;
+    };
+    /** Outcome payload, carrying the dispatched entry if it has not gone out. */
+    const outcome = <T extends Record<string, unknown>>(payload: T): T => {
+      clearTimeout(dispatchLogTimer);
+      if (dispatchLogged) return payload;
+      dispatchLogged = true;
+      return { ...payload, attempt: attemptNo, dispatchedAt };
+    };
+    /**
+     * Queues the task's `notification.failed` event; once sending has started it
+     * is the attempt's outcome. Only the non-push provider failure leaves out
+     * `recipientId`.
+     */
+    const failed = (failureReason: string, failureCode: string, withRecipientId = true) => {
+      const payload = {
+        projectId: task.projectId,
+        taskId: task.taskId,
+        enrichedEventId: task.enrichedEventId,
+        ...(withRecipientId ? { recipientId: task.recipientId } : {}),
+        channel: task.channel,
+        failureReason,
+        failureCode,
+        retryable: false,
+        attempt: attemptNo,
+        templateId: task.templateId,
+        workflowInstanceId: task.workflowInstanceId,
+        campaignId: task.campaignId,
+      };
+      return this.eventProcessor.add(
+        buildStreamEvent(
+          "notification.failed",
+          dispatchStarted ? outcome(payload) : payload,
+          "delivery",
+          event.metadata.traceId,
+        ),
+      );
+    };
+    const delivered = (providerMessageId: string) =>
+      this.eventProcessor.add(
+        buildStreamEvent(
+          "notification.delivered",
+          outcome({
+            projectId: task.projectId,
+            taskId: task.taskId,
+            enrichedEventId: task.enrichedEventId,
+            channel: task.channel,
+            deliveredAt: new Date().toISOString(),
+            providerMessageId,
+            templateId: task.templateId,
+            workflowInstanceId: task.workflowInstanceId,
+            campaignId: task.campaignId,
+          }),
+          "delivery",
+          event.metadata.traceId,
+        ),
+      );
+
     const fallbackToNextChannel = async (reason: string) => {
       if (task.fallbackChain && task.fallbackChain.length > 0 && task.recipient) {
         const nextChannel = task.fallbackChain[0];
@@ -352,27 +441,7 @@ export class DeliveryWorker extends BaseWorker {
           task.channel,
           task.projectId,
         );
-        await this.eventProcessor.add(
-          buildStreamEvent(
-            "notification.failed",
-            {
-              projectId: task.projectId,
-              taskId: task.taskId,
-              enrichedEventId: task.enrichedEventId,
-              recipientId: task.recipientId,
-              channel: task.channel,
-              failureReason: "no transport registered for channel",
-              failureCode: "no_transport",
-              retryable: false,
-              attempt: attemptNo,
-              templateId: task.templateId,
-              workflowInstanceId: task.workflowInstanceId,
-              campaignId: task.campaignId,
-            },
-            "delivery",
-            event.metadata.traceId,
-          ),
-        );
+        await failed("no transport registered for channel", "no_transport");
       }
       return;
     }
@@ -408,27 +477,7 @@ export class DeliveryWorker extends BaseWorker {
             task.channel,
             task.projectId,
           );
-          await this.eventProcessor.add(
-            buildStreamEvent(
-              "notification.failed",
-              {
-                projectId: task.projectId,
-                taskId: task.taskId,
-                enrichedEventId: task.enrichedEventId,
-                recipientId: task.recipientId,
-                channel: task.channel,
-                failureReason: "provider rate limit max attempts exceeded",
-                failureCode: "provider_throttle_exceeded",
-                retryable: false,
-                attempt: attemptNo,
-                templateId: task.templateId,
-                workflowInstanceId: task.workflowInstanceId,
-                campaignId: task.campaignId,
-              },
-              "delivery",
-              event.metadata.traceId,
-            ),
-          );
+          await failed("provider rate limit max attempts exceeded", "provider_throttle_exceeded");
         }
         return;
       }
@@ -472,47 +521,6 @@ export class DeliveryWorker extends BaseWorker {
 
     const tDispatchStart = Date.now();
     const MAX_DISPATCH_BUDGET_MS = 25_000; // Strictly shorter than lock lease (30s)
-
-    // The attempt's `dispatched` log entry normally rides on its outcome event,
-    // one stream entry instead of two. A send still running after
-    // DISPATCH_LOG_DELAY_MS is logged on its own, so a slow or stuck attempt is
-    // visible while it is in flight, as it always was.
-    let dispatchStarted = false;
-    let dispatchLogged = false;
-    let dispatchedAt = "";
-    let dispatchLogTimer: NodeJS.Timeout | undefined;
-    const logDispatched = (): Promise<void> | undefined => {
-      clearTimeout(dispatchLogTimer);
-      if (!dispatchStarted || dispatchLogged) return undefined;
-      dispatchLogged = true;
-      const logged = this.eventProcessor.add(
-        buildStreamEvent(
-          "notification.dispatched",
-          {
-            projectId: task.projectId,
-            taskId: task.taskId,
-            enrichedEventId: task.enrichedEventId,
-            recipientId: task.recipientId,
-            channel: task.channel,
-            templateId: task.templateId,
-            attempt: attemptNo,
-            workflowInstanceId: task.workflowInstanceId,
-            campaignId: task.campaignId,
-          },
-          "delivery",
-          event.metadata.traceId,
-        ),
-      );
-      publishPromises.push(logged);
-      return logged;
-    };
-    /** Outcome payload, carrying the dispatched entry if it has not gone out. */
-    const outcome = <T extends Record<string, unknown>>(payload: T): T => {
-      clearTimeout(dispatchLogTimer);
-      if (dispatchLogged) return payload;
-      dispatchLogged = true;
-      return { ...payload, attempt: attemptNo, dispatchedAt };
-    };
 
     let retryScheduled = false;
     /**
@@ -558,379 +566,183 @@ export class DeliveryWorker extends BaseWorker {
         void logDispatched();
       }, DISPATCH_LOG_DELAY_MS);
 
-      // For push: we just need to send to the pre-resolved destination,
-      // but if it's invalid, we deactivate it.
-      if (task.channel === "push") {
-        let lastResult: any = { success: false, error: "No transports" };
-
-        for (let i = startAt; i < transports.length; i++) {
-          const transport = transports[i];
-          // The starting provider's slot was taken above. Failing over to a
-          // later one spends that provider's own budget, or skips it if spent.
-          if (i > startAt && !(await this.providerGate(task.channel, transports, i)).allowed) {
-            continue;
-          }
-          const elapsedMs = Date.now() - tDispatchStart;
-          const remainingBudgetMs = Math.max(0, MAX_DISPATCH_BUDGET_MS - elapsedMs);
-          if (remainingBudgetMs <= 0) {
-            this.logger.warn(
-              { taskId: task.taskId, channel: task.channel },
-              "dispatch budget exhausted before transport call — aborting to protect lock lease",
-            );
-            break;
-          }
-          const configuredTimeoutMs = task.deliveryOptions?.timeoutMs ?? 10_000;
-          const timeoutMs = Math.min(configuredTimeoutMs, remainingBudgetMs);
-
-          try {
-            const breaker = this.getBreaker(providerKey(task.channel, transports, i));
-
-            lastResult = await breaker.execute(async () => {
-              const controller = new AbortController();
-              const timeout = setTimeout(() => {
-                controller.abort(new Error(`Transport timeout after ${timeoutMs}ms`));
-              }, timeoutMs);
-
-              try {
-                (task as any).signal = controller.signal;
-                const res: any = await Promise.race([
-                  transport.send(task),
-                  new Promise((_, reject) => {
-                    if (controller.signal.aborted) return reject(controller.signal.reason);
-                    controller.signal.addEventListener("abort", () =>
-                      reject(controller.signal.reason),
-                    );
-                  }),
-                ]);
-                // A permanent rejection is the provider working: returned, not
-                // thrown, so the breaker does not count it.
-                if (!res.success && !res.invalidToken && res.retryable !== false) {
-                  throw providerFailure(res);
-                }
-                return res;
-              } finally {
-                clearTimeout(timeout);
-              }
-            });
-
-            if (lastResult.success || lastResult.invalidToken) break;
-          } catch (err: any) {
-            lastResult = { success: false, error: err.message, retryable: err.retryable };
-          }
+      // Push alone treats a rejected token as an answer: the token is
+      // deactivated rather than the next provider tried.
+      const isPush = task.channel === "push";
+      let result: any = { success: false, error: "No transports" };
+      for (let i = startAt; i < transports.length; i++) {
+        const transport = transports[i];
+        // The starting provider's slot was taken above. Failing over to a
+        // later one spends that provider's own budget, or skips it if spent.
+        if (i > startAt && !(await this.providerGate(task.channel, transports, i)).allowed) {
+          continue;
         }
+        const elapsedMs = Date.now() - tDispatchStart;
+        const remainingBudgetMs = Math.max(0, MAX_DISPATCH_BUDGET_MS - elapsedMs);
+        if (remainingBudgetMs <= 0) {
+          this.logger.warn(
+            { taskId: task.taskId, channel: task.channel },
+            "dispatch budget exhausted before transport call — aborting to protect lock lease",
+          );
+          break;
+        }
+        const configuredTimeoutMs = task.deliveryOptions?.timeoutMs ?? 10_000;
+        const timeoutMs = Math.min(configuredTimeoutMs, remainingBudgetMs);
 
-        if (lastResult.invalidToken) {
-          publishPromises.push(
-            this.outboxUpdateProcessor.add({
-              taskId: task.taskId,
-              channel: task.channel,
-              destination: task.destination,
-              providerMessageId: null,
-            }),
-          );
-          await this.contactRepo.deactivate(
-            task.projectId,
-            task.recipientId,
-            task.channel as any,
-            task.destination,
-          );
-          this.logger.info(
-            { channel: task.channel, target: task.destination },
-            "deactivated invalid contact target",
-          );
-          this.globalEmitter.emit(
-            "delivery:failed",
-            task.taskId,
-            "invalidToken",
-            task.channel,
-            task.projectId,
-          );
-          metrics.deliveryFailed.inc({ channel: task.channel, reason: "invalid_token" });
+        try {
+          const breaker = this.getBreaker(providerKey(task.channel, transports, i));
 
-          publishPromises.push(
-            this.eventProcessor.add(
-              buildStreamEvent(
-                "notification.failed",
-                outcome({
-                  projectId: task.projectId,
-                  taskId: task.taskId,
-                  enrichedEventId: task.enrichedEventId,
-                  recipientId: task.recipientId,
-                  channel: task.channel,
-                  failureReason: "invalid_token",
-                  failureCode: "push_failure",
-                  retryable: false,
-                  attempt: attemptNo,
-                  templateId: task.templateId,
-                  workflowInstanceId: task.workflowInstanceId,
-                  campaignId: task.campaignId,
+          result = await breaker.execute(async () => {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => {
+              controller.abort(new Error(`Transport timeout after ${timeoutMs}ms`));
+            }, timeoutMs);
+
+            try {
+              (task as any).signal = controller.signal;
+              const res: any = await Promise.race([
+                transport.send(task),
+                new Promise((_, reject) => {
+                  if (controller.signal.aborted) return reject(controller.signal.reason);
+                  controller.signal.addEventListener("abort", () =>
+                    reject(controller.signal.reason),
+                  );
                 }),
-                "delivery",
-                event.metadata.traceId,
-              ),
-            ),
-          );
+              ]);
+              // A permanent rejection (a bad address) is the provider working:
+              // returned, not thrown, so the breaker does not count it. A run
+              // of them in one list used to open it for every project.
+              if (!res.success && !(isPush && res.invalidToken) && res.retryable !== false) {
+                throw providerFailure(res);
+              }
+              return res;
+            } finally {
+              clearTimeout(timeout);
+            }
+          });
 
-          const fallbackTriggered = await fallbackToNextChannel("invalid_token");
-          if (!fallbackTriggered) {
-            throw new NonRetryableError("Push delivery failed: invalid token");
-          }
-        } else if (lastResult.success) {
-          // Record providerMessageId in outbox before publishing event
-          const providerMessageId = lastResult.providerMessageId || "push-success";
+          if (result.success || (isPush && result.invalidToken)) break;
+        } catch (err: any) {
+          result = { success: false, error: err.message, retryable: err.retryable };
+        }
+      }
 
-          publishPromises.push(
-            this.outboxUpdateProcessor.add({
-              taskId: task.taskId,
-              channel: task.channel,
-              destination: task.destination,
-              providerMessageId,
-            }),
-          );
+      if (isPush && result.invalidToken) {
+        publishPromises.push(
+          this.outboxUpdateProcessor.add({
+            taskId: task.taskId,
+            channel: task.channel,
+            destination: task.destination,
+            providerMessageId: null,
+          }),
+        );
+        await this.contactRepo.deactivate(
+          task.projectId,
+          task.recipientId,
+          task.channel as any,
+          task.destination,
+        );
+        this.logger.info(
+          { channel: task.channel, target: task.destination },
+          "deactivated invalid contact target",
+        );
+        this.globalEmitter.emit(
+          "delivery:failed",
+          task.taskId,
+          "invalidToken",
+          task.channel,
+          task.projectId,
+        );
+        metrics.deliveryFailed.inc({ channel: task.channel, reason: "invalid_token" });
 
+        publishPromises.push(failed("invalid_token", "push_failure"));
+
+        const fallbackTriggered = await fallbackToNextChannel("invalid_token");
+        if (!fallbackTriggered) {
+          throw new NonRetryableError("Push delivery failed: invalid token");
+        }
+      } else if (result.success) {
+        // Record providerMessageId in outbox before publishing event
+        const providerMessageId = result.providerMessageId || (isPush ? "push-success" : "success");
+
+        publishPromises.push(
+          this.outboxUpdateProcessor.add({
+            taskId: task.taskId,
+            channel: task.channel,
+            destination: task.destination,
+            providerMessageId,
+          }),
+        );
+
+        if (isPush) {
           this.logger.debug(
             { taskId: task.taskId, messageId: providerMessageId },
             "push delivered",
           );
-          this.globalEmitter.emit(
-            "delivery:delivered",
-            task.taskId,
-            providerMessageId,
-            task.channel,
-            task.projectId,
-          );
-          metrics.deliverySuccess.inc({ channel: task.channel });
-
-          publishPromises.push(
-            this.eventProcessor.add(
-              buildStreamEvent(
-                "notification.delivered",
-                outcome({
-                  projectId: task.projectId,
-                  taskId: task.taskId,
-                  enrichedEventId: task.enrichedEventId,
-                  channel: task.channel,
-                  deliveredAt: new Date().toISOString(),
-                  providerMessageId,
-                  templateId: task.templateId,
-                  workflowInstanceId: task.workflowInstanceId,
-                  campaignId: task.campaignId,
-                }),
-                "delivery",
-                event.metadata.traceId,
-              ),
-            ),
-          );
-        } else if (!(await retryLater(lastResult))) {
-          this.logger.warn(
-            { taskId: task.taskId, error: lastResult.error },
-            "push delivery failed",
-          );
-          this.globalEmitter.emit(
-            "delivery:failed",
-            task.taskId,
-            lastResult.error ?? "push delivery failed",
-            task.channel,
-            task.projectId,
-          );
-          metrics.deliveryFailed.inc({ channel: task.channel, reason: "push_error" });
-
-          publishPromises.push(
-            this.outboxUpdateProcessor.add({
-              taskId: task.taskId,
-              channel: task.channel,
-              destination: task.destination,
-              providerMessageId: null,
-            }),
-          );
-
-          publishPromises.push(
-            this.eventProcessor.add(
-              buildStreamEvent(
-                "notification.failed",
-                outcome({
-                  projectId: task.projectId,
-                  taskId: task.taskId,
-                  enrichedEventId: task.enrichedEventId,
-                  recipientId: task.recipientId,
-                  channel: task.channel,
-                  failureReason: lastResult.error ?? "push delivery failed",
-                  failureCode: "push_failure",
-                  retryable: false,
-                  attempt: attemptNo,
-                  templateId: task.templateId,
-                  workflowInstanceId: task.workflowInstanceId,
-                  campaignId: task.campaignId,
-                }),
-                "delivery",
-                event.metadata.traceId,
-              ),
-            ),
-          );
-
-          const fallbackTriggered = await fallbackToNextChannel("push_delivery_failed");
-          if (!fallbackTriggered) {
-            throw new NonRetryableError(lastResult.error ?? "Push delivery failed");
-          }
         }
-      } else {
-        // Other channels (email, sms, webhook, whatsapp) use the pre-resolved destination
-        let result: any = { success: false, error: "No transports" };
-        for (let i = startAt; i < transports.length; i++) {
-          const transport = transports[i];
-          // The starting provider's slot was taken above. Failing over to a
-          // later one spends that provider's own budget, or skips it if spent.
-          if (i > startAt && !(await this.providerGate(task.channel, transports, i)).allowed) {
-            continue;
-          }
-          const elapsedMs = Date.now() - tDispatchStart;
-          const remainingBudgetMs = Math.max(0, MAX_DISPATCH_BUDGET_MS - elapsedMs);
-          if (remainingBudgetMs <= 0) {
-            this.logger.warn(
-              { taskId: task.taskId, channel: task.channel },
-              "dispatch budget exhausted before transport call — aborting to protect lock lease",
-            );
-            break;
-          }
-          const configuredTimeoutMs = task.deliveryOptions?.timeoutMs ?? 10_000;
-          const timeoutMs = Math.min(configuredTimeoutMs, remainingBudgetMs);
+        this.globalEmitter.emit(
+          "delivery:delivered",
+          task.taskId,
+          providerMessageId,
+          task.channel,
+          task.projectId,
+        );
+        metrics.deliverySuccess.inc({ channel: task.channel });
 
-          try {
-            const breaker = this.getBreaker(providerKey(task.channel, transports, i));
+        publishPromises.push(delivered(providerMessageId));
 
-            result = await breaker.execute(async () => {
-              const controller = new AbortController();
-              const timeout = setTimeout(() => {
-                controller.abort(new Error(`Transport timeout after ${timeoutMs}ms`));
-              }, timeoutMs);
-
-              try {
-                (task as any).signal = controller.signal;
-                const res: any = await Promise.race([
-                  transport.send(task),
-                  new Promise((_, reject) => {
-                    if (controller.signal.aborted) return reject(controller.signal.reason);
-                    controller.signal.addEventListener("abort", () =>
-                      reject(controller.signal.reason),
-                    );
-                  }),
-                ]);
-                // A permanent rejection (a bad address) is the provider working:
-                // returned, not thrown, so the breaker does not count it. A run
-                // of them in one list used to open it for every project.
-                if (!res.success && res.retryable !== false) {
-                  throw providerFailure(res);
-                }
-                return res;
-              } finally {
-                clearTimeout(timeout);
-              }
-            });
-
-            if (result.success) break;
-          } catch (err: any) {
-            result = { success: false, error: err.message, retryable: err.retryable };
-          }
-        }
-
-        if (result.success) {
-          // Record providerMessageId in outbox before publishing event
-          const providerMessageId = result.providerMessageId || "success";
-
-          publishPromises.push(
-            this.outboxUpdateProcessor.add({
-              taskId: task.taskId,
-              channel: task.channel,
-              destination: task.destination,
-              providerMessageId,
-            }),
-          );
-
-          this.globalEmitter.emit(
-            "delivery:delivered",
-            task.taskId,
-            providerMessageId,
-            task.channel,
-            task.projectId,
-          );
-          metrics.deliverySuccess.inc({ channel: task.channel });
-
-          publishPromises.push(
-            this.eventProcessor.add(
-              buildStreamEvent(
-                "notification.delivered",
-                outcome({
-                  projectId: task.projectId,
-                  taskId: task.taskId,
-                  enrichedEventId: task.enrichedEventId,
-                  channel: task.channel,
-                  deliveredAt: new Date().toISOString(),
-                  providerMessageId,
-                  templateId: task.templateId,
-                  workflowInstanceId: task.workflowInstanceId,
-                  campaignId: task.campaignId,
-                }),
-                "delivery",
-                event.metadata.traceId,
-              ),
-            ),
-          );
-        } else if (!(await retryLater(result))) {
-          publishPromises.push(
-            this.outboxUpdateProcessor.add({
-              taskId: task.taskId,
-              channel: task.channel,
-              destination: task.destination,
-              providerMessageId: null,
-            }),
-          );
-
-          publishPromises.push(
-            this.eventProcessor.add(
-              buildStreamEvent(
-                "notification.failed",
-                outcome({
-                  projectId: task.projectId,
-                  taskId: task.taskId,
-                  enrichedEventId: task.enrichedEventId,
-                  channel: task.channel,
-                  failureReason: result.error ?? "delivery failed completely",
-                  failureCode: "provider_error",
-                  retryable: false,
-                  attempt: attemptNo,
-                  templateId: task.templateId,
-                  workflowInstanceId: task.workflowInstanceId,
-                  campaignId: task.campaignId,
-                }),
-                "delivery",
-                event.metadata.traceId,
-              ),
-            ),
-          );
-        }
-
-        if (!result.success && !retryScheduled) {
-          this.logger.warn(
-            { taskId: task.taskId, channel: task.channel, error: result.error },
-            "delivery failed completely across providers",
-          );
-          this.globalEmitter.emit(
-            "delivery:failed",
-            task.taskId,
-            result.error ?? "delivery failed completely",
-            task.channel,
-            task.projectId,
-          );
-          metrics.deliveryFailed.inc({ channel: task.channel, reason: "provider_error" });
-
-          const fallbackTriggered = await fallbackToNextChannel("all_providers_failed");
-          if (!fallbackTriggered) {
-            throw new NonRetryableError(result.error ?? "delivery failed");
-          }
-        } else if (result.success) {
+        if (!isPush) {
           this.logger.debug(
             { taskId: task.taskId, channel: task.channel, messageId: result.providerMessageId },
             "notification delivered",
+          );
+        }
+      } else if (!(await retryLater(result))) {
+        const error =
+          result.error ?? (isPush ? "push delivery failed" : "delivery failed completely");
+        // Push reports the failure before queueing its outcome, other channels after.
+        const report = () => {
+          if (isPush) {
+            this.logger.warn({ taskId: task.taskId, error: result.error }, "push delivery failed");
+          } else {
+            this.logger.warn(
+              { taskId: task.taskId, channel: task.channel, error: result.error },
+              "delivery failed completely across providers",
+            );
+          }
+          this.globalEmitter.emit(
+            "delivery:failed",
+            task.taskId,
+            error,
+            task.channel,
+            task.projectId,
+          );
+          metrics.deliveryFailed.inc({
+            channel: task.channel,
+            reason: isPush ? "push_error" : "provider_error",
+          });
+        };
+
+        if (isPush) report();
+        publishPromises.push(
+          this.outboxUpdateProcessor.add({
+            taskId: task.taskId,
+            channel: task.channel,
+            destination: task.destination,
+            providerMessageId: null,
+          }),
+        );
+        publishPromises.push(
+          isPush ? failed(error, "push_failure") : failed(error, "provider_error", false),
+        );
+        if (!isPush) report();
+
+        const fallbackTriggered = await fallbackToNextChannel(
+          isPush ? "push_delivery_failed" : "all_providers_failed",
+        );
+        if (!fallbackTriggered) {
+          throw new NonRetryableError(
+            result.error ?? (isPush ? "Push delivery failed" : "delivery failed"),
           );
         }
       }
