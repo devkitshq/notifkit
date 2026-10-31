@@ -30,9 +30,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Backstop for direct pushes: refuse to publish anything not already on main.
-      - name: Ensure commit is on main
-        run: git merge-base --is-ancestor HEAD origin/main || { echo "publish must only contain commits from main"; exit 1; }
+      # Backstop for direct pushes: the files must match main exactly (a PR merge
+      # commit isn't on main, but its tree is).
+      - name: Ensure publish matches main
+        run: git diff --quiet HEAD origin/main || { echo "publish differs from main; merge main only"; exit 1; }
 
       - uses: actions/setup-node@v4
         with:
