@@ -306,8 +306,8 @@ export const workflowSteps = pgTable(
     instanceId: uuid("instance_id")
       .notNull()
       .references(() => workflowInstances.id, { onDelete: "cascade" }),
-    stepIndex: varchar("step_index").notNull(), // We can use string format for index (e.g. "0", "1", "0.1") or a deterministic id
-    action: varchar("action").notNull(), // e.g. "notify", "wait", "run"
+    stepIndex: varchar("step_index").notNull(), // "0", "1", ... in step order
+    action: varchar("action").notNull(), // "notify", "wait", "waitForEvent" or "run"
     output: jsonb("output"),
     error: text("error"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
