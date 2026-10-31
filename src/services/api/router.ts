@@ -28,7 +28,7 @@ interface Route {
  *
  * Routes are indexed by `"METHOD:segmentCount"` so `match()` only inspects the
  * small bucket of routes that share the same method and path depth, instead of
- * scanning all ~35 registered routes on every request.
+ * scanning every registered route on every request.
  */
 export class Router {
   /** Indexed buckets: key is `"METHOD:segmentCount"`. */
