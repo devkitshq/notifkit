@@ -3309,6 +3309,29 @@ describe("EventWorker", () => {
     expect(published.payload.instanceId).toBe("inst-1");
   });
 
+  it("logs the whole error, stack included, when a flush fails", async () => {
+    const failure = new Error("stream unavailable");
+    mockWorkflowProducer.publishBatch.mockRejectedValue(failure);
+    const msg = {
+      id: "msg-flush-fail",
+      event: {
+        id: "evt-flush-fail",
+        type: "event.received",
+        metadata: { traceId: "trace-flush-fail" },
+        payload: { projectId: "proj-1", eventName: "page_view", payload: { url: "/home" } },
+      },
+    };
+
+    const processPromise = worker.process(msg as any).catch(() => {});
+    await (worker as any).flushLogs();
+    await processPromise;
+
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: failure }),
+      "failed to flush delivery logs — dropping batch",
+    );
+  });
+
   it("matches event data with nested dot-notation criteria (e.g. order.item.id)", async () => {
     mockDbConn.where = vi
       .fn()

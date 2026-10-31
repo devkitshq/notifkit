@@ -124,7 +124,7 @@ export class EventWorker extends BaseWorker {
       this.logger.error(
         {
           batchSize: batch.length,
-          error: error.message,
+          err: error,
         },
         "failed to flush delivery logs — dropping batch",
       );
