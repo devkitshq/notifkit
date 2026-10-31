@@ -1,6 +1,7 @@
 import { loadEnv, readBaseConfig } from "@/index.js";
 import type { Logger } from "@/index.js";
 import type { RedisClient, Redis } from "@/index.js";
+import { redactUrl } from "@/index.js";
 import {
   type StreamConsumer,
   type PendingMessageScanner,
@@ -356,7 +357,7 @@ export async function startAiWorker() {
 
   healthInterval = startHealthReporter("ai", worker, redis, logger);
 
-  logger.info({ env: config.NODE_ENV, redis: config.REDIS_URL }, "ai starting");
+  logger.info({ env: config.NODE_ENV, redis: redactUrl(config.REDIS_URL) }, "ai starting");
   await worker.start();
 }
 
