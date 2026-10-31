@@ -349,6 +349,20 @@ describe("API operational handlers", () => {
       expect(parse(res).error).toBe("missing_message_id");
     });
 
+    it("replay rejects malformed JSON as malformed_json, like every other handler", async () => {
+      const req = {
+        on: vi.fn((event: string, cb: any) => {
+          if (event === "data") cb(Buffer.from("{not json"));
+          if (event === "end") cb();
+        }),
+        headers: {},
+      } as any;
+      await expect(handlers.replayDLQMessage(req, createMockRes(), ctx())).rejects.toMatchObject({
+        status: 400,
+        code: "malformed_json",
+      });
+    });
+
     it("replay 404s when the entry is gone", async () => {
       deps.redis.native.xrange.mockResolvedValue([]);
       const res = createMockRes();

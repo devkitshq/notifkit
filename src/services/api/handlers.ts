@@ -1443,7 +1443,7 @@ export function createHandlers(deps: Deps) {
     res: ServerResponse,
     ctx: RouteContext,
   ): Promise<void> {
-    const body = (await readJsonBody(req).catch(() => ({}))) as any;
+    const body = (await readJsonBody(req)) as any;
     const messageId = body?.id;
 
     if (!messageId) {
