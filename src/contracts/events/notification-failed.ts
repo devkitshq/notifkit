@@ -11,7 +11,7 @@ export const NotificationFailedPayloadSchema = z.object({
   retryable: z.boolean(),
   attempt: z.number().int().positive(),
   providerResponse: z.record(z.string(), z.unknown()).optional(),
-  templateId: z.string().uuid().optional(),
+  templateId: z.string().min(1).optional(),
   workflowInstanceId: z.string().uuid().optional(),
   /** Campaign this message belongs to, carried from the originating request. */
   campaignId: z.string().min(1).max(128).optional(),

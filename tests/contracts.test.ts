@@ -53,4 +53,29 @@ describe("End-to-End Contract Registry Tests", () => {
     const result = registry.safeParsePayload("notification.enriched", payload);
     expect(result.success).toBe(true);
   });
+
+  it("accepts a non-UUID templateId on delivery outcome events", () => {
+    const base = {
+      projectId: "33eb2225-c6f3-4e4b-91bb-000000000000",
+      taskId: "task-1",
+      enrichedEventId: "44eb2225-c6f3-4e4b-91bb-000000000000",
+      channel: "email",
+      templateId: "order-shipped",
+    };
+
+    const delivered = registry.safeParsePayload("notification.delivered", {
+      ...base,
+      deliveredAt: "2026-01-01T00:00:00.000Z",
+    });
+    const failed = registry.safeParsePayload("notification.failed", {
+      ...base,
+      failureReason: "boom",
+      failureCode: "provider_error",
+      retryable: false,
+      attempt: 1,
+    });
+
+    expect(delivered.success).toBe(true);
+    expect(failed.success).toBe(true);
+  });
 });
