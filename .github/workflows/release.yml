@@ -3,6 +3,9 @@ name: Release
 on:
   push:
     branches: [main]
+  # Manual re-run of the publish job, e.g. after a failed publish. It only
+  # publishes versions not yet on npm.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,7 +30,7 @@ jobs:
 
   publish:
     needs: release-please
-    if: needs.release-please.outputs.releases_created == 'true'
+    if: needs.release-please.outputs.releases_created == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -44,6 +47,8 @@ jobs:
       # Trusted publishing (OIDC, no token) needs npm >= 11.5.1; Node 22 ships npm 10.
       - run: npm install -g npm@latest
       - run: npm ci
+      # prepublishOnly builds the dashboard, which has its own lockfile.
+      - run: npm ci --prefix dashboard
       - run: npm run typecheck
       - run: npm run build
       - run: npm run build --workspaces --if-present
