@@ -79,8 +79,8 @@ export class WhatsAppTransport implements Transport {
       };
     }
 
-    const content = task.renderedContent.content as { text?: string };
-    const text = content.text;
+    const content = task.renderedContent.content as { text?: string; body?: string };
+    const text = content.text || content.body;
     if (!text) {
       return {
         success: false,
@@ -112,9 +112,6 @@ export class WhatsAppTransport implements Transport {
 
       if (!res.ok) {
         const errorCode = data?.error?.code;
-        // 190 = expired/invalid access token; surface it distinctly so
-        // notifkit doesn't retry an auth failure like a transient one.
-        const invalidToken = res.status === 401 || errorCode === 190;
         this.logger?.error({ status: res.status, error: data?.error }, "WhatsApp send failed");
         // Meta sends several rate limits and outages as a 400, so the
         // error code decides before the status does.
@@ -122,7 +119,10 @@ export class WhatsAppTransport implements Transport {
         return {
           success: false,
           error: data?.error?.message ?? `HTTP ${res.status}`,
-          invalidToken,
+          // Never invalidToken: 401 / code 190 is *our* access token expiring,
+          // and flagging it would deactivate every recipient's contact. The
+          // 4xx still makes it permanent, so an auth failure isn't retried.
+          invalidToken: false,
           ...(permanent ? { retryable: false } : {}),
         };
       }
