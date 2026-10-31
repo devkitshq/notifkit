@@ -36,18 +36,38 @@ function readJson(file: string) {
   return JSON.parse(readFileSync(file, "utf8"));
 }
 
+/** Whether `^pin` admits `version` (plain x.y.z only; no prereleases). */
+function caretAccepts(pin: string, version: string): boolean {
+  const [pM, pm, pp] = pin.split(".").map(Number) as [number, number, number];
+  const [vM, vm, vp] = version.split(".").map(Number) as [number, number, number];
+  if (pM !== vM) return false;
+  if (pM === 0) return pm === vm && vp >= pp;
+  return vm > pm || (vm === pm && vp >= pp);
+}
+
 describe("providers", () => {
   // The versions are baked into the CLI so it needs no network or workspace at
-  // run time. This keeps them from drifting behind the packages they name.
-  it("pins every package to its current workspace version", () => {
+  // run time, and scaffolded as `^version`. A release bumps package.json but
+  // not these pins, so they may lag — as long as the caret range still
+  // accepts the current version, a fresh app installs the latest release.
+  it("pins every package to a caret range that accepts its workspace version", () => {
     const root = readJson(path.resolve(__dirname, "../package.json"));
-    expect(NOTIFKIT_VERSION).toBe(root.version);
+    expect(caretAccepts(NOTIFKIT_VERSION, root.version)).toBe(true);
     for (const id of PROVIDER_IDS) {
       const spec = PROVIDERS[id];
       const pkg = readJson(path.resolve(__dirname, `../packages/provider-${id}/package.json`));
       expect(spec.packageName).toBe(pkg.name);
-      expect(spec.version).toBe(pkg.version);
+      expect(caretAccepts(spec.version, pkg.version), `${pkg.name}@${spec.version}`).toBe(true);
     }
+  });
+
+  it("caretAccepts follows npm caret semantics", () => {
+    expect(caretAccepts("0.1.14", "0.1.14")).toBe(true);
+    expect(caretAccepts("0.1.14", "0.1.15")).toBe(true);
+    expect(caretAccepts("0.1.14", "0.2.0")).toBe(false); // 0.x: minor is breaking
+    expect(caretAccepts("0.1.15", "0.1.14")).toBe(false); // pin ahead of the release
+    expect(caretAccepts("1.2.0", "1.9.3")).toBe(true);
+    expect(caretAccepts("1.2.0", "2.0.0")).toBe(false);
   });
 });
 
