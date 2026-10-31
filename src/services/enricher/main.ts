@@ -597,15 +597,6 @@ export async function startEnricherWorker() {
   const contactRepo = new ContactRepository(db);
   const templateCache = new TemplateCache(new TemplateRepository(db));
 
-  // ─── Stage 1: Context Enricher ──────────────────────────────────────────────
-  //
-  // Pipeline:
-  //  1. Parse payload as notification.created
-  //  2. Idempotency check — drop if already processed
-  //  3. Load user profile (language, timezone) from DB
-  //  4. Load all stored preferences for this user
-  //  5. Publish notification.enriched to ENRICHED stream
-
   worker = new EnricherWorker({
     consumer,
     pendingScanner,

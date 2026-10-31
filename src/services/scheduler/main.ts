@@ -328,11 +328,6 @@ export async function startSchedulerWorker() {
 
   const outboundProducers = createPriorityProducers(redis.native, logger, "OUTBOUND");
 
-  // ─── Stage 4a: Scheduled notification processor ─────────────────────────────
-  //
-  // Reads from SCHEDULED stream, parses, and queues tasks in a Redis ZSET.
-  // A background polling interval releases tasks when they are due.
-
   worker = new SchedulerWorker({
     consumer,
     pendingScanner,

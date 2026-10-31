@@ -764,16 +764,6 @@ export async function startEngineWorker() {
     projectRepo.findThrottleSettings(projectId),
   );
 
-  // ─── Stage 2: Decision Engine ───────────────────────────────────────────────
-  //
-  // Pipeline:
-  //  1. Parse payload as notification.enriched
-  //  2. Idempotency check
-  //  3. Check user opt-in (from enriched recipient.preferences)
-  //  4. Apply per-user hourly rate limit
-  //  5. Render template using user locale
-  //  6. Route: if scheduledAt is future → SCHEDULED; else → OUTBOUND
-
   worker = new EngineWorker({
     consumer,
     pendingScanner,

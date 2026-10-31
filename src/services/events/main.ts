@@ -314,7 +314,7 @@ export class EventWorker extends BaseWorker {
             ),
           );
 
-        // Get the latest one that has no output
+        // The step still waiting. An instance waits on one event at a time.
         const pendingStep = steps.find((s: any) => s.output === null);
 
         if (pendingStep) {
