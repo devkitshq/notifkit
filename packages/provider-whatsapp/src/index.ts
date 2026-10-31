@@ -34,10 +34,6 @@ export interface WhatsAppTransportOptions {
  *
  * Registers under notifkit's native `channel: "whatsapp"` and sends to the
  * recipient's `phone` field (the same field the "sms" channel uses).
- *
- * Free tier: Meta's Cloud API is free for roughly the first 1,000
- * business-initiated conversations per month per WABA, with no per-message
- * SaaS markup on top.
  */
 export class WhatsAppTransport implements Transport {
   readonly channel = "whatsapp" as const;
