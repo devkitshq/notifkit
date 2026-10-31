@@ -56,7 +56,7 @@ export default function TemplatesPage() {
 
   const handleDelete = async (id: string) => {
     try {
-      const res = await api(`/v1/templates/${id}`, { method: "DELETE" });
+      const res = await api(`/v1/templates/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Delete failed");
       toast.success(`Template ${id} deleted`);
       void fetchTemplates();

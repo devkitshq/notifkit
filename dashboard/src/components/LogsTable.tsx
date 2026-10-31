@@ -100,7 +100,7 @@ export default function LogsTable() {
   useEffect(() => {
     if (selectedLog && token && selectedProjectId) {
       setLoadingLifecycle(true);
-      api(`/v1/notifications/${selectedLog.taskId}`)
+      api(`/v1/notifications/${encodeURIComponent(selectedLog.taskId)}`)
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
           if (data && data.logs) {

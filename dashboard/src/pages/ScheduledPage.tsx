@@ -52,7 +52,9 @@ export default function ScheduledPage() {
 
   const handleCancel = async (taskId: string) => {
     try {
-      const res = await api(`/v1/notifications/${taskId}`, { method: "DELETE" });
+      const res = await api(`/v1/notifications/${encodeURIComponent(taskId)}`, {
+        method: "DELETE",
+      });
       if (!res.ok) throw new Error("Cancel failed");
       toast.success(`Task ${taskId} canceled`);
       void fetchScheduled();

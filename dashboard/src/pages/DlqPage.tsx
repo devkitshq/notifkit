@@ -75,7 +75,7 @@ export default function DlqPage() {
   const handleDelete = async (id: string) => {
     if (!token) return;
     try {
-      const res = await api(`/v1/dlq/${id}`, { method: "DELETE" });
+      const res = await api(`/v1/dlq/${encodeURIComponent(id)}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Delete failed");
       toast.success(`Message ${id} purged from DLQ`);
       void fetchDLQ();
