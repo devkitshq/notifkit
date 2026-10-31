@@ -188,8 +188,6 @@ export class WorkflowWorker extends BaseWorker {
 
   async process(message: StreamMessage): Promise<void> {
     const { event } = message;
-    const publishPromises: Promise<void>[] = [];
-
     if (event.type !== "workflow.triggered" && event.type !== "workflow.resumed") {
       return;
     }
@@ -545,8 +543,6 @@ export class WorkflowWorker extends BaseWorker {
       // Compare-and-delete: never release a lock a later process re-acquired.
       await this.redisCli.releaseLock(lockKey, lockToken);
     }
-
-    await Promise.all(publishPromises);
   }
 }
 
