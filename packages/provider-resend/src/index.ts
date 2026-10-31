@@ -203,7 +203,7 @@ export class ResendTransport implements Transport {
       return [];
     }
 
-    let status: WebhookEvent["status"] | null = null;
+    let status: WebhookEvent["status"];
     switch (body.type) {
       case "email.opened":
         status = "opened";
@@ -217,50 +217,45 @@ export class ResendTransport implements Transport {
       case "email.complained":
         status = "complained";
         break;
-      case "email.delivery_delayed":
-      case "email.delivered":
       default:
         this.logger?.debug({ type: body.type }, "Resend webhook ignored (untracked event type)");
         return [];
     }
 
-    if (status) {
-      this.logger?.info(
-        { providerMessageId: body.data.email_id, status, type: body.type },
-        "Resend webhook mapped to notifkit status",
-      );
+    this.logger?.info(
+      { providerMessageId: body.data.email_id, status, type: body.type },
+      "Resend webhook mapped to notifkit status",
+    );
 
-      // `to` is an array; a bounce or complaint concerns the first recipient.
-      const recipient = Array.isArray(body.data.to) ? body.data.to[0] : body.data.to;
+    // `to` is an array; a bounce or complaint concerns the first recipient.
+    const recipient = Array.isArray(body.data.to) ? body.data.to[0] : body.data.to;
 
-      // Resend reports bounce severity under `bounce.type`, using its own
-      // vocabulary. Anything not explicitly permanent is treated as soft, so an
-      // unrecognised value never suppresses a working address.
-      const rawBounceType: string | undefined = body.data.bounce?.type ?? body.data.bounce_type;
-      const bounceType =
-        status === "bounced"
-          ? /permanent|hard/i.test(rawBounceType ?? "")
-            ? ("hard" as const)
-            : ("soft" as const)
-          : undefined;
+    // Resend reports bounce severity under `bounce.type`, using its own
+    // vocabulary. Anything not explicitly permanent is treated as soft, so an
+    // unrecognised value never suppresses a working address.
+    const rawBounceType: string | undefined = body.data.bounce?.type ?? body.data.bounce_type;
+    const bounceType =
+      status === "bounced"
+        ? /permanent|hard/i.test(rawBounceType ?? "")
+          ? ("hard" as const)
+          : ("soft" as const)
+        : undefined;
 
-      const metadata: Record<string, unknown> = {};
-      if (status === "clicked" && body.data.click?.link) metadata["url"] = body.data.click.link;
-      if (rawBounceType) metadata["bounceType"] = rawBounceType;
-      if (body.data.bounce?.message) metadata["bounceMessage"] = body.data.bounce.message;
+    const metadata: Record<string, unknown> = {};
+    if (status === "clicked" && body.data.click?.link) metadata["url"] = body.data.click.link;
+    if (rawBounceType) metadata["bounceType"] = rawBounceType;
+    if (body.data.bounce?.message) metadata["bounceMessage"] = body.data.bounce.message;
 
-      return [
-        {
-          providerMessageId: body.data.email_id,
-          status,
-          timestamp: body.created_at ? new Date(body.created_at) : new Date(),
-          ...(recipient ? { recipient } : {}),
-          ...(bounceType ? { bounceType } : {}),
-          ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
-        },
-      ];
-    }
-    return [];
+    return [
+      {
+        providerMessageId: body.data.email_id,
+        status,
+        timestamp: body.created_at ? new Date(body.created_at) : new Date(),
+        ...(recipient ? { recipient } : {}),
+        ...(bounceType ? { bounceType } : {}),
+        ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+      },
+    ];
   }
 }
 
