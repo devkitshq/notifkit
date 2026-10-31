@@ -1,0 +1,51 @@
+name: Publish
+
+on:
+  push:
+    branches: [publish]
+
+permissions:
+  contents: read
+  id-token: write # required for npm --provenance
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run build --workspaces --if-present
+      - run: npm run typecheck:workspaces
+      - run: npm run lint
+      - run: npm test
+
+      # Publishes every package whose current version isn't on npm yet, so
+      # unbumped packages are skipped instead of failing the run.
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for dir in . packages/*; do
+            name=$(node -p "require('./$dir/package.json').name")
+            version=$(node -p "require('./$dir/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "skip $name@$version (already published)"
+            else
+              echo "publish $name@$version"
+              (cd "$dir" && npm publish --provenance --access public)
+            fi
+          done
