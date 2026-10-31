@@ -28,6 +28,7 @@ const MIME_TYPES: Record<string, string> = {
 // Where a built dashboard may sit, relative to a base directory.
 const DASHBOARD_SUBDIRS = [
   ["dashboard", "dist"],
+  /** @deprecated Next.js export dir; the dashboard is Vite. Remove at the next minor. */
   ["dashboard", "out"],
   ["dist", "admin"],
   ["dist", "dashboard"],
@@ -132,6 +133,7 @@ export async function handleAdminRequest(
   // 127.0.0.1:5173 outside production meant a deployment that never set
   // NODE_ENV sent every /admin request, credentials included, to whatever
   // listened there, and served its reply as the dashboard.
+  // @deprecated NEXT_DEV_URL: Next.js leftover; the dashboard is Vite. Remove at the next minor.
   const devProxyUrl =
     process.env.VITE_DEV_URL || process.env.ADMIN_DEV_URL || process.env.NEXT_DEV_URL;
   if (devProxyUrl && process.env.NODE_ENV !== "production") {
@@ -243,7 +245,8 @@ export async function handleAdminRequest(
   const ext = extname(filePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || "application/octet-stream";
 
-  // Cache static assets (_next/static) aggressively (immutable, 1 year), HTML files no-cache
+  // Cache static assets aggressively (immutable, 1 year), HTML files no-cache.
+  // @deprecated the `_next` match: Next.js leftover; the dashboard is Vite. Remove at the next minor.
   const isImmutable = filePath.includes("_next") || ext === ".js" || ext === ".css";
   const cacheControl = isImmutable
     ? "public, max-age=31536000, immutable"
