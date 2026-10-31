@@ -457,6 +457,16 @@ describe("isInQuietHours (Timezone-Aware Quiet Hours Calculation)", () => {
     expect(result.inQuietHours).toBe(true);
     expect(result.nextActiveTime).toEqual(new Date("2026-08-18T08:00:00Z"));
   });
+
+  it("never returns a release time in the past during a DST fall-back repeated hour", () => {
+    // 2026-11-01 New York repeats 01:00-02:00. 06:10Z is the second 01:10
+    // (EST); the window still runs until the second 01:30, i.e. 06:30Z.
+    const now = new Date("2026-11-01T06:10:00Z");
+    const result = isInQuietHours("America/New_York", [{ start: "01:00", end: "01:30" }], now);
+
+    expect(result.inQuietHours).toBe(true);
+    expect(result.nextActiveTime).toEqual(new Date("2026-11-01T06:30:00Z"));
+  });
 });
 
 describe("UserThrottle (Priority-Aware Throttling)", () => {

@@ -147,7 +147,7 @@ export function isInQuietHours(
           targetDay = nextDay.getUTCDate();
         }
 
-        const nextActive = localTimeToUtc(
+        let nextActive = localTimeToUtc(
           targetYear,
           targetMonth,
           targetDay,
@@ -156,6 +156,18 @@ export function isInQuietHours(
           0,
           timezone,
         );
+        // In a DST fall-back hour the end time occurs twice and localTimeToUtc
+        // picks the first, which can already be behind us; use the current
+        // UTC offset to land on the second occurrence instead.
+        if (nextActive.getTime() <= date.getTime()) {
+          const currentSec = parseInt(parts.find((p) => p.type === "second")?.value ?? "0", 10);
+          const offsetMs =
+            Date.UTC(year, month - 1, day, currentHour, currentMin, currentSec) -
+            Math.floor(date.getTime() / 1000) * 1000;
+          nextActive = new Date(
+            Date.UTC(targetYear, targetMonth - 1, targetDay, endH, endM, 0) - offsetMs,
+          );
+        }
         return { inQuietHours: true, nextActiveTime: nextActive };
       }
     }
