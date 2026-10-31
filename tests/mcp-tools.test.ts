@@ -3,6 +3,7 @@ import { NotifkitApi, NotifkitApiError } from "../packages/mcp/src/client.js";
 import { createServer } from "../packages/mcp/src/index.js";
 import { registerTools } from "../packages/mcp/src/tools.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 function stubFetch(body: unknown, status = 200) {
   const fn = vi.fn().mockResolvedValue({
     status,
@@ -196,6 +197,14 @@ describe("MCP Server Tool Registration", () => {
       tools[tool].inputSchema.shape[field].description as string;
     expect(describe("send_notification", "channels")).toContain("'email'");
     expect(describe("get_delivery_logs", "status")).not.toContain("'sent'");
+  });
+
+  it("describes quiet hours in the recipient's timezone, not UTC", () => {
+    const server = createServer({ baseUrl: "https://api.test", apiKey: "nk_key" });
+    const tools = (server as any)._registeredTools;
+    for (const tool of ["upsert_user", "update_user", "update_user_preferences"]) {
+      expect(JSON.stringify(z.toJSONSchema(tools[tool].inputSchema))).not.toContain("UTC");
+    }
   });
 
   it("executes delete_template tool handler", async () => {

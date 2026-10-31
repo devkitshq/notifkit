@@ -930,8 +930,8 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
             quietHours: z
               .array(
                 z.object({
-                  start: z.string().describe("HH:MM, 24h, UTC."),
-                  end: z.string().describe("HH:MM, 24h, UTC."),
+                  start: z.string().describe("HH:MM, 24h, in the user's timezone."),
+                  end: z.string().describe("HH:MM, 24h, in the user's timezone."),
                 }),
               )
               .optional()
@@ -1001,8 +1001,8 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
             quietHours: z
               .array(
                 z.object({
-                  start: z.string().describe("HH:MM, 24h, UTC."),
-                  end: z.string().describe("HH:MM, 24h, UTC."),
+                  start: z.string().describe("HH:MM, 24h, in the user's timezone."),
+                  end: z.string().describe("HH:MM, 24h, in the user's timezone."),
                 }),
               )
               .optional()
@@ -1126,8 +1126,8 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
         quietHours: z
           .array(
             z.object({
-              start: z.string().describe("HH:MM, 24h, UTC."),
-              end: z.string().describe("HH:MM, 24h, UTC."),
+              start: z.string().describe("HH:MM, 24h, in the user's timezone."),
+              end: z.string().describe("HH:MM, 24h, in the user's timezone."),
             }),
           )
           .optional()
