@@ -111,7 +111,7 @@ export class DiscordTransport implements Transport {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          content: text,
+          content: truncate(text, DISCORD_MAX_CONTENT),
           ...(username ? { username } : {}),
           ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
           ...(embeds ? { embeds } : {}),
@@ -159,4 +159,19 @@ export class DiscordTransport implements Transport {
  */
 function isPermanentStatus(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
+/** Discord rejects message content longer than this with a 400. */
+const DISCORD_MAX_CONTENT = 2000;
+
+/**
+ * Cuts `text` to at most `max` UTF-16 units, ending in "…", without splitting
+ * a surrogate pair. Discord refuses an over-long message outright, so a
+ * truncated message beats a permanently failed one.
+ */
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let cut = text.slice(0, max - 1);
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return `${cut}…`;
 }
