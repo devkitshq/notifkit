@@ -38,6 +38,8 @@ import {
   STREAMS,
   CONSUMER_GROUPS,
   PUBSUB_CHANNELS,
+  IngestEventSchema,
+  UpdateProjectSchema,
 } from "@/contracts/index.js";
 import { readJsonBody, sendJson, sendNoContent, sendValidationError } from "./http.js";
 import type { RouteContext } from "./router.js";
@@ -58,11 +60,6 @@ import { readBaseConfig } from "@/config/index.js";
 import { verifyUnsubscribeToken } from "@/unsubscribe/index.js";
 import type { Db } from "@/db/index.js";
 import { z } from "zod";
-
-const IngestEventSchema = z.object({
-  name: z.string().min(1),
-  properties: z.record(z.string(), z.unknown()),
-});
 
 export interface Deps {
   logger: Logger;
@@ -1143,13 +1140,7 @@ export function createHandlers(deps: Deps) {
     ctx: RouteContext,
   ): Promise<void> {
     const id = ctx.params.id!;
-    const parsed = z
-      .object({
-        rateLimitRpm: z.number().nullable().optional(),
-        throttleLimit: z.number().nullable().optional(),
-        throttleWindowHours: z.number().nullable().optional(),
-      })
-      .safeParse(await readJsonBody(req));
+    const parsed = UpdateProjectSchema.safeParse(await readJsonBody(req));
 
     if (!parsed.success) return sendValidationError(res, parsed.error);
 
