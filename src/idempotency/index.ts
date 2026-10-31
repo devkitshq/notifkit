@@ -29,10 +29,12 @@ export class IdempotencyGuard {
     return `${this.keyPrefix}:${id}`;
   }
 
+  /** @deprecated Nothing writes `:lock` keys any more; read only for markers from older versions. Remove in the next minor. */
   private lockKey(id: string): string {
     return `${this.keyPrefix}:${id}:lock`;
   }
 
+  /** @deprecated Nothing writes `:sent` keys any more; read only for markers from older versions. Remove in the next minor. */
   private completedKey(id: string): string {
     return `${this.keyPrefix}:${id}:sent`;
   }
