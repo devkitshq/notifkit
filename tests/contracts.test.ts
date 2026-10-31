@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { registry } from "@/contracts/index.js";
+import { registry, QuietHoursSchema } from "@/contracts/index.js";
 
 describe("End-to-End Contract Registry Tests", () => {
   it("successfully parses a valid notification.requested payload", () => {
@@ -52,6 +52,13 @@ describe("End-to-End Contract Registry Tests", () => {
 
     const result = registry.safeParsePayload("notification.enriched", payload);
     expect(result.success).toBe(true);
+  });
+
+  it("does not call quiet hours UTC in the validation message", () => {
+    const result = QuietHoursSchema.safeParse({ start: "25:00", end: "07:00" });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toBe("expected HH:MM (24h, user's timezone)");
   });
 
   it("accepts a non-UUID templateId on delivery outcome events", () => {

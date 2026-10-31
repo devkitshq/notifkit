@@ -9,8 +9,8 @@ import { NotificationChannelSchema, NotificationPrioritySchema } from "./common.
 // HH:MM windows in the user's own timezone.
 
 export const QuietHoursSchema = z.object({
-  start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "expected HH:MM (24h, UTC)"),
-  end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "expected HH:MM (24h, UTC)"),
+  start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "expected HH:MM (24h, user's timezone)"),
+  end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "expected HH:MM (24h, user's timezone)"),
 });
 export type QuietHours = z.infer<typeof QuietHoursSchema>;
 
