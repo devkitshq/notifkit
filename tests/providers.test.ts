@@ -74,13 +74,17 @@ describe("ResendTransport (Email Provider)", () => {
 
     const result = await transport.send(task);
 
-    expect(mockSendEmail).toHaveBeenCalledWith({
-      from: "onboarding@resend.dev",
-      to: "recipient@example.com",
-      subject: "Welcome Alice",
-      html: "<h1>Hello Alice</h1>",
-      text: "Hello Alice",
-    });
+    expect(mockSendEmail).toHaveBeenCalledWith(
+      {
+        from: "onboarding@resend.dev",
+        to: "recipient@example.com",
+        subject: "Welcome Alice",
+        html: "<h1>Hello Alice</h1>",
+        text: "Hello Alice",
+      },
+      // A retry of the same task must not send a second email.
+      { idempotencyKey: "task-uuid-123" },
+    );
     expect(result).toEqual({
       success: true,
       providerMessageId: "email-resend-id-123",
@@ -549,7 +553,7 @@ describe("ConsoleTransport (Development Provider)", () => {
         destination: "device-token-1",
         providerMessageId: result.providerMessageId,
       },
-      "push delivered (console transport)",
+      "sms delivered (console transport)",
     );
   });
 
@@ -2067,7 +2071,9 @@ describe("WhatsAppTransport (WhatsApp Provider)", () => {
     );
   });
 
-  it("handles HTTP error and detects invalid token", async () => {
+  it("does not blame the recipient when our own access token is rejected", async () => {
+    // 401 / code 190 is the sender's access token expiring. Flagging it as
+    // invalidToken would deactivate every recipient's WhatsApp contact.
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
@@ -2082,7 +2088,7 @@ describe("WhatsAppTransport (WhatsApp Provider)", () => {
     expect(result).toEqual({
       success: false,
       error: "Invalid OAuth access token",
-      invalidToken: true,
+      invalidToken: false,
       retryable: false,
     });
   });
@@ -2222,5 +2228,127 @@ describe("WhatsAppTransport (WhatsApp Provider)", () => {
         metadata: { errors: [{ code: 131051, title: "Message failed to send" }] },
       });
     });
+  });
+});
+
+// ─── Fixes: one regression test per provider ───────────────────────────────────
+
+describe("provider regressions", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as any;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("console: labels output with the configured channel, not always push", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const log = logger();
+    try {
+      await new ConsoleTransport({ channel: "email", logger: log }).send({
+        taskId: "t1",
+        recipientId: "u1",
+        destination: "a@b.c",
+        priority: "normal",
+        renderedContent: { content: { body: "hi" } },
+      } as any);
+      const printed = String(logSpy.mock.calls[0]![0]);
+      expect(printed).toContain("EMAIL NOTIFICATION");
+      expect(printed).not.toContain("PUSH");
+      expect(log.info.mock.calls[0]![1]).toBe("email delivered (console transport)");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("fcm: a malformed service account fails the send instead of throwing", async () => {
+    const transport = new FcmTransport({ serviceAccountJson: "not json" });
+
+    const result = await transport.send({
+      taskId: "t1",
+      enrichedEventId: "e1",
+      destination: "tok",
+      renderedContent: { content: { body: "hi" } },
+    } as any);
+
+    expect(result.success).toBe(false);
+    expect(result.invalidToken).toBeFalsy();
+  });
+
+  it("slack: keeps the subject when a body is also rendered", async () => {
+    const fetchMock = stubSlackApi({ ok: true, ts: "1.2", channel: "C1" });
+
+    await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(
+      slackTask({ renderedContent: { content: { subject: "Deploy", body: "shipped" } } }),
+    );
+
+    expect(slackBody(fetchMock).text).toBe("*Deploy*\nshipped");
+  });
+
+  it("whatsapp: falls back to content.body like every other provider", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ messages: [{ id: "wamid.1" }] }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new WhatsAppTransport({
+      phoneNumberId: "p1",
+      accessToken: "tok",
+    }).send({
+      taskId: "t1",
+      destination: "+15551234567",
+      renderedContent: { content: { body: "from body" } },
+    } as any);
+
+    expect(result.success).toBe(true);
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body).text.body).toBe("from body");
+  });
+
+  it("discord: truncates content to Discord's 2000-character limit", async () => {
+    const fetchMock = stubDiscord({ id: "m1" });
+
+    await new DiscordTransport().send(
+      discordTask({ renderedContent: { content: { body: "x".repeat(2500) } } }),
+    );
+
+    const content: string = discordBody(fetchMock).content;
+    expect(content.length).toBe(2000);
+    expect(content.endsWith("…")).toBe(true);
+  });
+
+  it("telegram: truncates plain text to Telegram's 4096-character limit", async () => {
+    const fetchMock = stubTelegram({ ok: true, result: { message_id: 1 } });
+
+    await telegramTransport().send(
+      telegramTask({ renderedContent: { content: { text: "x".repeat(5000) } } }),
+    );
+
+    const text: string = telegramBody(fetchMock).text;
+    expect(text.length).toBe(4096);
+    expect(text.endsWith("…")).toBe(true);
+  });
+
+  it("telegram: leaves formatted text alone, since cutting markup would break it", async () => {
+    const fetchMock = stubTelegram({ ok: true, result: { message_id: 1 } });
+
+    await telegramTransport({ parseMode: "HTML" }).send(
+      telegramTask({ renderedContent: { content: { text: "x".repeat(5000) } } }),
+    );
+
+    expect(telegramBody(fetchMock).text.length).toBe(5000);
+  });
+
+  it("twilio: truncates the body to Twilio's 1600-character limit", async () => {
+    mockCreateMessage.mockReset();
+    mockCreateMessage.mockResolvedValueOnce({ sid: "SM1", status: "queued" });
+
+    await twilioTransport().send(
+      smsTask({ renderedContent: { content: { body: "x".repeat(2000) } } }),
+    );
+
+    const body: string = mockCreateMessage.mock.calls[0]![0].body;
+    expect(body.length).toBe(1600);
+    expect(body.endsWith("…")).toBe(true);
   });
 });

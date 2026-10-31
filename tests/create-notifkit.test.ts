@@ -61,6 +61,11 @@ describe("providers", () => {
     }
   });
 
+  it("scaffolds apps on a notifkit that has the DST quiet-hours fix", () => {
+    // 0.1.15 stops quiet hours releasing early in a DST fall-back hour.
+    expect(caretAccepts("0.1.15", NOTIFKIT_VERSION)).toBe(true);
+  });
+
   it("caretAccepts follows npm caret semantics", () => {
     expect(caretAccepts("0.1.14", "0.1.14")).toBe(true);
     expect(caretAccepts("0.1.14", "0.1.15")).toBe(true);

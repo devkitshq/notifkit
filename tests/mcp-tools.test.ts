@@ -327,3 +327,15 @@ describe("MCP Server Tool Registration", () => {
     );
   });
 });
+
+describe("createServer", () => {
+  it("reports the package's own version to MCP clients", async () => {
+    const { readFileSync } = await import("node:fs");
+    const pkg = JSON.parse(
+      readFileSync(new URL("../packages/mcp/package.json", import.meta.url), "utf8"),
+    );
+    const server = createServer({ baseUrl: "https://api.test", apiKey: "nk_key" });
+
+    expect((server.server as any)._serverInfo.version).toBe(pkg.version);
+  });
+});
