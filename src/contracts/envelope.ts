@@ -24,7 +24,7 @@ export type TypedEventEnvelope<K extends KnownEventType> = Omit<
   payload: EventPayloadMap[K];
 };
 
-// Backward-compatible alias used by the queue / workers packages.
+// The name the queue and workers use for an envelope.
 export type StreamEvent = EventEnvelope;
 export const StreamEventSchema = EventEnvelopeSchema;
 export type StreamEventMetadata = EventMetadata;
