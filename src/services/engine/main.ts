@@ -15,8 +15,8 @@ import {
   CONSUMER_GROUPS,
   PUBSUB_CHANNELS,
   registry,
+  type EventRegistry,
   buildStreamEvent,
-  type NotificationEnrichedPayload,
   type DispatchedTaskPayload,
   type StreamEvent,
 } from "@/index.js";
@@ -222,7 +222,7 @@ let worker: BaseWorker;
 let healthInterval: NodeJS.Timeout | null = null;
 
 export interface EngineWorkerOptions extends WorkerOptions {
-  registry: any;
+  registry: EventRegistry;
   idempotency: any;
   throttle: any;
   projectSettings: ProjectSettingsCache;
@@ -237,7 +237,7 @@ export interface EngineWorkerOptions extends WorkerOptions {
 }
 
 export class EngineWorker extends BaseWorker {
-  private readonly registry: any;
+  private readonly registry: EventRegistry;
   private readonly idempotency: any;
   private readonly throttle: any;
   private readonly projectSettings: ProjectSettingsCache;
@@ -361,7 +361,7 @@ export class EngineWorker extends BaseWorker {
       return;
     }
 
-    const enriched = payloadResult.data as NotificationEnrichedPayload;
+    const enriched = payloadResult.data;
 
     // Idempotency
     // The enricher emits one event per resolved contact, so two addresses on one

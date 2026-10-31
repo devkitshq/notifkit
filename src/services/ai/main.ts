@@ -12,7 +12,7 @@ import {
   STREAMS,
   CONSUMER_GROUPS,
   registry,
-  type NotificationAiPendingPayload,
+  type EventRegistry,
   type NotificationDispatchedPayload,
   getAiConfig,
   AI_DEFAULTS,
@@ -82,7 +82,7 @@ export function isRetryableAiError(err: unknown): boolean {
 }
 
 export interface AiWorkerOptions extends WorkerOptions {
-  registry: any;
+  registry: EventRegistry;
   idempotency: any;
   redis: Redis;
   generateAiContent: any;
@@ -93,7 +93,7 @@ export interface AiWorkerOptions extends WorkerOptions {
 }
 
 export class AiWorker extends BaseWorker {
-  private readonly registry: any;
+  private readonly registry: EventRegistry;
   private readonly idempotency: any;
   private readonly generateAiContent: any;
   private readonly templateCache: TemplateCache;
@@ -123,7 +123,7 @@ export class AiWorker extends BaseWorker {
       return;
     }
 
-    const pending = payloadResult.data as NotificationAiPendingPayload;
+    const pending = payloadResult.data;
 
     // Stable across replays: the engine's task id when it sent one. A fresh id
     // per attempt made a replay after a crash a second, unrelated task that

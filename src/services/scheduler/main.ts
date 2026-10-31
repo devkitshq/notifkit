@@ -8,8 +8,8 @@ import {
   STREAMS,
   CONSUMER_GROUPS,
   registry,
+  type EventRegistry,
   buildStreamEvent,
-  type NotificationScheduledPayload,
 } from "@/index.js";
 import { getPriorityBucket, globalEmitter, type WorkerOptions } from "@/shared/index.js";
 import { scheduledPayloads } from "@/db/schema.js";
@@ -41,12 +41,12 @@ let pollTimeout: ReturnType<typeof setTimeout> | null = null;
 let isPolling = false;
 
 export interface SchedulerWorkerOptions extends WorkerOptions {
-  registry: any;
+  registry: EventRegistry;
   redis: Redis;
 }
 
 export class SchedulerWorker extends BaseWorker {
-  private readonly registry: any;
+  private readonly registry: EventRegistry;
   private readonly redisCli: Redis;
 
   constructor(options: SchedulerWorkerOptions) {
@@ -66,7 +66,7 @@ export class SchedulerWorker extends BaseWorker {
       return;
     }
 
-    const scheduled = payloadResult.data as NotificationScheduledPayload;
+    const scheduled = payloadResult.data;
     const scheduledAt = new Date(scheduled.scheduledAt).getTime();
 
     const taskData = JSON.stringify({
