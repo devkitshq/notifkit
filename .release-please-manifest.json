@@ -1,13 +1,13 @@
 {
   ".": "0.1.15",
-  "packages/create-notifkit": "0.1.1",
-  "packages/mcp": "0.1.4",
-  "packages/provider-console": "0.1.2",
-  "packages/provider-discord": "0.1.3",
-  "packages/provider-fcm": "0.1.3",
-  "packages/provider-resend": "0.1.5",
-  "packages/provider-slack": "0.1.2",
-  "packages/provider-telegram": "0.1.2",
-  "packages/provider-twilio": "0.1.2",
-  "packages/provider-whatsapp": "0.1.2"
+  "packages/create-notifkit": "0.1.2",
+  "packages/mcp": "0.1.5",
+  "packages/provider-console": "0.1.3",
+  "packages/provider-discord": "0.1.4",
+  "packages/provider-fcm": "0.1.4",
+  "packages/provider-resend": "0.1.6",
+  "packages/provider-slack": "0.1.3",
+  "packages/provider-telegram": "0.1.3",
+  "packages/provider-twilio": "0.1.3",
+  "packages/provider-whatsapp": "0.1.3"
 }
