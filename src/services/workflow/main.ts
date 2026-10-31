@@ -33,8 +33,9 @@ import {
   uniqueConsumerId,
 } from "@/workers/bootstrap.js";
 import { WORKFLOW_TIMERS_KEY, pollWorkflowTimers, reapStuckInstances } from "./timers.js";
+import { durationToMs, parseDurationSeconds } from "./duration.js";
 
-export { WORKFLOW_TIMERS_KEY };
+export { WORKFLOW_TIMERS_KEY, parseDurationSeconds };
 
 /** How long a workflow instance lock is held before it self-expires. */
 const WORKFLOW_LOCK_TTL_SECONDS = 60;
@@ -43,31 +44,6 @@ const WORKFLOW_LOCK_RENEW_MS = (WORKFLOW_LOCK_TTL_SECONDS / 3) * 1000;
 /** How soon a resume that found its instance busy is tried again. */
 const WORKFLOW_RESUME_RETRY_MS = 2_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** Seconds per unit. Everything is read as seconds first, then scheduled in ms. */
-const DURATION_UNIT_SECONDS: Record<string, number> = {
-  ms: 0.001,
-  s: 1,
-  m: 60,
-  h: 3_600,
-  d: 86_400,
-};
-
-/**
- * `"500ms"`, `"0.5s"`, `"15m"`, `"1.5h"`, `"2.5d"` to seconds. Decimals are
- * read exactly; anything that is not a number and a unit throws. The old
- * parser matched on the last character, so "500ms" meant 500 seconds, and ran
- * parseInt, so "1.5h" meant one hour.
- */
-export function parseDurationSeconds(value: string, what: string): number {
-  const match = /^(\d+(?:\.\d+)?|\.\d+)(ms|s|m|h|d)$/.exec(value.trim());
-  if (!match) throw new Error(`Invalid ${what}: ${value}`);
-  return Number(match[1]) * DURATION_UNIT_SECONDS[match[2]!]!;
-}
-
-function durationToMs(value: string, what: string): number {
-  return Math.round(parseDurationSeconds(value, what) * 1000);
-}
 
 /** Thrown at a step boundary once the instance has been canceled. */
 class WorkflowCanceledError extends Error {
