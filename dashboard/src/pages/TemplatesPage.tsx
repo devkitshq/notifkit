@@ -23,7 +23,6 @@ interface Template {
   topics: string[];
   content: any;
   aiPrompts?: any;
-  updatedAt: string;
 }
 
 export default function TemplatesPage() {
@@ -104,14 +103,13 @@ export default function TemplatesPage() {
                   <TableHead>Template ID</TableHead>
                   <TableHead>Channel</TableHead>
                   <TableHead>Topics</TableHead>
-                  <TableHead>Last Updated</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {templates.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="h-32 text-center text-muted-foreground">
+                    <TableCell colSpan={4} className="h-32 text-center text-muted-foreground">
                       No templates synced for this project. Sync using initializeApp() or PUT
                       /v1/templates
                     </TableCell>
@@ -135,9 +133,6 @@ export default function TemplatesPage() {
                             </Badge>
                           ))}
                         </div>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
-                        {new Date(tpl.updatedAt).toLocaleString()}
                       </TableCell>
                       <TableCell className="text-right space-x-1">
                         <Button
