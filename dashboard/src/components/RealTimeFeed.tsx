@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CheckCircle2, XCircle, Clock, Settings2 } from "lucide-react";
 import { toast } from "sonner";
-import { useProject } from "@/hooks/useProjectKey";
+import { useApi, useProject } from "@/hooks/useProjectKey";
 import { useAuth } from "@/hooks/useAuth";
 
 interface DeliveryEvent {
@@ -24,28 +24,17 @@ export default function RealTimeFeed({
 }) {
   const [events, setEvents] = useState<DeliveryEvent[]>([]);
   const { projects, selectedProjectId, isLoadingProjects } = useProject();
-  const { apiUrl, token } = useAuth();
+  const { token } = useAuth();
+  const api = useApi();
 
   useEffect(() => {
     if (!token || !selectedProjectId) return;
     setIsConnected(false);
+    const ctrl = new AbortController();
 
-    const es = new EventSource(
-      `${apiUrl}/v1/events/stream?token=${encodeURIComponent(token)}&projectId=${encodeURIComponent(selectedProjectId)}`,
-    );
-
-    es.onopen = () => {
-      setIsConnected(true);
-      toast.success("Connected to real-time feed");
-    };
-
-    es.onerror = () => {
-      setIsConnected(false);
-    };
-
-    const handleDelivered = (e: MessageEvent) => {
+    const handleDelivered = (raw: string) => {
       try {
-        const data = JSON.parse(e.data);
+        const data = JSON.parse(raw);
         const newEvent: DeliveryEvent = {
           id: crypto.randomUUID(),
           type: "delivered",
@@ -60,9 +49,9 @@ export default function RealTimeFeed({
       }
     };
 
-    const handleFailed = (e: MessageEvent) => {
+    const handleFailed = (raw: string) => {
       try {
-        const data = JSON.parse(e.data);
+        const data = JSON.parse(raw);
         const newEvent: DeliveryEvent = {
           id: crypto.randomUUID(),
           type: "failed",
@@ -77,15 +66,48 @@ export default function RealTimeFeed({
       }
     };
 
-    es.addEventListener("delivery:delivered", handleDelivered);
-    es.addEventListener("delivery:failed", handleFailed);
-
-    return () => {
-      es.removeEventListener("delivery:delivered", handleDelivered);
-      es.removeEventListener("delivery:failed", handleFailed);
-      es.close();
+    // fetch rather than EventSource: EventSource cannot send headers, so the
+    // session token had to go in the URL, where access logs record it.
+    const connect = async () => {
+      while (!ctrl.signal.aborted) {
+        try {
+          const res = await api("/v1/events/stream", { signal: ctrl.signal });
+          if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+          setIsConnected(true);
+          toast.success("Connected to real-time feed");
+          const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+          let buffer = "";
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += value;
+            let end;
+            while ((end = buffer.indexOf("\n\n")) >= 0) {
+              const block = buffer.slice(0, end);
+              buffer = buffer.slice(end + 2);
+              let event = "";
+              let data = "";
+              for (const line of block.split("\n")) {
+                if (line.startsWith("event: ")) event = line.slice(7);
+                else if (line.startsWith("data: ")) data += line.slice(6);
+              }
+              if (event === "delivery:delivered") handleDelivered(data);
+              else if (event === "delivery:failed") handleFailed(data);
+            }
+          }
+        } catch {
+          // Reconnect below, as EventSource did.
+        }
+        if (ctrl.signal.aborted) return;
+        setIsConnected(false);
+        // The server's `retry: 10000`.
+        await new Promise((resolve) => setTimeout(resolve, 10000));
+      }
     };
-  }, [apiUrl, token, selectedProjectId, setIsConnected]);
+    void connect();
+
+    return () => ctrl.abort();
+  }, [api, token, selectedProjectId, setIsConnected]);
 
   return (
     <Card className="h-full flex flex-col border-border bg-card">
