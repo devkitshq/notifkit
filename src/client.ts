@@ -194,8 +194,6 @@ export class NotifkitClient {
     return this.syncTemplates({ templates: this.options.templates });
   }
 
-  // ─── Missing Endpoints additions ─────────────────────────────────────────────
-
   /** List registered workflow definitions. */
   async listWorkflows(options?: {
     limit?: number;
