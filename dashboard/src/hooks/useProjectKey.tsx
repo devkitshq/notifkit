@@ -13,7 +13,6 @@ interface ProjectContextType {
   projects: ProjectItem[];
   selectedProjectId: string;
   setSelectedProjectId: (id: string) => void;
-  projectApiKey: string | null;
   isLoadingProjects: boolean;
   refreshProjects: () => Promise<void>;
 }
@@ -72,7 +71,6 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         projects,
         selectedProjectId,
         setSelectedProjectId,
-        projectApiKey: token,
         isLoadingProjects,
         refreshProjects: fetchProjects,
       }}
@@ -88,4 +86,21 @@ export function useProject() {
     throw new Error("useProject must be used within a ProjectProvider");
   }
   return context;
+}
+
+/** `fetch` against the API with the session token and the selected project. */
+export function useApi() {
+  const { apiUrl, token } = useAuth();
+  const { selectedProjectId } = useProject();
+  return useCallback(
+    (path: string, init: RequestInit = {}) => {
+      const headers: Record<string, string> = {
+        ...(init.headers as Record<string, string> | undefined),
+        Authorization: `Bearer ${token}`,
+      };
+      if (selectedProjectId) headers["x-project-id"] = selectedProjectId;
+      return fetch(`${apiUrl}${path}`, { ...init, headers });
+    },
+    [apiUrl, token, selectedProjectId],
+  );
 }

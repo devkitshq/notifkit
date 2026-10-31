@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { BarChart3, RefreshCcw, CheckCircle2, XCircle, Activity, Layers } from "lucide-react";
 import { toast } from "sonner";
-import { useProject } from "@/hooks/useProjectKey";
+import { useApi } from "@/hooks/useProjectKey";
 import { useAuth } from "@/hooks/useAuth";
 
 interface MetricsData {
@@ -20,24 +20,17 @@ interface MetricsData {
 export default function AnalyticsPage() {
   const [data, setData] = useState<MetricsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const { projectApiKey, selectedProjectId } = useProject();
-  const { apiUrl, token } = useAuth();
+  const { token } = useAuth();
+  const api = useApi();
 
   const fetchMetrics = useCallback(async () => {
-    const authKey = projectApiKey || token;
-    if (!authKey) {
+    if (!token) {
       setIsLoading(false);
       return;
     }
     setIsLoading(true);
     try {
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${authKey}`,
-      };
-      if (selectedProjectId) {
-        headers["x-project-id"] = selectedProjectId;
-      }
-      const res = await fetch(`${apiUrl}/v1/system/metrics`, { headers });
+      const res = await api("/v1/system/metrics");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const metricsData = await res.json();
       setData(metricsData);
@@ -47,16 +40,15 @@ export default function AnalyticsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [apiUrl, projectApiKey, selectedProjectId, token]);
+  }, [api, token]);
 
   useEffect(() => {
-    const authKey = projectApiKey || token;
-    if (authKey) {
+    if (token) {
       void fetchMetrics();
       const interval = setInterval(() => void fetchMetrics(), 5000);
       return () => clearInterval(interval);
     }
-  }, [projectApiKey, token, fetchMetrics]);
+  }, [token, fetchMetrics]);
 
   const streamNames = [
     { key: "INBOUND_CRITICAL", label: "Inbound Critical Stream" },

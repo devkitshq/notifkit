@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useProject } from "@/hooks/useProjectKey";
+import { useApi, useProject } from "@/hooks/useProjectKey";
 import { useAuth } from "@/hooks/useAuth";
 
 interface User {
@@ -42,53 +42,41 @@ export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserDetail | null>(null);
-  const { projects, selectedProjectId, projectApiKey, isLoadingProjects } = useProject();
-  const { apiUrl } = useAuth();
+  const { projects, selectedProjectId, isLoadingProjects } = useProject();
+  const { token } = useAuth();
+  const api = useApi();
 
-  const fetchUsers = useCallback(
-    async (apiKey: string, projectId: string) => {
-      setLoading(true);
-      try {
-        const res = await fetch(`${apiUrl}/v1/users`, {
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "x-project-id": projectId,
-          },
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setUsers(data.users || []);
-        } else {
-          toast.error("Failed to load users");
-        }
-      } catch (err) {
-        console.error(err);
+  const fetchUsers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await api("/v1/users");
+      if (res.ok) {
+        const data = await res.json();
+        setUsers(data.users || []);
+      } else {
         toast.error("Failed to load users");
-      } finally {
-        setLoading(false);
       }
-    },
-    [apiUrl],
-  );
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to load users");
+    } finally {
+      setLoading(false);
+    }
+  }, [api]);
 
   useEffect(() => {
-    if (projectApiKey && selectedProjectId) {
-      void fetchUsers(projectApiKey, selectedProjectId);
+    if (token && selectedProjectId) {
+      void fetchUsers();
     } else {
       setUsers([]);
     }
-  }, [projectApiKey, selectedProjectId, fetchUsers]);
+  }, [token, selectedProjectId, fetchUsers]);
 
   const handleOpenDetail = async (u: User) => {
     const id = u.externalId || u.userId || u.id;
     if (!id) return;
     try {
-      const res = await fetch(`${apiUrl}/v1/users/${encodeURIComponent(id)}/details`, {
-        headers: {
-          Authorization: `Bearer ${projectApiKey}`,
-          "x-project-id": selectedProjectId,
-        },
-      });
+      const res = await api(`/v1/users/${encodeURIComponent(id)}/details`);
       if (res.ok) {
         const data = await res.json();
         setSelectedUser(data);
@@ -130,7 +118,7 @@ export default function UsersPage() {
                 <Clock className="h-8 w-8 opacity-50" />
                 <p className="text-sm">No projects exist. Create one in the Projects & Keys tab.</p>
               </div>
-            ) : !projectApiKey ? (
+            ) : !token ? (
               <div className="flex flex-col items-center justify-center h-40 text-muted-foreground gap-3">
                 <Clock className="h-8 w-8 opacity-50" />
                 <p className="text-sm">No API key found for this project.</p>

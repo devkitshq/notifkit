@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, RefreshCcw, RotateCcw, Trash2, Eye } from "lucide-react";
 import { toast } from "sonner";
-import { useProject } from "@/hooks/useProjectKey";
+import { useApi } from "@/hooks/useProjectKey";
 import { useAuth } from "@/hooks/useAuth";
 
 interface DLQMessage {
@@ -28,24 +28,17 @@ export default function DlqPage() {
   const [messages, setMessages] = useState<DLQMessage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedMessage, setSelectedMessage] = useState<DLQMessage | null>(null);
-  const { projectApiKey, selectedProjectId } = useProject();
-  const { apiUrl, token } = useAuth();
+  const { token } = useAuth();
+  const api = useApi();
 
   const fetchDLQ = useCallback(async () => {
-    const authKey = projectApiKey || token;
-    if (!authKey) {
+    if (!token) {
       setIsLoading(false);
       return;
     }
     setIsLoading(true);
     try {
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${authKey}`,
-      };
-      if (selectedProjectId) {
-        headers["x-project-id"] = selectedProjectId;
-      }
-      const res = await fetch(`${apiUrl}/v1/dlq`, { headers });
+      const res = await api("/v1/dlq");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setMessages(data.messages || []);
@@ -55,29 +48,20 @@ export default function DlqPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [apiUrl, projectApiKey, selectedProjectId, token]);
+  }, [api, token]);
 
   useEffect(() => {
-    const authKey = projectApiKey || token;
-    if (authKey) {
+    if (token) {
       void fetchDLQ();
     }
-  }, [projectApiKey, token, fetchDLQ]);
+  }, [token, fetchDLQ]);
 
   const handleReplay = async (id: string) => {
-    const authKey = projectApiKey || token;
-    if (!authKey) return;
+    if (!token) return;
     try {
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${authKey}`,
-      };
-      if (selectedProjectId) {
-        headers["x-project-id"] = selectedProjectId;
-      }
-      const res = await fetch(`${apiUrl}/v1/dlq/replay`, {
+      const res = await api("/v1/dlq/replay", {
         method: "POST",
-        headers,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id }),
       });
       if (!res.ok) throw new Error("Replay request failed");
@@ -89,19 +73,9 @@ export default function DlqPage() {
   };
 
   const handleDelete = async (id: string) => {
-    const authKey = projectApiKey || token;
-    if (!authKey) return;
+    if (!token) return;
     try {
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${authKey}`,
-      };
-      if (selectedProjectId) {
-        headers["x-project-id"] = selectedProjectId;
-      }
-      const res = await fetch(`${apiUrl}/v1/dlq/${id}`, {
-        method: "DELETE",
-        headers,
-      });
+      const res = await api(`/v1/dlq/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Delete failed");
       toast.success(`Message ${id} purged from DLQ`);
       void fetchDLQ();

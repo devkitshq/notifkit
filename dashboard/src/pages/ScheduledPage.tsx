@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Clock, RefreshCcw, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { useProject } from "@/hooks/useProjectKey";
+import { useApi, useProject } from "@/hooks/useProjectKey";
 import { useAuth } from "@/hooks/useAuth";
 
 interface ScheduledItem {
@@ -25,18 +25,14 @@ interface ScheduledItem {
 export default function ScheduledPage() {
   const [items, setItems] = useState<ScheduledItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const { projectApiKey, selectedProjectId } = useProject();
-  const { apiUrl } = useAuth();
+  const { selectedProjectId } = useProject();
+  const { token } = useAuth();
+  const api = useApi();
 
   const fetchScheduled = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/v1/notifications/scheduled`, {
-        headers: {
-          Authorization: `Bearer ${projectApiKey}`,
-          "x-project-id": selectedProjectId,
-        },
-      });
+      const res = await api("/v1/notifications/scheduled");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setItems(data.scheduled || []);
@@ -46,23 +42,17 @@ export default function ScheduledPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [apiUrl, projectApiKey, selectedProjectId]);
+  }, [api]);
 
   useEffect(() => {
-    if (projectApiKey && selectedProjectId) {
+    if (token && selectedProjectId) {
       void fetchScheduled();
     }
-  }, [projectApiKey, selectedProjectId, fetchScheduled]);
+  }, [token, selectedProjectId, fetchScheduled]);
 
   const handleCancel = async (taskId: string) => {
     try {
-      const res = await fetch(`${apiUrl}/v1/notifications/${taskId}`, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${projectApiKey}`,
-          "x-project-id": selectedProjectId,
-        },
-      });
+      const res = await api(`/v1/notifications/${taskId}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Cancel failed");
       toast.success(`Task ${taskId} canceled`);
       void fetchScheduled();

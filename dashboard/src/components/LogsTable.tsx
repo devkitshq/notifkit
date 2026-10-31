@@ -24,7 +24,7 @@ import {
   GitCommit,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useProject } from "@/hooks/useProjectKey";
+import { useApi, useProject } from "@/hooks/useProjectKey";
 import { useAuth } from "@/hooks/useAuth";
 
 interface LogEntry {
@@ -54,11 +54,12 @@ export default function LogsTable() {
   const [taskLifecycle, setTaskLifecycle] = useState<LogEntry[]>([]);
   const [loadingLifecycle, setLoadingLifecycle] = useState(false);
 
-  const { projects, selectedProjectId, projectApiKey, isLoadingProjects } = useProject();
-  const { apiUrl } = useAuth();
+  const { projects, selectedProjectId, isLoadingProjects } = useProject();
+  const { token } = useAuth();
+  const api = useApi();
 
   const fetchLogs = useCallback(
-    async (apiKey: string, projectId: string, cursor?: string | null) => {
+    async (cursor?: string | null) => {
       setIsLoading(true);
       try {
         const query = new URLSearchParams({ limit: "25" });
@@ -67,12 +68,7 @@ export default function LogsTable() {
         if (channelFilter) query.set("channel", channelFilter);
         if (statusFilter) query.set("status", statusFilter);
 
-        const res = await fetch(`${apiUrl}/v1/notifications/logs?${query.toString()}`, {
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "x-project-id": projectId,
-          },
-        });
+        const res = await api(`/v1/notifications/logs?${query.toString()}`);
 
         if (!res.ok) {
           throw new Error(`Failed to fetch: ${res.statusText}`);
@@ -88,28 +84,23 @@ export default function LogsTable() {
         setIsLoading(false);
       }
     },
-    [apiUrl, search, channelFilter, statusFilter],
+    [api, search, channelFilter, statusFilter],
   );
 
   useEffect(() => {
-    if (projectApiKey && selectedProjectId) {
+    if (token && selectedProjectId) {
       setCursorHistory([null]);
       setPageIndex(0);
-      void fetchLogs(projectApiKey, selectedProjectId, null);
+      void fetchLogs(null);
     } else {
       setLogs([]);
     }
-  }, [projectApiKey, selectedProjectId, search, channelFilter, statusFilter, fetchLogs]);
+  }, [token, selectedProjectId, search, channelFilter, statusFilter, fetchLogs]);
 
   useEffect(() => {
-    if (selectedLog && projectApiKey && selectedProjectId) {
+    if (selectedLog && token && selectedProjectId) {
       setLoadingLifecycle(true);
-      fetch(`${apiUrl}/v1/notifications/${selectedLog.taskId}`, {
-        headers: {
-          Authorization: `Bearer ${projectApiKey}`,
-          "x-project-id": selectedProjectId,
-        },
-      })
+      api(`/v1/notifications/${selectedLog.taskId}`)
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
           if (data && data.logs) {
@@ -126,22 +117,22 @@ export default function LogsTable() {
     } else {
       setTaskLifecycle([]);
     }
-  }, [apiUrl, selectedLog, projectApiKey, selectedProjectId]);
+  }, [api, selectedLog, token, selectedProjectId]);
 
   const handleNextPage = () => {
-    if (nextCursor && projectApiKey && selectedProjectId) {
+    if (nextCursor && token && selectedProjectId) {
       const newHistory = [...cursorHistory.slice(0, pageIndex + 1), nextCursor];
       setCursorHistory(newHistory);
       setPageIndex(pageIndex + 1);
-      void fetchLogs(projectApiKey, selectedProjectId, nextCursor);
+      void fetchLogs(nextCursor);
     }
   };
 
   const handlePrevPage = () => {
-    if (pageIndex > 0 && projectApiKey && selectedProjectId) {
+    if (pageIndex > 0 && token && selectedProjectId) {
       const prevCursor = cursorHistory[pageIndex - 1] ?? null;
       setPageIndex(pageIndex - 1);
-      void fetchLogs(projectApiKey, selectedProjectId, prevCursor);
+      void fetchLogs(prevCursor);
     }
   };
 
@@ -162,10 +153,9 @@ export default function LogsTable() {
             variant="outline"
             size="icon"
             onClick={() => {
-              if (projectApiKey && selectedProjectId)
-                void fetchLogs(projectApiKey, selectedProjectId, cursorHistory[pageIndex]);
+              if (token && selectedProjectId) void fetchLogs(cursorHistory[pageIndex]);
             }}
-            disabled={isLoading || !projectApiKey || !selectedProjectId}
+            disabled={isLoading || !token || !selectedProjectId}
             className="h-8 w-8 rounded-md border-border"
           >
             <RefreshCcw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />

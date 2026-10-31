@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { GitFork, RefreshCcw, Play, Search, Eye, Layers } from "lucide-react";
 import { toast } from "sonner";
-import { useProject } from "@/hooks/useProjectKey";
+import { useApi, useProject } from "@/hooks/useProjectKey";
 import { useAuth } from "@/hooks/useAuth";
 
 interface WorkflowDef {
@@ -45,18 +45,14 @@ export default function WorkflowsPage() {
   const [searchedInstance, setSearchedInstance] = useState<WorkflowInstance | null>(null);
   const [searchingInstance, setSearchingInstance] = useState(false);
 
-  const { projectApiKey, selectedProjectId } = useProject();
-  const { apiUrl } = useAuth();
+  const { selectedProjectId } = useProject();
+  const { token } = useAuth();
+  const api = useApi();
 
   const fetchWorkflows = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/v1/workflows`, {
-        headers: {
-          Authorization: `Bearer ${projectApiKey}`,
-          "x-project-id": selectedProjectId,
-        },
-      });
+      const res = await api("/v1/workflows");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setWorkflows(data.workflows || []);
@@ -66,23 +62,19 @@ export default function WorkflowsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [apiUrl, projectApiKey, selectedProjectId]);
+  }, [api]);
 
   useEffect(() => {
-    if (projectApiKey && selectedProjectId) {
+    if (token && selectedProjectId) {
       void fetchWorkflows();
     }
-  }, [projectApiKey, selectedProjectId, fetchWorkflows]);
+  }, [token, selectedProjectId, fetchWorkflows]);
 
   const handleTrigger = async (name: string) => {
     try {
-      const res = await fetch(`${apiUrl}/v1/workflows/trigger`, {
+      const res = await api("/v1/workflows/trigger", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${projectApiKey}`,
-          "x-project-id": selectedProjectId,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name, input: {} }),
       });
       if (!res.ok) throw new Error("Trigger failed");
@@ -102,12 +94,7 @@ export default function WorkflowsPage() {
     if (!targetId) return;
     setSearchingInstance(true);
     try {
-      const res = await fetch(`${apiUrl}/v1/workflows/instances/${encodeURIComponent(targetId)}`, {
-        headers: {
-          Authorization: `Bearer ${projectApiKey}`,
-          "x-project-id": selectedProjectId,
-        },
-      });
+      const res = await api(`/v1/workflows/instances/${encodeURIComponent(targetId)}`);
       if (!res.ok) throw new Error("Instance not found");
       const data = await res.json();
       setSearchedInstance(data);

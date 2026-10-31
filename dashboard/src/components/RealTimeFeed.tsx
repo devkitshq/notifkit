@@ -23,15 +23,15 @@ export default function RealTimeFeed({
   setIsConnected: (status: boolean) => void;
 }) {
   const [events, setEvents] = useState<DeliveryEvent[]>([]);
-  const { projects, selectedProjectId, projectApiKey, isLoadingProjects } = useProject();
-  const { apiUrl } = useAuth();
+  const { projects, selectedProjectId, isLoadingProjects } = useProject();
+  const { apiUrl, token } = useAuth();
 
   useEffect(() => {
-    if (!projectApiKey || !selectedProjectId) return;
+    if (!token || !selectedProjectId) return;
     setIsConnected(false);
 
     const es = new EventSource(
-      `${apiUrl}/v1/events/stream?token=${encodeURIComponent(projectApiKey)}&projectId=${encodeURIComponent(selectedProjectId)}`,
+      `${apiUrl}/v1/events/stream?token=${encodeURIComponent(token)}&projectId=${encodeURIComponent(selectedProjectId)}`,
     );
 
     es.onopen = () => {
@@ -85,7 +85,7 @@ export default function RealTimeFeed({
       es.removeEventListener("delivery:failed", handleFailed);
       es.close();
     };
-  }, [apiUrl, projectApiKey, selectedProjectId, setIsConnected]);
+  }, [apiUrl, token, selectedProjectId, setIsConnected]);
 
   return (
     <Card className="h-full flex flex-col border-border bg-card">
@@ -116,7 +116,7 @@ export default function RealTimeFeed({
               <Clock className="h-8 w-8 opacity-50" />
               <p className="text-sm">No projects exist. Create one in the Projects & Keys tab.</p>
             </div>
-          ) : !projectApiKey ? (
+          ) : !token ? (
             <div className="flex flex-col items-center justify-center h-40 text-muted-foreground gap-3">
               <Clock className="h-8 w-8 opacity-50" />
               <p className="text-sm">No API key found for this project.</p>

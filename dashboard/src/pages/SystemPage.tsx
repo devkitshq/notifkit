@@ -15,7 +15,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useProject } from "@/hooks/useProjectKey";
+import { useApi } from "@/hooks/useProjectKey";
 import { useAuth } from "@/hooks/useAuth";
 
 interface WorkerHealth {
@@ -40,24 +40,17 @@ interface SystemHealthData {
 export default function SystemPage() {
   const [data, setData] = useState<SystemHealthData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const { projectApiKey, selectedProjectId } = useProject();
-  const { apiUrl, token } = useAuth();
+  const { token } = useAuth();
+  const api = useApi();
 
   const fetchHealth = useCallback(async () => {
-    const authKey = projectApiKey || token;
-    if (!authKey) {
+    if (!token) {
       setIsLoading(false);
       return;
     }
 
     try {
-      const headers: Record<string, string> = {
-        Authorization: `Bearer ${authKey}`,
-      };
-      if (selectedProjectId) {
-        headers["x-project-id"] = selectedProjectId;
-      }
-      const res = await fetch(`${apiUrl}/v1/system/health`, { headers });
+      const res = await api("/v1/system/health");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const healthData = await res.json();
       setData(healthData);
@@ -67,16 +60,15 @@ export default function SystemPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [apiUrl, projectApiKey, selectedProjectId, token]);
+  }, [api, token]);
 
   useEffect(() => {
-    const authKey = projectApiKey || token;
-    if (authKey) {
+    if (token) {
       void fetchHealth();
       const interval = setInterval(() => void fetchHealth(), 5000);
       return () => clearInterval(interval);
     }
-  }, [projectApiKey, token, fetchHealth]);
+  }, [token, fetchHealth]);
 
   const workerNames = ["enricher", "engine", "scheduler", "delivery", "ai", "workflow", "events"];
 

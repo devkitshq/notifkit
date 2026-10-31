@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FileCode2, RefreshCcw, Eye, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { useProject } from "@/hooks/useProjectKey";
+import { useApi, useProject } from "@/hooks/useProjectKey";
 import { useAuth } from "@/hooks/useAuth";
 
 interface Template {
@@ -30,18 +30,14 @@ export default function TemplatesPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
-  const { projectApiKey, selectedProjectId } = useProject();
-  const { apiUrl } = useAuth();
+  const { selectedProjectId } = useProject();
+  const { token } = useAuth();
+  const api = useApi();
 
   const fetchTemplates = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/v1/templates`, {
-        headers: {
-          Authorization: `Bearer ${projectApiKey}`,
-          "x-project-id": selectedProjectId,
-        },
-      });
+      const res = await api("/v1/templates");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setTemplates(data.templates || []);
@@ -51,23 +47,17 @@ export default function TemplatesPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [apiUrl, projectApiKey, selectedProjectId]);
+  }, [api]);
 
   useEffect(() => {
-    if (projectApiKey && selectedProjectId) {
+    if (token && selectedProjectId) {
       void fetchTemplates();
     }
-  }, [projectApiKey, selectedProjectId, fetchTemplates]);
+  }, [token, selectedProjectId, fetchTemplates]);
 
   const handleDelete = async (id: string) => {
     try {
-      const res = await fetch(`${apiUrl}/v1/templates/${id}`, {
-        method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${projectApiKey}`,
-          "x-project-id": selectedProjectId,
-        },
-      });
+      const res = await api(`/v1/templates/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Delete failed");
       toast.success(`Template ${id} deleted`);
       void fetchTemplates();

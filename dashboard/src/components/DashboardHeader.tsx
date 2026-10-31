@@ -1,26 +1,20 @@
 import { useEffect, useState } from "react";
 import { Activity, Bell, FolderKey, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { useProject } from "@/hooks/useProjectKey";
+import { useApi, useProject } from "@/hooks/useProjectKey";
 import { useAuth } from "@/hooks/useAuth";
 
 export default function DashboardHeader({ isConnected }: { isConnected: boolean }) {
-  const { projects, selectedProjectId, setSelectedProjectId, projectApiKey } = useProject();
-  const { apiUrl, token } = useAuth();
+  const { projects, selectedProjectId, setSelectedProjectId } = useProject();
+  const { token } = useAuth();
+  const api = useApi();
   const [highBackpressure, setHighBackpressure] = useState(false);
 
   useEffect(() => {
-    const authKey = projectApiKey || token;
-    if (!authKey) return;
+    if (!token) return;
     const checkMetrics = async () => {
       try {
-        const headers: Record<string, string> = {
-          Authorization: `Bearer ${authKey}`,
-        };
-        if (selectedProjectId) {
-          headers["x-project-id"] = selectedProjectId;
-        }
-        const res = await fetch(`${apiUrl}/v1/system/metrics`, { headers });
+        const res = await api("/v1/system/metrics");
         if (res.ok) {
           const data = await res.json();
           const streams = data.streams || {};
@@ -35,7 +29,7 @@ export default function DashboardHeader({ isConnected }: { isConnected: boolean 
     void checkMetrics();
     const interval = setInterval(() => void checkMetrics(), 10000);
     return () => clearInterval(interval);
-  }, [apiUrl, projectApiKey, selectedProjectId, token]);
+  }, [api, token]);
 
   return (
     <header className="sticky top-0 z-40 w-full border-b border-border bg-background">
