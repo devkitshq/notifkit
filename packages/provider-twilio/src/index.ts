@@ -144,7 +144,7 @@ export class TwilioTransport implements Transport {
       const message = await client.messages.create({
         to,
         from,
-        body,
+        body: truncate(body, TWILIO_MAX_BODY),
         ...(this.statusCallbackUrl ? { statusCallback: this.statusCallbackUrl } : {}),
       });
 
@@ -323,4 +323,19 @@ function isPermanentStatus(status: number | undefined): boolean {
   return (
     typeof status === "number" && status >= 400 && status < 500 && status !== 408 && status !== 429
   );
+}
+
+/** Twilio rejects a message body longer than this (error 21617). */
+const TWILIO_MAX_BODY = 1600;
+
+/**
+ * Cuts `text` to at most `max` UTF-16 units, ending in "…", without splitting
+ * a surrogate pair. Twilio refuses an over-long body outright, so a truncated
+ * message beats a permanently failed one.
+ */
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  let cut = text.slice(0, max - 1);
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  return `${cut}…`;
 }
