@@ -103,6 +103,7 @@ export function buildStepNotifyPayload(
     fallback: args.fallback ?? false,
     scheduledAt: args.sendAt,
     idempotencyKey,
+    campaignId: args.campaign,
     ...(workflowInstanceId ? { workflowInstanceId } : {}),
   };
 }

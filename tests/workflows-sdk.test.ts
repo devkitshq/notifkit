@@ -75,6 +75,16 @@ describe("Workflow SDK Target & Payload Resolution (src/workflows/sdk.ts)", () =
   });
 
   describe("buildStepNotifyPayload", () => {
+    it("carries the step's campaign as campaignId", () => {
+      const payload = buildStepNotifyPayload(
+        { template: "t", user: "u-1", campaign: "spring-sale" },
+        null,
+        "proj-1",
+      );
+
+      expect(payload.campaignId).toBe("spring-sale");
+    });
+
     it("maps all fields correctly with default values", () => {
       const stepArgs: WorkflowNotifyInput = {
         template: "welcome-template",
