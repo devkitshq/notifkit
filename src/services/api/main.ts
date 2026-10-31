@@ -529,7 +529,10 @@ export async function startApiServer() {
           });
           tokenHashToToken.set(tokenHash, token);
           if (tokenHashToToken.size > 2000) {
+            // A cached token must stay findable by its hash, or revoking it
+            // cannot evict it, so the two are dropped together.
             tokenHashToToken.clear();
+            authCache.clear();
           }
         }
       }
