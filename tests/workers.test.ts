@@ -187,6 +187,35 @@ describe("BaseWorker Retry and DLQ Logic", () => {
     );
   });
 
+  it("leaves no pending timer behind after a clean stop", async () => {
+    vi.useFakeTimers();
+    try {
+      let release!: () => void;
+      const stopped = new Promise<void>((r) => (release = r));
+      const consumer = {
+        ...mockConsumer,
+        ensureGroup: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn(async () => release()),
+        readBatch: async function* () {
+          await stopped;
+        },
+      };
+      const worker = new TestWorker({
+        consumer,
+        pendingScanner: { getPendingCount: vi.fn().mockResolvedValue(0) } as any,
+        logger: mockLogger,
+      });
+
+      await worker.start();
+      await worker.stop();
+
+      // The 30s stop timeout would otherwise keep the process alive.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("immediately moves to DLQ on attempt 1 when process throws NonRetryableError", async () => {
     class PermanentFailWorker extends BaseWorker {
       protected async process(): Promise<void> {

@@ -134,12 +134,15 @@ export abstract class BaseWorker {
     this.stopRecoveryLoop();
 
     if (this.runLoop) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         this.runLoop,
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Worker stop timeout")), 30_000),
-        ),
-      ]).catch((err) => this.logger.warn({ err }, "Worker shutdown timeout or error"));
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Worker stop timeout")), 30_000);
+        }),
+      ])
+        .catch((err) => this.logger.warn({ err }, "Worker shutdown timeout or error"))
+        .finally(() => clearTimeout(timer));
     }
 
     this.logger.info("worker shutdown complete");
