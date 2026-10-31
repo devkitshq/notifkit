@@ -547,14 +547,6 @@ export async function startApiServer() {
       }
 
       // Project rate limit - In-Memory Token Leasing with Redis Sliding Window
-      if (!apiRateLimiter && redis?.native) {
-        apiRateLimiter = new ApiRateLimiter({
-          redis: redis.native,
-          windowMs: API_RATE_LIMIT_WINDOW_MS,
-          logger,
-        });
-      }
-
       const allowed = apiRateLimiter
         ? await apiRateLimiter.check(projectId || "global", projectRateLimitRpm)
         : true;
