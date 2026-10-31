@@ -1,39 +1,39 @@
-name: Publish
+name: Release
 
 on:
   push:
-    branches: [publish]
-  pull_request:
-    branches: [publish]
+    branches: [main]
 
 permissions:
   contents: read
-  id-token: write # required for npm --provenance
 
 concurrency:
-  group: publish
+  group: release
   cancel-in-progress: false
 
 jobs:
-  # Make this a required status check on `publish` so only PRs from main can merge.
-  source-is-main:
-    if: github.event_name == 'pull_request'
+  # Keeps a "chore: release" PR open with version bumps + changelogs built from
+  # conventional commits. Merging that PR tags and creates the GitHub releases.
+  release-please:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
     steps:
-      - run: test "${{ github.head_ref }}" = main || { echo "Only main can be merged into publish"; exit 1; }
+      - uses: googleapis/release-please-action@v4
+        id: release
 
   publish:
-    if: github.event_name == 'push'
+    needs: release-please
+    if: needs.release-please.outputs.releases_created == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm --provenance
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # Backstop for direct pushes: the files must match main exactly (a PR merge
-      # commit isn't on main, but its tree is).
-      - name: Ensure publish matches main
-        run: git diff --quiet HEAD origin/main || { echo "publish differs from main; merge main only"; exit 1; }
 
       - uses: actions/setup-node@v4
         with:
@@ -50,7 +50,7 @@ jobs:
       - run: npm test
 
       # Publishes every package whose current version isn't on npm yet, so
-      # unbumped packages are skipped instead of failing the run.
+      # packages the release didn't bump are skipped.
       - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bootstrap-sha": "bb626c648e58cd683f8c907f24dfc9f280967283",
+  "release-type": "node",
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "packages": {
+    ".": {
+      "package-name": "notifkit",
+      "exclude-paths": ["packages"]
+    },
+    "packages/create-notifkit": {
+      "package-name": "create-notifkit"
+    },
+    "packages/mcp": {
+      "package-name": "@notifkit/mcp"
+    },
+    "packages/provider-console": {
+      "package-name": "@notifkit/provider-console"
+    },
+    "packages/provider-discord": {
+      "package-name": "@notifkit/provider-discord"
+    },
+    "packages/provider-fcm": {
+      "package-name": "@notifkit/provider-fcm"
+    },
+    "packages/provider-resend": {
+      "package-name": "@notifkit/provider-resend"
+    },
+    "packages/provider-slack": {
+      "package-name": "@notifkit/provider-slack"
+    },
+    "packages/provider-telegram": {
+      "package-name": "@notifkit/provider-telegram"
+    },
+    "packages/provider-twilio": {
+      "package-name": "@notifkit/provider-twilio"
+    },
+    "packages/provider-whatsapp": {
+      "package-name": "@notifkit/provider-whatsapp"
+    }
+  }
+}
