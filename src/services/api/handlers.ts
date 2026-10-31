@@ -325,7 +325,10 @@ export function createHandlers(deps: Deps) {
 
     // Invalidate caches
     for (const t of parsed.data.templates) {
-      await deps.redis.native.publish("template.invalidated", `${ctx.projectId}:${t.id}`);
+      await deps.redis.native.publish(
+        PUBSUB_CHANNELS.TEMPLATE_INVALIDATED,
+        `${ctx.projectId}:${t.id}`,
+      );
     }
 
     logger.info({ synced }, "templates synced");
@@ -1005,7 +1008,10 @@ export function createHandlers(deps: Deps) {
     const deleted = await deps.templateRepo.delete(ctx.projectId!, templateId);
     if (!deleted) return sendJson(res, 404, { error: "template_not_found", id: templateId });
 
-    await deps.redis.native.publish("template.invalidated", `${ctx.projectId}:${templateId}`);
+    await deps.redis.native.publish(
+      PUBSUB_CHANNELS.TEMPLATE_INVALIDATED,
+      `${ctx.projectId}:${templateId}`,
+    );
     logger.info({ templateId }, "template deleted");
     sendNoContent(res);
   }
@@ -1200,7 +1206,7 @@ export function createHandlers(deps: Deps) {
     const deleted = isUuid(id) && isUuid(keyId) && (await deps.projectRepo.deleteApiKey(id, keyId));
     if (!deleted) return sendJson(res, 404, { error: "key_not_found" });
 
-    await deps.redis.native.publish("apikey.invalidated", "*");
+    await deps.redis.native.publish(PUBSUB_CHANNELS.API_KEY_INVALIDATED, "*");
     sendNoContent(res);
   }
 
