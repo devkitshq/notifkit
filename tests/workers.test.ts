@@ -1669,6 +1669,204 @@ describe("DeliveryWorker", () => {
     });
   });
 
+  /** Pins the exact outcome events each path publishes, push and otherwise. */
+  describe("outcome events", () => {
+    const ids = {
+      projectId: "123e4567-e89b-12d3-a456-426614174000",
+      taskId: "123e4567-e89b-12d3-a456-426614174001",
+      enrichedEventId: "123e4567-e89b-12d3-a456-426614174002",
+    };
+    const tags = {
+      templateId: "order-shipped",
+      workflowInstanceId: "123e4567-e89b-12d3-a456-426614174005",
+      campaignId: "spring-sale",
+    };
+    const task = (over: Record<string, unknown> = {}) => dispatched({ ...tags, ...over });
+    const pushTask = (over: Record<string, unknown> = {}) =>
+      task({ channel: "push", destination: "device-token-1", ...over });
+    const sendsBack = (res: unknown) =>
+      mockTransportRegistry.getAll.mockReturnValue([{ send: vi.fn().mockResolvedValue(res) }]);
+    /** The one event the worker handed to its batch publisher, and when. */
+    const added = (spy: any) => {
+      expect(spy).toHaveBeenCalledTimes(1);
+      return { event: spy.mock.calls[0][0], order: spy.mock.invocationCallOrder[0] };
+    };
+    const inFlight = { attempt: 3, dispatchedAt: expect.any(String) };
+
+    it("push delivered without a provider id: push-success, logged before the event", async () => {
+      sendsBack({ success: true });
+      const spy = vi.spyOn(worker["eventProcessor"], "add");
+
+      await worker.process(pushTask() as any);
+
+      const { event, order } = added(spy);
+      expect(event.type).toBe("notification.delivered");
+      expect(event.payload).toStrictEqual({
+        ...ids,
+        channel: "push",
+        deliveredAt: expect.any(String),
+        providerMessageId: "push-success",
+        ...tags,
+        attempt: 1,
+        dispatchedAt: expect.any(String),
+      });
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        { taskId: ids.taskId, messageId: "push-success" },
+        "push delivered",
+      );
+      expect(mockLogger.debug.mock.invocationCallOrder[0]).toBeLessThan(order);
+    });
+
+    it("email delivered without a provider id: success, logged after the event", async () => {
+      sendsBack({ success: true });
+      const spy = vi.spyOn(worker["eventProcessor"], "add");
+
+      await worker.process(task() as any);
+
+      const { event, order } = added(spy);
+      expect(event.type).toBe("notification.delivered");
+      expect(event.payload).toStrictEqual({
+        ...ids,
+        channel: "email",
+        deliveredAt: expect.any(String),
+        providerMessageId: "success",
+        ...tags,
+        attempt: 1,
+        dispatchedAt: expect.any(String),
+      });
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        { taskId: ids.taskId, channel: "email", messageId: undefined },
+        "notification delivered",
+      );
+      expect(mockLogger.debug.mock.invocationCallOrder[0]).toBeGreaterThan(order);
+    });
+
+    it("push failure carries recipientId and push_failure, logged before the event", async () => {
+      sendsBack({ success: false, error: "apns down" });
+      const spy = vi.spyOn(worker["eventProcessor"], "add");
+
+      await expect(worker.process(pushTask({ deliveryAttemptCount: 2 }) as any)).rejects.toThrow(
+        "apns down",
+      );
+
+      const { event, order } = added(spy);
+      expect(event.type).toBe("notification.failed");
+      expect(event.payload).toStrictEqual({
+        ...ids,
+        recipientId: "usr-1",
+        channel: "push",
+        failureReason: "apns down",
+        failureCode: "push_failure",
+        retryable: false,
+        ...inFlight,
+        ...tags,
+      });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { taskId: ids.taskId, error: "apns down" },
+        "push delivery failed",
+      );
+      expect(mockLogger.warn.mock.invocationCallOrder.at(-1)).toBeLessThan(order);
+      expect(mockGlobalEmitter.emit.mock.invocationCallOrder[0]).toBeLessThan(order);
+    });
+
+    it("email failure leaves out recipientId and uses provider_error, logged after the event", async () => {
+      sendsBack({ success: false, error: "mailbox full" });
+      const spy = vi.spyOn(worker["eventProcessor"], "add");
+
+      await expect(worker.process(task({ deliveryAttemptCount: 2 }) as any)).rejects.toThrow(
+        "mailbox full",
+      );
+
+      const { event, order } = added(spy);
+      expect(event.type).toBe("notification.failed");
+      expect(event.payload).toStrictEqual({
+        ...ids,
+        channel: "email",
+        failureReason: "mailbox full",
+        failureCode: "provider_error",
+        retryable: false,
+        ...inFlight,
+        ...tags,
+      });
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        { taskId: ids.taskId, channel: "email", error: "mailbox full" },
+        "delivery failed completely across providers",
+      );
+      expect(mockLogger.warn.mock.invocationCallOrder.at(-1)).toBeGreaterThan(order);
+      expect(mockGlobalEmitter.emit.mock.invocationCallOrder[0]).toBeGreaterThan(order);
+    });
+
+    it("an invalid push token fails with recipientId, invalid_token and push_failure", async () => {
+      sendsBack({ success: false, invalidToken: true });
+      const spy = vi.spyOn(worker["eventProcessor"], "add");
+
+      await expect(worker.process(pushTask() as any)).rejects.toThrow("invalid token");
+
+      expect(added(spy).event.payload).toStrictEqual({
+        ...ids,
+        recipientId: "usr-1",
+        channel: "push",
+        failureReason: "invalid_token",
+        failureCode: "push_failure",
+        retryable: false,
+        attempt: 1,
+        dispatchedAt: expect.any(String),
+        ...tags,
+      });
+    });
+
+    it("an invalid token outside push is an ordinary provider failure", async () => {
+      sendsBack({ success: false, invalidToken: true, error: "bad address" });
+      const spy = vi.spyOn(worker["eventProcessor"], "add");
+
+      await expect(worker.process(task({ deliveryAttemptCount: 2 }) as any)).rejects.toThrow(
+        "bad address",
+      );
+
+      expect(mockDeviceRepo.deactivate).not.toHaveBeenCalled();
+      expect(added(spy).event.payload.failureCode).toBe("provider_error");
+    });
+
+    it("no transport fails with recipientId and no dispatched entry", async () => {
+      mockTransportRegistry.getAll.mockReturnValue([]);
+      const spy = vi.spyOn(worker["eventProcessor"], "add");
+
+      await worker.process(task() as any);
+
+      expect(added(spy).event.payload).toStrictEqual({
+        ...ids,
+        recipientId: "usr-1",
+        channel: "email",
+        failureReason: "no transport registered for channel",
+        failureCode: "no_transport",
+        retryable: false,
+        attempt: 1,
+        ...tags,
+      });
+    });
+
+    it("running out of throttle deferrals fails with recipientId and no dispatched entry", async () => {
+      mockTransportRegistry.getAll.mockReturnValue([
+        { send: vi.fn(), limits: { limit: 5, windowSeconds: 60 } },
+      ]);
+      mockRedis.leaseApiRateLimit = vi.fn().mockResolvedValue(0);
+      const spy = vi.spyOn(worker["eventProcessor"], "add");
+
+      await worker.process(task({ throttleAttemptCount: MAX_THROTTLE_DEFERRALS }) as any);
+
+      expect(added(spy).event.payload).toStrictEqual({
+        ...ids,
+        recipientId: "usr-1",
+        channel: "email",
+        failureReason: "provider rate limit max attempts exceeded",
+        failureCode: "provider_throttle_exceeded",
+        retryable: false,
+        attempt: 1,
+        ...tags,
+      });
+    });
+  });
+
   // ── Circuit breaker ───────────────────────────────────────────────────────
 
   /**
