@@ -273,14 +273,16 @@ describe("WhatsAppTransport", () => {
     });
   });
 
-  it("flags an expired access token, and gives up on a hung API within the task's timeout", async () => {
+  it("doesn't blame the recipient for our expired token, and gives up on a hung API within the task's timeout", async () => {
+    // 401 / code 190 is our access token, not the recipient: invalidToken
+    // would deactivate their WhatsApp contact.
     net.on("graph.facebook.com", () => ({
       status: 401,
       json: { error: { code: 190, message: "Session expired" } },
     }));
     expect(await w.send(task({ destination: "+1555", content: { text: "x" } }))).toMatchObject({
       success: false,
-      invalidToken: true,
+      invalidToken: false,
       error: "Session expired",
     });
 
