@@ -40,6 +40,10 @@ let healthInterval: NodeJS.Timeout | null = null;
 let pollTimeout: ReturnType<typeof setTimeout> | null = null;
 let isPolling = false;
 
+/** Scheduled tasks are spread over 16 sorted sets by the last hex digit of the task id. */
+const shardOf = (taskId: string): number => parseInt(taskId.slice(-1), 16) || 0;
+const zsetKey = (shard: number): string => `notif:scheduled:zset:${shard}`;
+
 export interface SchedulerWorkerOptions extends WorkerOptions {
   registry: EventRegistry;
   redis: Redis;
@@ -75,9 +79,8 @@ export class SchedulerWorker extends BaseWorker {
       traceId: event.metadata.traceId,
     });
 
-    const shard = parseInt(scheduled.taskId.slice(-1), 16) || 0;
-    const zsetKey = `notif:scheduled:zset:${shard}`;
-    await this.redisCli.zadd(zsetKey, scheduledAt, taskData);
+    const shard = shardOf(scheduled.taskId);
+    await this.redisCli.zadd(zsetKey(shard), scheduledAt, taskData);
     this.logger.debug(
       { taskId: scheduled.taskId, scheduledAt: scheduled.scheduledAt, shard },
       "scheduled task queued in ZSET",
@@ -107,7 +110,7 @@ export async function executeSchedulerPoll(
     const pipeline = redis.pipeline();
 
     for (let i = 0; i < 16; i++) {
-      const shardKey = `notif:scheduled:zset:${i}`;
+      const shardKey = zsetKey(i);
       pipeline.schedulerPoll(shardKey, now, perShardLimit, visibilityTimeout);
     }
 
@@ -161,18 +164,14 @@ export async function executeSchedulerPoll(
     for (let i = 0; i < parsedTasks.length; i++) {
       const { taskStr, taskId, traceId } = parsedTasks[i];
       if (released.has(taskId)) {
-        cleanupPipeline.zrem(
-          `notif:scheduled:zset:${parseInt(taskId.slice(-1), 16) || 0}`,
-          taskStr,
-        );
+        cleanupPipeline.zrem(zsetKey(shardOf(taskId)), taskStr);
         continue;
       }
       const payload = payloadMap.get(taskId);
 
       if (!payload) {
         logger.warn({ taskId }, "scheduled payload not found in Postgres — skipping release");
-        const shard = parseInt(taskId.slice(-1), 16) || 0;
-        cleanupPipeline.zrem(`notif:scheduled:zset:${shard}`, taskStr);
+        cleanupPipeline.zrem(zsetKey(shardOf(taskId)), taskStr);
         continue;
       }
 
@@ -189,8 +188,7 @@ export async function executeSchedulerPoll(
         });
         released.add(taskId);
         dbCleanupIds.push(taskId);
-        const shard = parseInt(taskId.slice(-1), 16) || 0;
-        cleanupPipeline.zrem(`notif:scheduled:zset:${shard}`, taskStr);
+        cleanupPipeline.zrem(zsetKey(shardOf(taskId)), taskStr);
         continue;
       }
 
@@ -202,8 +200,7 @@ export async function executeSchedulerPoll(
 
       released.add(taskId);
       dbCleanupIds.push(taskId);
-      const shard = parseInt(taskId.slice(-1), 16) || 0;
-      cleanupPipeline.zrem(`notif:scheduled:zset:${shard}`, taskStr);
+      cleanupPipeline.zrem(zsetKey(shardOf(taskId)), taskStr);
     }
 
     // Every bucket, not a hardcoded subset: a task binned into one that is not
@@ -298,9 +295,8 @@ export async function rebuildScheduledQueue(
     for (const { taskId, payload } of rows) {
       const sendAt = Date.parse(payload?.scheduledAt ?? "");
       const member = JSON.stringify({ taskId, enrichedEventId: payload?.enrichedEventId });
-      const shard = parseInt(taskId.slice(-1), 16) || 0;
       pipeline.zadd(
-        `notif:scheduled:zset:${shard}`,
+        zsetKey(shardOf(taskId)),
         "NX",
         Number.isNaN(sendAt) ? Date.now() : sendAt,
         member,
