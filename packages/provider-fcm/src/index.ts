@@ -55,14 +55,15 @@ export class FcmTransport implements Transport {
       };
     }
 
-    const messaging = await this.getMessaging();
     const content = task.renderedContent.content as any;
     const body = content.text || content.body;
     const subject = content.subject;
     const htmlBody = content.htmlBody || content.html;
 
     try {
-      const messageId = await messaging.send({
+      // Inside the try: a malformed service account must fail this send, not
+      // throw out of the transport.
+      const messageId = await this.getMessaging().send({
         token,
         notification: {
           title: subject ?? "",
