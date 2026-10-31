@@ -5,7 +5,8 @@ import { NotificationChannelSchema, NotificationPrioritySchema } from "./common.
 //
 // Preferences are stored as JSONB and are intentionally open-ended so new
 // channels/topics can be added without a migration. `channels` and `topics`
-// are boolean opt-in maps; `quietHours` is a list of UTC HH:MM windows.
+// are boolean opt-in maps; `quietHours` is a list of
+// HH:MM windows in the user's own timezone.
 
 export const QuietHoursSchema = z.object({
   start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "expected HH:MM (24h, UTC)"),
