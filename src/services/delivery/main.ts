@@ -759,7 +759,9 @@ export class DeliveryWorker extends BaseWorker {
 
       if (retryScheduled) {
         // Released so the re-queued attempt can take the lease.
-        await this.idempotency.unmark(idempotencyKey).catch(() => {});
+        await this.idempotency.unmark(idempotencyKey).catch((err: any) => {
+          this.logger.warn({ err, taskId: task.taskId }, "failed to release idempotency lock");
+        });
       } else {
         void this.idempotency.markProcessed(idempotencyKey).catch((err: any) => {
           this.logger.warn({ err, taskId: task.taskId }, "failed to upgrade idempotency TTL");
@@ -768,7 +770,9 @@ export class DeliveryWorker extends BaseWorker {
     } catch (err) {
       // The attempt happened even though it did not finish; keep it in the log.
       logDispatched()?.catch(() => {});
-      await this.idempotency.unmark(idempotencyKey).catch(() => {});
+      await this.idempotency.unmark(idempotencyKey).catch((e: any) => {
+        this.logger.warn({ err: e, taskId: task.taskId }, "failed to release idempotency lock");
+      });
       throw err;
     }
   }

@@ -1425,6 +1425,41 @@ describe("DeliveryWorker", () => {
     expect(worker["idempotency"].markProcessed).not.toHaveBeenCalled();
   });
 
+  describe("a lock that fails to release", () => {
+    const unmarkFails = () =>
+      worker["idempotency"].unmark.mockRejectedValue(new Error("redis gone"));
+    const loggedRelease = () =>
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: "123e4567-e89b-12d3-a456-426614174001" }),
+        "failed to release idempotency lock",
+      );
+
+    it("is logged after a retry is scheduled, since the retry would be skipped", async () => {
+      unmarkFails();
+      mockTransportRegistry.getAll.mockReturnValue([
+        { send: vi.fn().mockRejectedValue(new Error("smtp down")) },
+      ]);
+
+      await worker.process(dispatched() as any);
+
+      expect(mockScheduledProducer.publish).toHaveBeenCalledTimes(1);
+      loggedRelease();
+    });
+
+    it("is logged when delivery fails", async () => {
+      unmarkFails();
+      mockTransportRegistry.getAll.mockReturnValue([
+        { send: vi.fn().mockRejectedValue(new Error("smtp down")) },
+      ]);
+
+      await expect(worker.process(dispatched({ deliveryAttemptCount: 2 }) as any)).rejects.toThrow(
+        "smtp down",
+      );
+
+      loggedRelease();
+    });
+  });
+
   describe("dispatched log entry", () => {
     const published = () =>
       (worker as any).eventsProducer.publishBatch.mock.calls.flatMap((c: any[]) => c[0]);
