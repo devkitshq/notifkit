@@ -123,7 +123,9 @@ export class NotifkitClient {
     contacts?: UserContactInput[],
     options?: Omit<AddUserInput, "id" | "contacts">,
   ): Promise<{ id: string }> {
-    return (this.addUser as any)(idOrInput, contacts, options);
+    return typeof idOrInput === "string"
+      ? this.addUser(idOrInput, contacts, options)
+      : this.addUser(idOrInput);
   }
 
   /** Update user profile. */
