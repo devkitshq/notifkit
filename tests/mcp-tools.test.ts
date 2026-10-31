@@ -3,7 +3,6 @@ import { NotifkitApi, NotifkitApiError } from "../packages/mcp/src/client.js";
 import { createServer } from "../packages/mcp/src/index.js";
 import { registerTools } from "../packages/mcp/src/tools.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-
 function stubFetch(body: unknown, status = 200) {
   const fn = vi.fn().mockResolvedValue({
     status,
@@ -184,6 +183,19 @@ describe("MCP Server Tool Registration", () => {
       { id: "phone:+15551234567", phone: "+15551234567" },
       { id: "phone:+15557654321", phone: "+15557654321" },
     ]);
+  });
+
+  it("accepts in-app on contact tools and describes defaults truthfully", () => {
+    const server = createServer({ baseUrl: "https://api.test", apiKey: "nk_key" });
+    const tools = (server as any)._registeredTools;
+
+    const contact = { userId: "usr_1", channel: "in-app", target: "usr_1" };
+    expect(tools["delete_user_contact"].inputSchema.safeParse(contact).success).toBe(true);
+
+    const describe = (tool: string, field: string) =>
+      tools[tool].inputSchema.shape[field].description as string;
+    expect(describe("send_notification", "channels")).toContain("'email'");
+    expect(describe("get_delivery_logs", "status")).not.toContain("'sent'");
   });
 
   it("executes delete_template tool handler", async () => {

@@ -14,16 +14,8 @@ const CHANNELS = [
   "whatsapp",
   "slack",
 ] as const;
-const CONTACT_CHANNELS = [
-  "email",
-  "sms",
-  "push",
-  "webhook",
-  "telegram",
-  "discord",
-  "whatsapp",
-  "slack",
-] as const;
+// The server accepts contacts on every channel, in-app included.
+const CONTACT_CHANNELS = CHANNELS;
 const PRIORITIES = ["low", "normal", "high", "critical"] as const;
 
 interface ToolResult {
@@ -185,7 +177,7 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
           .array(z.enum(CHANNELS))
           .nonempty()
           .optional()
-          .describe("Channels to use. Defaults to whatever the template defines."),
+          .describe("Channels to use. Defaults to ['email']."),
         fallback: z
           .boolean()
           .optional()
@@ -556,7 +548,9 @@ export function registerTools(server: McpServer, api: NotifkitApi): void {
         status: z
           .string()
           .optional()
-          .describe("Delivery status to filter on, e.g. 'sent', 'delivered', 'failed', 'opened'."),
+          .describe(
+            "Delivery status to filter on, e.g. 'dispatched', 'delivered', 'failed', 'opened'.",
+          ),
         campaign: z
           .string()
           .optional()
