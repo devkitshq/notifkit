@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { NotificationChannelSchema, NotificationPrioritySchema } from "@/contracts/common.js";
 
+/** @deprecated Nothing publishes `notification.created`; removed in the next minor version. */
 export const NotificationCreatedPayloadSchema = z.object({
   projectId: z.string().uuid(),
   recipientId: z.string().min(1),
@@ -11,4 +12,5 @@ export const NotificationCreatedPayloadSchema = z.object({
   scheduledAt: z.string().datetime().optional(),
   idempotencyKey: z.string().optional(),
 });
+/** @deprecated Nothing publishes `notification.created`; removed in the next minor version. */
 export type NotificationCreatedPayload = z.infer<typeof NotificationCreatedPayloadSchema>;

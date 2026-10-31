@@ -35,6 +35,7 @@ import { NotificationCanceledPayloadSchema } from "./events/notification-cancele
 import { NotificationAiPendingPayloadSchema } from "./events/notification-ai-pending.js";
 
 registry.define("notification.requested", NotificationRequestedPayloadSchema);
+// Deprecated: nothing publishes notification.created. Remove in the next minor.
 registry.define("notification.created", NotificationCreatedPayloadSchema);
 registry.define("notification.enriched", NotificationEnrichedPayloadSchema);
 registry.define("notification.scheduled", NotificationScheduledPayloadSchema);

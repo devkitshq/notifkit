@@ -23,6 +23,7 @@ import type { NotificationAiPendingPayload } from "./events/notification-ai-pend
  */
 export interface EventPayloadMap {
   "notification.requested": NotificationRequestedPayload;
+  /** @deprecated Nothing publishes `notification.created`; removed in the next minor version. */
   "notification.created": NotificationCreatedPayload;
   "notification.enriched": NotificationEnrichedPayload;
   "notification.scheduled": NotificationScheduledPayload;
