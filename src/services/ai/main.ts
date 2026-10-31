@@ -11,6 +11,7 @@ import { BaseWorker, type ProcessResult } from "@/index.js";
 import {
   STREAMS,
   CONSUMER_GROUPS,
+  PUBSUB_CHANNELS,
   registry,
   type EventRegistry,
   type NotificationDispatchedPayload,
@@ -345,9 +346,9 @@ export async function startAiWorker() {
   });
 
   subscriber = redis.native.duplicate({ enableAutoPipelining: false });
-  await subscriber.subscribe("template.invalidated");
+  await subscriber.subscribe(PUBSUB_CHANNELS.TEMPLATE_INVALIDATED);
   subscriber.on("message", (channel: string, message: string) => {
-    if (channel === "template.invalidated") {
+    if (channel === PUBSUB_CHANNELS.TEMPLATE_INVALIDATED) {
       templateCache.invalidateKey(message);
       logger.info({ cacheKey: message }, "invalidated template cache");
     }
