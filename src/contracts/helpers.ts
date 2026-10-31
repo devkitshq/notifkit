@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { type EventEnvelope } from "./envelope.js";
 
-// Legacy factory helpers — backward compatible with the queue package's publish() API,
-// which accepts Omit<StreamEvent, "id" | "timestamp">.
+// Builds the event shape `StreamProducer.publish()` takes.
 export function buildStreamEvent(
   type: string,
   payload: Record<string, unknown>,
