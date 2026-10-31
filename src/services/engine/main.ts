@@ -604,17 +604,6 @@ export class EngineWorker extends BaseWorker {
         // own convention — a password reset, a receipt — and putting an
         // unsubscribe button on those invites people to switch off mail they
         // actually need, with no topic to scope the opt-out to anyway.
-        if (
-          enriched.channel === "email" &&
-          templateTopics.length > 0 &&
-          !config.UNSUBSCRIBE_SECRET
-        ) {
-          this.logger.warn(
-            { projectId: enriched.projectId, recipientId: enriched.recipientId },
-            "UNSUBSCRIBE_SECRET is not configured — email sent without RFC 8058 one-click unsubscribe headers",
-          );
-        }
-
         const unsubscribeHeaders =
           enriched.channel === "email" &&
           templateTopics.length > 0 &&
@@ -724,6 +713,11 @@ export async function startEngineWorker() {
   templateRepo = new TemplateRepository(db);
   templateCache = new TemplateCache(templateRepo);
   const contactRepo = new ContactRepository(db);
+  if (!config.UNSUBSCRIBE_SECRET) {
+    logger.warn(
+      "UNSUBSCRIBE_SECRET is not configured — emails with topics are sent without RFC 8058 one-click unsubscribe headers",
+    );
+  }
   const consumerId = uniqueConsumerId("engine");
   ({ consumer, pendingScanner } = createStreamConsumer(
     { redis, logger },

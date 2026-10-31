@@ -2464,6 +2464,22 @@ describe("EngineWorker", () => {
     await expect(worker.process(enrichedMsg() as any)).rejects.toThrow("provider down");
   });
 
+  it("does not warn about a missing UNSUBSCRIBE_SECRET once per email", async () => {
+    const enrichedWithTemplate = mockRegistry.safeParsePayload().data;
+    mockRegistry.safeParsePayload.mockReturnValue({
+      success: true,
+      data: { ...enrichedWithTemplate, templateId: "newsletter" },
+    });
+    mockGetCachedTemplate.mockResolvedValue({ id: "newsletter", topics: ["marketing"] });
+
+    await worker.process(enrichedMsg("msg-1") as any);
+    await worker.process(enrichedMsg("msg-2") as any);
+
+    expect(mockOutboundProducers.normal.publish).toHaveBeenCalledTimes(2);
+    const warnings = (worker as any).logger.warn.mock.calls.map((c: unknown[]) => c.at(-1));
+    expect(warnings).not.toContainEqual(expect.stringContaining("UNSUBSCRIBE_SECRET"));
+  });
+
   it("gracefully drops message if template is nonexistent", async () => {
     // Override safeParsePayload to include templateId
     mockRegistry.safeParsePayload.mockReturnValueOnce({
