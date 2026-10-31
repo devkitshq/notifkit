@@ -105,7 +105,6 @@ export interface WorkflowWorkerOptions extends WorkerOptions {
 export class WorkflowWorker extends BaseWorker {
   private readonly redisCli: Redis;
   private readonly dbConn: any;
-  private readonly workflowProducer: any;
   private readonly notificationProducer: any;
 
   private eventBuffer: {
@@ -120,7 +119,6 @@ export class WorkflowWorker extends BaseWorker {
     super(options);
     this.redisCli = options.redis;
     this.dbConn = options.db;
-    this.workflowProducer = options.workflowProducer;
     this.notificationProducer = options.notificationProducer;
 
     this.flushTimer = setInterval(() => void this.flushWorkerBuffers(), 100);

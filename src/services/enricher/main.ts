@@ -15,12 +15,7 @@ import {
   type StreamEvent,
 } from "@/index.js";
 import { IdempotencyGuard } from "@/index.js";
-import {
-  UserRepository,
-  PreferenceRepository,
-  TemplateRepository,
-  ContactRepository,
-} from "@/index.js";
+import { UserRepository, TemplateRepository, ContactRepository } from "@/index.js";
 import { TemplateCache } from "@/templates/index.js";
 import { getPriorityBucket, globalEmitter, type WorkerOptions } from "@/shared/index.js";
 import { startHealthReporter } from "@/workers/index.js";
@@ -60,7 +55,7 @@ export interface EnricherWorkerOptions extends WorkerOptions {
   producers: any;
   idempotency: any;
   userRepo: any;
-  prefRepo: any;
+  prefRepo?: any;
   contactRepo: any;
   templateCache: TemplateCache;
 }
@@ -69,7 +64,6 @@ export class EnricherWorker extends BaseWorker {
   private readonly producers: any;
   private readonly idempotency: any;
   private readonly userRepo: any;
-  private readonly prefRepo: any;
   private readonly contactRepo: any;
   private readonly templateCache: TemplateCache;
   /** Engine in this process, when the pipeline is fused. See `setInlineNext`. */
@@ -140,7 +134,6 @@ export class EnricherWorker extends BaseWorker {
     this.producers = options.producers;
     this.idempotency = options.idempotency;
     this.userRepo = options.userRepo;
-    this.prefRepo = options.prefRepo;
     this.contactRepo = options.contactRepo;
     this.templateCache = options.templateCache;
 
@@ -595,7 +588,6 @@ export async function startEnricherWorker() {
   });
 
   const userRepo = new UserRepository(db);
-  const prefRepo = new PreferenceRepository(db);
   const contactRepo = new ContactRepository(db);
   const templateCache = new TemplateCache(new TemplateRepository(db));
 
@@ -617,7 +609,6 @@ export async function startEnricherWorker() {
     producers,
     idempotency,
     userRepo,
-    prefRepo,
     contactRepo,
     templateCache,
   });

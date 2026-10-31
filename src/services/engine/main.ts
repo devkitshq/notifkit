@@ -241,7 +241,6 @@ export class EngineWorker extends BaseWorker {
   private readonly idempotency: any;
   private readonly throttle: any;
   private readonly projectSettings: ProjectSettingsCache;
-  private readonly redisCli: Redis;
   private readonly templateCache: TemplateCache;
   private readonly aiPendingProducer: any;
   private readonly scheduledProducer: any;
@@ -258,7 +257,6 @@ export class EngineWorker extends BaseWorker {
     this.idempotency = options.idempotency;
     this.throttle = options.throttle;
     this.projectSettings = options.projectSettings;
-    this.redisCli = options.redis;
     this.templateCache = options.templateCache;
     this.aiPendingProducer = options.aiPendingProducer;
     this.scheduledProducer = options.scheduledProducer;

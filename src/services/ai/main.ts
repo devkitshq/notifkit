@@ -96,7 +96,6 @@ export interface AiWorkerOptions extends WorkerOptions {
 export class AiWorker extends BaseWorker {
   private readonly registry: any;
   private readonly idempotency: any;
-  private readonly redisCli: Redis;
   private readonly generateAiContent: any;
   private readonly templateCache: TemplateCache;
   private readonly scheduledProducer: any;
@@ -107,7 +106,6 @@ export class AiWorker extends BaseWorker {
     super(options);
     this.registry = options.registry;
     this.idempotency = options.idempotency;
-    this.redisCli = options.redis;
     this.generateAiContent = options.generateAiContent;
     this.templateCache = options.templateCache;
     this.scheduledProducer = options.scheduledProducer;
