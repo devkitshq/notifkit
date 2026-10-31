@@ -9,10 +9,8 @@ export interface IdempotencyOptions {
 export type LeaseResult = "acquired" | "locked" | "completed";
 
 /**
- * Two-phase SETNX-based idempotency guard.
- * Supports:
- * - Phase 1 (:lock): Short lease acquired at the start of message processing.
- * - Phase 2 (:sent): Long-lived completion marker recorded when processing succeeds.
+ * SET NX-based idempotency guard.
+ * One key per id: `L` while leased, `1` once processed.
  */
 export class IdempotencyGuard {
   private readonly redis: Redis;
@@ -40,10 +38,8 @@ export class IdempotencyGuard {
   }
 
   /**
-   * Two-phase lease acquisition.
-   * Atomically checks existing state and acquires lock if available.
-   * - Happy path (new message): single native SET NX command storing "L" (lock lease).
-   * - If already present: checks if "S" (sent/completed) or "L" (locked by another worker).
+   * Leases the id with SET NX. One key per id: `L` while leased, `1` once processed.
+   * Returns "completed" if already processed, "locked" if another worker holds the lease.
    */
   async acquireLease(id: string, lockTtlSeconds: number = 30): Promise<LeaseResult> {
     const mainKey = this.key(id);
