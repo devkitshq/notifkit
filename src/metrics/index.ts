@@ -28,6 +28,7 @@ export const metrics = {
     labelNames: ["channel", "reason"],
     registers: [register],
   }),
+  /** @deprecated Never set, so it always reads 0. Removed in the next minor version. */
   workerActiveTasks: new promClient.Gauge({
     name: "notifkit_worker_active_tasks",
     help: "Number of currently active tasks per worker",
@@ -40,6 +41,7 @@ export const metrics = {
     labelNames: ["stream"],
     registers: [register],
   }),
+  /** @deprecated Never set, so it always reads 0. Removed in the next minor version. */
   pendingAcks: new promClient.Gauge({
     name: "notifkit_pending_acks",
     help: "Number of pending un-acked messages per group",
