@@ -82,7 +82,7 @@ export const baseConfigSchema = z.object({
     .default("public"),
   LOG_FLUSH_INTERVAL_MS: z.coerce.number().int().min(50).default(500),
   LOG_BUFFER_MAX_SIZE: z.coerce.number().int().min(100).default(5000),
-  SEGMENT_MAX_USERS: z.coerce.number().int().min(1).default(10000),
+  SEGMENT_MAX_USERS: z.coerce.number().int().min(1).default(100_000),
   /**
    * Externally reachable base URL of this API. Unsubscribe links are built from
    * it, so it must be what an inbox can actually reach — not `HOST`/`PORT`,

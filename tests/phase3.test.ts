@@ -27,7 +27,7 @@ describe("Phase 3 Reliability Features", () => {
           unmark: vi.fn().mockResolvedValue(true),
         } as any,
         userRepo: {
-          findUsersBySegment: vi.fn().mockResolvedValue(Array(15000).fill("user_id")),
+          findUsersBySegment: vi.fn().mockResolvedValue(Array(150_000).fill("user_id")),
         } as any,
         prefRepo: {} as any,
         contactRepo: {} as any,
