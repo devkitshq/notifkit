@@ -258,7 +258,7 @@ export abstract class BaseWorker {
         return;
       }
 
-      const result = await this.process(message, retryCount);
+      const result = await this.processHoldingLease(message, retryCount);
       if (result && (result as any).ack === false) {
         this.logger.debug(
           { messageId: message.id, eventType: message.event.type },
@@ -308,6 +308,32 @@ export abstract class BaseWorker {
         { err, messageId: message.id, eventType: message.event.type },
         "failed to process message",
       );
+    }
+  }
+
+  /**
+   * Runs `process` while keeping the entry's idle time below the reclaim
+   * threshold. Without this, a handler that outlasts `recoveryIntervalMs` (a
+   * large segment fan-out) is reclaimed mid-run and started again elsewhere,
+   * over and over, until it is dead-lettered while the first run still works.
+   * If this process dies the touches stop, so the entry is reclaimed as before.
+   */
+  private async processHoldingLease(message: StreamMessage, attempt: number) {
+    const stream = message.stream;
+    const timer = stream
+      ? setInterval(
+          () => {
+            this.pendingScanner.touch(message.id, stream).catch((err: unknown) => {
+              this.logger.warn({ err, messageId: message.id }, "failed to extend message lease");
+            });
+          },
+          Math.max(Math.floor(this.recoveryIntervalMs / 2), 10),
+        )
+      : undefined;
+    try {
+      return await this.process(message, attempt);
+    } finally {
+      clearInterval(timer);
     }
   }
 

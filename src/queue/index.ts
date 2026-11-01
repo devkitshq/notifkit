@@ -582,6 +582,14 @@ export class PendingMessageScanner {
     this.logger = logger;
   }
 
+  /**
+   * Resets a held entry's idle time so no scanner reclaims it while its
+   * handler is still running. JUSTID leaves the delivery count alone.
+   */
+  async touch(id: string, stream: string): Promise<void> {
+    await this.redis.xclaim(stream, this.group, this.consumer, 0, id, "JUSTID");
+  }
+
   async getPendingCount(): Promise<number> {
     let total = 0;
     for (const s of this.streams) {

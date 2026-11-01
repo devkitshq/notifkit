@@ -355,13 +355,19 @@ describe("BaseWorker", () => {
 
   function worker(
     behaviour: Behaviour,
-    opts: { concurrency?: number; recoveryIntervalMs?: number; maxRetriesBeforeDlq?: number } = {},
+    opts: {
+      concurrency?: number;
+      recoveryIntervalMs?: number;
+      maxRetriesBeforeDlq?: number;
+      name?: string;
+    } = {},
   ) {
+    const { name = "w1", ...workerOpts } = opts;
     const consumer = new StreamConsumer({
       redis: infra.redis,
       stream: STREAM,
       group: GROUP,
-      consumer: "w1",
+      consumer: name,
       dlqStream: STREAMS.DEAD_LETTER,
       blockMs: 100,
       batchSize: 20,
@@ -371,11 +377,11 @@ describe("BaseWorker", () => {
       redis: infra.redis,
       stream: STREAM,
       group: GROUP,
-      consumer: "w1",
+      consumer: name,
       logger,
     });
     const w = new ScriptedWorker(
-      { consumer, pendingScanner, logger, recoveryIntervalMs: 60_000, ...opts },
+      { consumer, pendingScanner, logger, recoveryIntervalMs: 60_000, ...workerOpts },
       behaviour,
     );
     workers.push(w);
@@ -546,6 +552,27 @@ describe("BaseWorker", () => {
     }
 
     expect(processed).toEqual([1]);
+    expect(await pending()).toBe(0);
+  });
+
+  it("keeps a slow message to itself while processing it, so no replica reclaims it", async () => {
+    // A segment fan-out can run for minutes. Its entry must not look idle to the
+    // recovery scan meanwhile, or a second replica starts the same fan-out over.
+    const slow = () => settle(1_500);
+    const a = worker(slow, { recoveryIntervalMs: 200, name: "a" });
+    const b = worker(slow, { recoveryIntervalMs: 200, name: "b" });
+    await a.start();
+    await b.start();
+    await publish(1);
+
+    await waitFor(
+      "processed",
+      () => a.health().processedCount + b.health().processedCount >= 1,
+      10_000,
+    );
+    await settle(500);
+
+    expect([...a.seen, ...b.seen]).toEqual([{ n: 1, attempt: 1 }]);
     expect(await pending()).toBe(0);
   });
 
