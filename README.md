@@ -8,7 +8,7 @@ Self-hosted notification infrastructure for product notifications. One API call 
 
 [![npm version](https://img.shields.io/npm/v/notifkit.svg?style=flat-square&color=6366f1)](https://www.npmjs.com/package/notifkit) [![npm downloads](https://img.shields.io/npm/dm/notifkit.svg?style=flat-square&color=6366f1)](https://www.npmjs.com/package/notifkit) [![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/devkitshq/notifkit/badges/coverage.json&style=flat-square)](https://github.com/devkitshq/notifkit/actions/workflows/ci.yml) [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178c6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Node.js](https://img.shields.io/badge/node-%3E%3D22.0.0-339933.svg?style=flat-square)](https://nodejs.org) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](./LICENSE)
 
-[Documentation](https://notifkit.dev/docs/) · [Quickstart](https://notifkit.dev/docs/quickstart.html) · [Examples](https://notifkit.dev/docs/examples.html) · [notifkit.dev](https://notifkit.dev)
+[Documentation](https://notifkit.dev/docs/) · [Quickstart](https://notifkit.dev/docs/quickstart.html) · [Examples](https://notifkit.dev/docs/examples.html) · [Production support](#production-support) · [notifkit.dev](https://notifkit.dev)
 
 https://github.com/user-attachments/assets/ad8955bd-4205-4d47-8dfc-9010abd3ad62
 
@@ -139,6 +139,10 @@ To sign in, set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before starting the server, t
 ## Documentation
 
 Everything lives at **[notifkit.dev/docs](https://notifkit.dev/docs/)**: [concepts](https://notifkit.dev/docs/concepts.html), [routing and fallback](https://notifkit.dev/docs/guides/routing.html), [preferences](https://notifkit.dev/docs/guides/preferences.html), [workflows](https://notifkit.dev/docs/guides/workflows.html), [architecture](https://notifkit.dev/docs/architecture.html), [operations](https://notifkit.dev/docs/operations.html) and the [API reference](https://notifkit.dev/docs/reference.html).
+
+## Production support
+
+Need help running notifkit in production? We can deploy it on your infrastructure, migrate your templates from Knock, Courier, Novu or your custom engine, and give you priority support. Email [contact.devkitshq@gmail.com](mailto:contact.devkitshq@gmail.com?subject=notifkit%20production%20support).
 
 ## Contributing
 
