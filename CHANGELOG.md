@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.17](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.16...notifkit-v0.1.17) (2026-11-01)
+
+
+### Features
+
+* **config:** raise the SEGMENT_MAX_USERS default to 100,000 ([58952a3](https://github.com/devkitshq/notifkit/commit/58952a3d56e626ce6ce03e59ba9619208a4487d7))
+
+
+### Bug Fixes
+
+* **workers:** hold a message's lease while its handler runs ([19c3f56](https://github.com/devkitshq/notifkit/commit/19c3f564e9097baf0cc18dcd8ba087ee7d9ea54d))
+
 ## [0.1.16](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.15...notifkit-v0.1.16) (2026-11-01)
 
 
