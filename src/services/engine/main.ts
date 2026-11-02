@@ -235,7 +235,8 @@ export class EngineWorker extends BaseWorker {
     // however often it is retried. Stream-read messages keep the guard.
     const idempotency = message.inline ? NO_IDEMPOTENCY : this.idempotency;
 
-    if (!(await idempotency.checkAndMark(idempotencyKey, customTtl ?? 60))) {
+    // A short lease: if this process dies, the redelivery must not find it.
+    if (!(await idempotency.checkAndMark(idempotencyKey, 60))) {
       this.logger.debug({ messageId: message.id, eventId: event.id }, "duplicate — skipping");
       return;
     }
