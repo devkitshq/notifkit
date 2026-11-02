@@ -147,7 +147,8 @@ export async function reapStuckInstances({
         await db
           .update(workflowInstances)
           .set({ status: "pending" })
-          .where(eq(workflowInstances.id, inst.id));
+          // It may have finished or been canceled since the select above.
+          .where(and(eq(workflowInstances.id, inst.id), eq(workflowInstances.status, "running")));
         logger.info({ instanceId: inst.id }, "Reaped stuck workflow instance (lock expired)");
       }
     }
