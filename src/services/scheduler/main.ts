@@ -23,6 +23,7 @@ import {
   uniqueConsumerId,
 } from "@/workers/bootstrap.js";
 import { findBlockedAtRelease } from "./send-gate.js";
+import { maybePruneDeliveryLogs } from "./retention.js";
 // ─── Bootstrap ─────────────────────────────────────────────────────────────
 
 loadEnv();
@@ -345,6 +346,7 @@ export async function startSchedulerWorker() {
       if (!(await redis.native.exists(SCHEDULER_SENTINEL_KEY))) {
         await rebuildScheduledQueue(redis.native, db, logger);
       }
+      void maybePruneDeliveryLogs(redis.native, db, logger, config.LOG_RETENTION_DAYS);
       const hasMore = await executeSchedulerPoll(redis.native, outboundProducers, logger, db);
       if (isPolling) {
         pollTimeout = setTimeout(() => void pollLoop(), hasMore ? 0 : 5000);

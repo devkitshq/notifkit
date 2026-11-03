@@ -64,6 +64,13 @@
       "when": 1790800000000,
       "tag": "0008_delivery_outbox_destination_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790900000000,
+      "tag": "0009_retention_time_indexes",
+      "breakpoints": true
     }
   ]
 }

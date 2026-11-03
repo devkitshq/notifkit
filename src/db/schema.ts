@@ -210,6 +210,8 @@ export const messageLogs = pgTable(
     projectIdTaskIdIdx: index("message_logs_project_task_idx").on(table.projectId, table.taskId),
     providerMsgIdx: index("provider_msg_idx").on(table.providerMessageId),
     projectTimeIdx: index("msg_log_proj_time_idx").on(table.projectId, table.timestamp),
+    // For the retention prune, which deletes by age across all projects.
+    timeIdx: index("msg_log_time_idx").on(table.timestamp),
     templateIdx: index("msg_log_template_idx").on(table.projectId, table.templateId),
     workflowIdx: index("msg_log_workflow_idx").on(table.projectId, table.workflowInstanceId),
     campaignIdx: index("msg_log_campaign_idx").on(table.projectId, table.campaignId),
@@ -356,6 +358,7 @@ export const deliveryOutbox = pgTable(
     // The key leads with task_id, so looking up what an address was sent
     // (a user's details) read the whole table.
     destinationIdx: index("delivery_outbox_destination_idx").on(table.destination),
+    createdIdx: index("delivery_outbox_created_idx").on(table.createdAt),
   }),
 );
 
