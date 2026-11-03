@@ -51,12 +51,9 @@ export function createNotificationsHandlers(deps: Deps) {
         }
       }
 
+      // A failure must reach the caller: queued without its user, the send is dropped.
       if (inlineUsersToSync.length > 0) {
-        try {
-          await persistUsers(deps, inlineUsersToSync, ctx.projectId!);
-        } catch (err) {
-          deps.logger.error({ err }, "inline user bulk sync failed");
-        }
+        await persistUsers(deps, inlineUsersToSync, ctx.projectId!);
       }
     } else if (body.segment !== undefined) {
       targets.push({ type: "segment", segment: body.segment });
