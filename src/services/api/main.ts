@@ -421,7 +421,8 @@ export async function startApiServer() {
       }
 
       // Role Check
-      if (keyRole === "read_only") {
+      // Logging out only ends the caller's own session, so read-only users may.
+      if (keyRole === "read_only" && pathname !== "/v1/auth/logout") {
         const isMutating = req.method !== "GET" && req.method !== "OPTIONS";
         if (isMutating) {
           sendJson(res, 403, { error: "forbidden", message: "API key is read-only" });
