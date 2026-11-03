@@ -68,6 +68,8 @@ export const baseConfigSchema = z.object({
    * real: a few hundred bytes per message for as long as it lasts.
    */
   IDEMPOTENCY_TTL_SECONDS: z.coerce.number().int().min(60).default(3600),
+  /** Non-critical sends per user per hour, unless the project overrides it. */
+  RATE_LIMIT_PER_HOUR: z.coerce.number().int().min(0).default(100),
   DB_MAX_CONNECTIONS: z.coerce.number().int().min(1).default(2),
   /**
    * PostgreSQL schema that holds notifkit's tables and enum types. Defaults to

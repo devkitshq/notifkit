@@ -605,7 +605,7 @@ export async function startEngineWorker() {
 
   const throttle = new UserThrottle({
     redis: redis.native,
-    maxPerHour: parseInt(process.env.RATE_LIMIT_PER_HOUR || "100", 10),
+    maxPerHour: config.RATE_LIMIT_PER_HOUR,
   });
 
   // Per-project throttle overrides, cached because this is read once per
