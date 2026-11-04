@@ -2,16 +2,9 @@ import { sql as drizzleSql } from "drizzle-orm";
 import { deliveryOutbox, messageLogs } from "./schema.js";
 
 /**
- * Bulk writes for the two tables every delivered notification touches.
- *
- * Drizzle rebuilds the statement for each call and walks every parameter as it
- * does, which for a few hundred rows per batch was the largest single CPU cost
- * in a worker. These send one fixed statement over `unnest()`d arrays instead,
- * so Postgres prepares it once and the client serialises a handful of arrays
- * rather than thousands of parameters.
- *
- * Handles that are not postgres.js-backed Drizzle instances (tests, other
- * drivers) fall back to the equivalent Drizzle query.
+ * Bulk writes for the tables every delivery touches. One fixed `unnest()`
+ * statement instead of Drizzle's per-row parameters, which was a worker's
+ * biggest CPU cost. Non-postgres.js handles fall back to plain Drizzle.
  */
 
 interface RawClient {

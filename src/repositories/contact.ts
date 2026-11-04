@@ -180,8 +180,6 @@ export class ContactRepository {
     const contactId = inserted[0]?.id;
     if (!contactId) return;
 
-    // Contact-level topic preferences were previously accepted by the API and
-    // silently discarded.
     const topics = Object.entries(preferences.topics ?? {});
     if (topics.length > 0) {
       await this.db

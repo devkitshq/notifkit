@@ -1,18 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 /**
- * One-click unsubscribe (RFC 8058).
+ * One-click unsubscribe (RFC 8058), required by Gmail and Yahoo for bulk mail.
  *
- * Gmail and Yahoo have required `List-Unsubscribe` + `List-Unsubscribe-Post` on
- * bulk mail since early 2024; without them bulk sends get throttled or junked,
- * and because deliverability is reputation on the *sending domain*, that
- * eventually drags transactional mail down with it.
- *
- * The link has to work from an inbox, years later, with no session — so the
- * token carries its own claim and is signed rather than looked up. Nothing is
- * stored per message, and there is no expiry: an unsubscribe link that has
- * stopped working is worse than useless, because the recipient's next move is
- * the spam button.
+ * The token is signed, not stored, and never expires: the link has to keep
+ * working from an old email, and a dead one sends people to the spam button.
  */
 
 export interface UnsubscribeClaim {

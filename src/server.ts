@@ -85,7 +85,6 @@ export class NotifkitServer extends EventEmitter {
   }
 
   async start() {
-    // 1. Initial configuration setup for environment overrides
     if (this.options.port) process.env.PORT = String(this.options.port);
     if (this.options.logLevel) process.env.LOG_LEVEL = this.options.logLevel;
     if (this.options.nodeEnv) process.env.NODE_ENV = this.options.nodeEnv;
@@ -108,7 +107,7 @@ export class NotifkitServer extends EventEmitter {
 
     const isProduction = process.env.NODE_ENV === "production";
 
-    // 2. Spin up test containers if needed (only in development/test)
+    // Outside production, a missing Redis or Postgres URL starts a container.
     if (!this.options.redisUrl) {
       if (process.env.REDIS_URL) {
         this.options.redisUrl = process.env.REDIS_URL;
@@ -146,14 +145,12 @@ export class NotifkitServer extends EventEmitter {
     if (this.options.redisUrl) process.env.REDIS_URL = this.options.redisUrl;
     if (this.options.databaseUrl) process.env.DATABASE_URL = this.options.databaseUrl;
 
-    // 3. Set global config overrides
     const finalConfig = readBaseConfig();
     setGlobalConfig(finalConfig);
     if (this.options.aiModel) {
       setAiConfig({ aiModel: this.options.aiModel });
     }
 
-    // 4. Run database migrations if enabled
     if (this.options.autoMigrate !== false) {
       this.logger.info("Running database migrations...");
       const { db, sql } = createDatabase({ url: this.options.databaseUrl! });

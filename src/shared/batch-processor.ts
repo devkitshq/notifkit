@@ -5,13 +5,9 @@ export interface BatchItem<T, R> {
 }
 
 /**
- * Coalesces individual `add()` calls into batched `flushFn` calls.
- *
- * A batch goes out when `maxSize` items are waiting or `maxWaitMs` has passed
- * since the first one arrived. Up to `maxConcurrent` flushes may be in flight
- * at once: with a single flight, every caller queued behind a slow flush holds
- * its worker slot for the whole round trip, which caps a worker's throughput at
- * `maxSize / flushLatency` no matter how much concurrency it was given.
+ * Batches `add()` calls into `flushFn` calls, at `maxSize` items or after
+ * `maxWaitMs`. Several flushes may run at once so one slow flush doesn't cap
+ * the worker's throughput.
  */
 export class BatchProcessor<T, R = void> {
   private buffer: BatchItem<T, R>[] = [];

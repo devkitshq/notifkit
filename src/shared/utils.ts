@@ -4,14 +4,8 @@ export function getPriorityBucket(priority: string | undefined): "critical" | "n
 }
 
 /**
- * Canonical form of a destination, for suppression lookups.
- *
- * Both the writer (the provider webhook) and the reader (the engine's
- * pre-dispatch gate) must agree on this, or an unsubscribe recorded as
- * `Bob@Example.com` will not match a send addressed to `bob@example.com` and
- * the person keeps receiving mail. Case folding is safe for email domains and
- * for the local part in every mailbox provider in practice; phone numbers and
- * push tokens are case-sensitive and are only trimmed.
+ * Canonical address for suppression lookups; writers and readers must both use
+ * it. Emails are lower-cased; phone numbers and push tokens are case-sensitive.
  */
 export function normaliseTarget(target: string): string {
   const trimmed = target.trim();

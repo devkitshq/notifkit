@@ -20,25 +20,13 @@ export interface ProjectSettingsCacheOptions {
 }
 
 /**
- * Caches per-project throttle overrides for the engine.
- *
- * The throttle check runs once per notification, so an uncached lookup here
- * would put a Postgres round trip on the hot path. Projects with no overrides
- * are cached as well — the common case must not cost a query per message.
- *
- * The TTL bounds staleness on its own; `invalidate()` exists so a settings
- * change published over pub/sub applies immediately rather than at expiry.
+ * Per-project throttle overrides, read once per notification. Projects with no
+ * overrides are cached too. `invalidate()` lets a settings change apply before
+ * the TTL runs out.
  */
 export class ProjectSettingsCache {
   private readonly cache: LRUCache<string, ProjectThrottleSettings>;
-  /**
-   * Lookups already on the wire, keyed by project.
-   *
-   * The cache only fills once a query has come back, so without this a cold
-   * project at the start of a campaign puts one query per in-flight message on
-   * Postgres before the first answer lands — exactly when the database is
-   * busiest. Followers wait on the leader's promise instead.
-   */
+  /** Lookups in flight, so a cold project at the start of a campaign costs one query. */
   private readonly inFlight = new Map<string, Promise<ProjectThrottleSettings>>();
 
   constructor(

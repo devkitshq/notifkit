@@ -300,8 +300,7 @@ export class StreamConsumer {
     while (this.running) {
       try {
         let currentStreams = [...this.streams];
-        // Weighted fair queuing: 10% of the time, rotate the priority order
-        // to prevent starvation of low priority queues.
+        // One read in ten starts from a lower-priority stream, so it can't starve.
         if (currentStreams.length > 1 && Math.random() < 0.1) {
           const offset = Math.floor(Math.random() * (currentStreams.length - 1)) + 1;
           for (let i = 0; i < offset; i++) {

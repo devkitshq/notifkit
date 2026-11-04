@@ -1,8 +1,8 @@
 import type { Redis } from "@/index.js";
 import type { Logger } from "@/logger/index.js";
 
-// Leases token chunks from Redis sliding-window counters into local memory.
-// Eliminates per-request Redis network roundtrips on API ingress.
+// Takes tokens from a Redis sliding window in batches, so most requests never
+// wait on Redis.
 
 export interface ApiRateLimiterOptions {
   redis: Redis;
@@ -13,11 +13,7 @@ export interface ApiRateLimiterOptions {
   keyPrefix?: string;
 }
 
-/**
- * Computes dynamic token lease batch size based on RPM.
- * Targets ~5s of limit capacity so Redis is contacted at most ~12 times/min
- * regardless of instantaneous request rate. Bounded between 1 and maxBatchSize.
- */
+/** About five seconds' worth of the limit, so Redis is asked ~12 times a minute. */
 export function calculateTokenBatchSize(limitRpm: number, maxBatchSize = 500): number {
   if (limitRpm <= 0) return 0;
   if (limitRpm <= 10) return 1;
@@ -56,11 +52,6 @@ export class ApiRateLimiter {
     this.keyPrefix = keyPrefix;
   }
 
-  /**
-   * Evaluates if a request for `projectId` is allowed within its `limitRpm`.
-   * Fast-path uses local in-memory token lease (0ms Redis network latency).
-   * Refills in the background before tokens are depleted.
-   */
   async check(projectId: string, limitRpm: number): Promise<boolean> {
     if (limitRpm <= 0) return false;
 
@@ -79,23 +70,19 @@ export class ApiRateLimiter {
       this.maybePrune(currentBucket);
     }
 
-    // Rollover to new bucket window when minute boundary elapses.
-    // Kick off a prefill immediately so the first request of the new window
-    // doesn't have to wait — it will land before tokens hit 0 again.
+    // New window: start leasing now so the next request doesn't wait.
     if (state.bucketIndex !== currentBucket) {
       state.bucketIndex = currentBucket;
       state.tokens = 0;
       state.batchSize = calculateTokenBatchSize(limitRpm, this.maxBatchSize);
       state.inFlightLease = null;
-      // Fire the first lease for the new window now, don't await it here.
       this.refill(projectId, state, limitRpm, nowMs, currentBucket).catch(() => {});
     }
 
-    // 1. Fast Path: Local token available in memory (0ms network latency)
     if (state.tokens > 0) {
       state.tokens--;
 
-      // Background refill when tokens drop below 25% of batch size
+      // Refill in the background once a quarter of the batch is left.
       const refillThreshold = Math.max(1, Math.floor(state.batchSize * 0.25));
       if (state.tokens <= refillThreshold && !state.inFlightLease) {
         this.refill(projectId, state, limitRpm, nowMs, currentBucket).catch(() => {});
@@ -104,12 +91,8 @@ export class ApiRateLimiter {
       return true;
     }
 
-    // 2. Slow Path: tokens are depleted, block on the in-flight lease or start one.
-    // Concurrent requests racing here all join the *same* promise so one Redis
-    // round trip serves them. A lease only grants `batchSize` tokens, so a
-    // burst larger than that leases again rather than rejecting requests the
-    // window still has room for: a request is refused only once Redis itself
-    // reports the window spent.
+    // Out of tokens: wait on the shared lease. Refuse only once Redis says the
+    // window is spent, not just because one batch ran out.
     for (;;) {
       if (!state.inFlightLease) {
         this.refill(projectId, state, limitRpm, nowMs, currentBucket).catch(() => {});
@@ -168,7 +151,7 @@ export class ApiRateLimiter {
           { err, projectId },
           "project rate limit lease failed — allowing request (fail-open)",
         );
-        // Fail-open: credit requested tokens locally to prevent tight retry loops during Redis hiccups
+        // Fail open, and credit the batch so a Redis outage doesn't turn into a retry loop.
         if (state.bucketIndex === bucketIndex) {
           state.tokens += requested;
         }
@@ -196,12 +179,10 @@ export class ApiRateLimiter {
     }
   }
 
-  /** Reset all local cached leases */
   clear(): void {
     this.leases.clear();
   }
 
-  /** Invalidate local lease for a specific project */
   invalidate(projectId: string): void {
     this.leases.delete(projectId);
   }

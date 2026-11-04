@@ -220,17 +220,9 @@ export class RedisClient {
   readonly native: Redis;
 
   /**
-   * One command connection per Redis URL for every service in this process.
-   *
-   * Each service used to open its own, so a single notification's commands
-   * reached Redis over three or four sockets, one round trip each. Sharing a
-   * connection lets auto-pipelining merge whatever the services issue in the
-   * same tick into one write, and Redis spends most of its time per round trip
-   * rather than per command. Blocking reads and subscribers still duplicate
-   * their own connections.
-   *
-   * The handle's `disconnect()` releases this caller's reference; the
-   * connection closes when the last service lets go.
+   * One command connection per URL for every service in the process, so
+   * auto-pipelining can batch what they send in the same tick. `disconnect()`
+   * drops this caller's reference; the last one closes the connection.
    */
   static shared(options: RedisClientOptions): RedisClient {
     let entry = sharedClients.get(options.url);
