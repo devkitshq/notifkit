@@ -20,7 +20,7 @@ import {
   PUBSUB_CHANNELS,
 } from "@/index.js";
 import { upsertOutboxProviderIds } from "@/db/bulk.js";
-import { deliveryOutbox, scheduledPayloads } from "@/db/schema.js";
+import { scheduledPayloads } from "@/db/schema.js";
 import { sql as drizzleSql } from "drizzle-orm";
 import { ContactRepository, IdempotencyGuard, TemplateRepository } from "@/index.js";
 import { renderWithTemplate, TemplateCache } from "@/templates/index.js";
@@ -127,7 +127,6 @@ export class DeliveryWorker extends BaseWorker {
 
   private eventProcessor: BatchProcessor<any, void>;
   private outboxUpdateProcessor: BatchProcessor<any, void>;
-  private outboxInsertProcessor: BatchProcessor<any, boolean>;
   private breakers = new Map<string, CircuitBreaker>();
   private readonly providerThrottle: ProviderThrottle;
   private readonly templateCache?: TemplateCache;
@@ -180,25 +179,10 @@ export class DeliveryWorker extends BaseWorker {
       },
       flushConcurrency,
     );
-
-    this.outboxInsertProcessor = new BatchProcessor(batchSize, 5, async (tasks) => {
-      const values = tasks.map((task: any) => ({
-        taskId: task.taskId,
-        channel: task.channel,
-        destination: task.destination,
-      }));
-
-      await this.db.insert(deliveryOutbox).values(values).onConflictDoNothing();
-      return tasks.map(() => true);
-    });
   }
 
   override async stop(): Promise<void> {
-    await Promise.all([
-      this.eventProcessor.flush(),
-      this.outboxUpdateProcessor.flush(),
-      this.outboxInsertProcessor.flush(),
-    ]);
+    await Promise.all([this.eventProcessor.flush(), this.outboxUpdateProcessor.flush()]);
     await super.stop();
   }
 
