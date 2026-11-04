@@ -7,8 +7,6 @@ import {
   LUA_RENEW_LOCK,
   LUA_USER_THROTTLE,
   LUA_SCHEDULER_POLL,
-  LUA_ACQUIRE_LEASE,
-  LUA_MARK_PROCESSED,
 } from "@/redis/index.js";
 import { UserThrottle } from "@/rate-limiter/index.js";
 import { executeSchedulerPoll } from "@/services/scheduler/main.js";
@@ -45,14 +43,6 @@ describe("Redis Pre-compiled Commands (defineCommand)", () => {
       expect(definedCommands.has("schedulerPoll")).toBe(true);
       expect(definedCommands.get("schedulerPoll")?.numberOfKeys).toBe(1);
       expect(definedCommands.get("schedulerPoll")?.lua).toBe(LUA_SCHEDULER_POLL);
-
-      expect(definedCommands.has("acquireLease")).toBe(true);
-      expect(definedCommands.get("acquireLease")?.numberOfKeys).toBe(3);
-      expect(definedCommands.get("acquireLease")?.lua).toBe(LUA_ACQUIRE_LEASE);
-
-      expect(definedCommands.has("markProcessed")).toBe(true);
-      expect(definedCommands.get("markProcessed")?.numberOfKeys).toBe(3);
-      expect(definedCommands.get("markProcessed")?.lua).toBe(LUA_MARK_PROCESSED);
     });
 
     it("RedisClient automatically registers all custom commands on native client", () => {
@@ -66,8 +56,6 @@ describe("Redis Pre-compiled Commands (defineCommand)", () => {
         expect(typeof client.native.renewLock).toBe("function");
         expect(typeof client.native.throttleUser).toBe("function");
         expect(typeof client.native.schedulerPoll).toBe("function");
-        expect(typeof (client.native as any).acquireLease).toBe("function");
-        expect(typeof (client.native as any).markProcessed).toBe("function");
       } finally {
         void client.disconnect();
       }

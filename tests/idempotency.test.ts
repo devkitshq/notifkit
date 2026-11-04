@@ -85,6 +85,7 @@ describe("IdempotencyGuard (src/idempotency/index.ts)", () => {
 
     await guard.unmark("msg-rollback");
     expect(mockRedis.del).toHaveBeenCalledWith("notif:idem:msg-rollback");
+    expect(mockRedis.del).toHaveBeenCalledTimes(1);
   });
 
   describe("acquireLease two-phase state", () => {
@@ -97,10 +98,10 @@ describe("IdempotencyGuard (src/idempotency/index.ts)", () => {
       expect(mockRedis.set).toHaveBeenCalledWith("notif:idem:task-1", "L", "EX", 30, "NX");
     });
 
-    it("returns 'completed' when key already marked completed ('S')", async () => {
+    it("returns 'completed' when key already marked completed ('1')", async () => {
       mockRedis.set.mockResolvedValueOnce(null); // SET NX fails (key exists)
       mockRedis.get.mockImplementation(async (key: string) => {
-        if (key === "notif:idem:task-2") return "S";
+        if (key === "notif:idem:task-2") return "1";
         return null;
       });
       const guard = new IdempotencyGuard({ redis: mockRedis, keyPrefix: "notif:idem" });
@@ -119,6 +120,7 @@ describe("IdempotencyGuard (src/idempotency/index.ts)", () => {
 
       const state = await guard.acquireLease("task-3", 30);
       expect(state).toBe("locked");
+      expect(mockRedis.get).toHaveBeenCalledTimes(1);
     });
 
     it("markProcessed records completed marker '1' on main key with given TTL", async () => {

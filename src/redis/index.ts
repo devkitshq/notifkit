@@ -171,35 +171,6 @@ export const LUA_COUNT_REQUEST = `
 `;
 
 /**
- * Two-phase idempotency lease acquisition. Checks sent/legacy, then attempts SET NX lock.
- * @deprecated Nothing calls the `acquireLease` command; removed in the next minor version.
- */
-export const LUA_ACQUIRE_LEASE = `
-  if redis.call('EXISTS', KEYS[1]) == 1 or redis.call('EXISTS', KEYS[3]) == 1 then
-    return 'completed'
-  end
-  local lockAcquired = redis.call('SET', KEYS[2], '1', 'EX', ARGV[1], 'NX')
-  if lockAcquired then
-    return 'acquired'
-  end
-  if redis.call('EXISTS', KEYS[1]) == 1 or redis.call('EXISTS', KEYS[3]) == 1 then
-    return 'completed'
-  end
-  return 'locked'
-`;
-
-/**
- * Two-phase idempotency completion marker. Atomically sets completed + legacy and deletes lock.
- * @deprecated Nothing calls the `markProcessed` command; removed in the next minor version.
- */
-export const LUA_MARK_PROCESSED = `
-  redis.call('SET', KEYS[1], '1', 'EX', ARGV[1])
-  redis.call('SET', KEYS[2], '1', 'EX', ARGV[1])
-  redis.call('DEL', KEYS[3])
-  return 1
-`;
-
-/**
  * Registers pre-compiled custom commands on an ioredis instance.
  * Calls defineCommand so ioredis uses EVALSHA rather than re-transmitting
  * full script strings over the wire.
@@ -230,20 +201,9 @@ export function registerCustomCommands(redis: Redis): void {
     lua: LUA_SCHEDULER_POLL,
   });
 
-  // Deprecated: nothing calls acquireLease or markProcessed. Remove both in the next minor.
-  redis.defineCommand("acquireLease", {
-    numberOfKeys: 3,
-    lua: LUA_ACQUIRE_LEASE,
-  });
-
   redis.defineCommand("countRequest", {
     numberOfKeys: 1,
     lua: LUA_COUNT_REQUEST,
-  });
-
-  redis.defineCommand("markProcessed", {
-    numberOfKeys: 3,
-    lua: LUA_MARK_PROCESSED,
   });
 }
 
