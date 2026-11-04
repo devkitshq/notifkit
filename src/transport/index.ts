@@ -1,7 +1,5 @@
 import type { NotificationChannel, NotificationDispatchedPayload } from "@/index.js";
 
-// ─── Core interface ──────────────────────────────────────────────────────────
-//
 // Implement this interface to add a new channel (Email, SMS, APNS, Web Push …).
 // Register the implementation with transportRegistry at app startup.
 
@@ -66,8 +64,6 @@ export interface Transport {
     headers?: Record<string, string | string[] | undefined>,
   ) => Promise<WebhookEvent[]>;
 }
-
-// ─── TransportRegistry ───────────────────────────────────────────────────────
 
 class TransportRegistry {
   private readonly transports = new Map<string, { transport: Transport; priority: number }[]>();

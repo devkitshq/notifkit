@@ -27,8 +27,6 @@ import {
   uniqueConsumerId,
 } from "@/workers/bootstrap.js";
 
-// ─── Bootstrap ─────────────────────────────────────────────────────────────
-
 loadEnv();
 const config = readBaseConfig();
 
@@ -610,8 +608,6 @@ export async function startEnricherWorker() {
     templateCache,
   });
 
-  // ─── Health check interval ──────────────────────────────────────────────────
-
   healthInterval = startHealthReporter("enricher", worker, redis, logger);
 
   logger.info({ env: config.NODE_ENV }, "enricher starting");
@@ -621,8 +617,6 @@ export async function startEnricherWorker() {
 export function getEnricherWorker(): EnricherWorker | undefined {
   return worker as EnricherWorker | undefined;
 }
-
-// ─── Shutdown ──────────────────────────────────────────────────────────────
 
 export async function stopEnricherWorker(): Promise<void> {
   await shutdownWorker("enricher", { logger, timers: [healthInterval], worker, sql, redis });

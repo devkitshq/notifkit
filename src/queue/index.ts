@@ -10,8 +10,6 @@ import {
 } from "@/index.js";
 import { metrics } from "@/metrics/index.js";
 
-// ─── Types ─────────────────────────────────────────────────────────────────
-
 export interface StreamMessage {
   id: string;
   event: StreamEvent;
@@ -35,8 +33,6 @@ export interface PendingEntry {
   /** Stream this entry is pending on. Stream ids are not unique across streams. */
   stream: StreamName;
 }
-
-// ─── Internal helpers ──────────────────────────────────────────────────────
 
 function parseMessage(id: string, fields: string[] | null, logger?: Logger): StreamMessage | null {
   if (!fields) return null;
@@ -63,8 +59,6 @@ function parseMessage(id: string, fields: string[] | null, logger?: Logger): Str
 
   return { id, event: parsed.data };
 }
-
-// ─── StreamProducer ────────────────────────────────────────────────────────
 
 export interface StreamProducerOptions {
   redis: Redis;
@@ -214,8 +208,6 @@ export class StreamProducer {
     return { messageIds, eventIds };
   }
 }
-
-// ─── StreamConsumer ────────────────────────────────────────────────────────
 
 export interface StreamConsumerOptions {
   redis: Redis;
@@ -556,8 +548,6 @@ export class StreamConsumer {
     }
   }
 }
-
-// ─── PendingMessageScanner ─────────────────────────────────────────────────
 
 export interface PendingMessageScannerOptions {
   redis: Redis;

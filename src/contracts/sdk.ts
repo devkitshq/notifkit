@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { NotificationChannelSchema, NotificationPrioritySchema } from "./common.js";
 
-// ─── Preferences ──────────────────────────────────────────────────────────────
+// Preferences
 //
 // Preferences are stored as JSONB and are intentionally open-ended so new
 // channels/topics can be added without a migration. `channels` and `topics`
@@ -21,7 +21,7 @@ export const PreferencesSchema = z.object({
 });
 export type Preferences = z.infer<typeof PreferencesSchema>;
 
-// ─── Contacts ─────────────────────────────────────────────────────────────────
+// Contacts
 
 /** Channels that carry an addressable target (email address, phone, push token, url, chat id). */
 export const ContactChannelSchema = NotificationChannelSchema;
@@ -42,7 +42,7 @@ export const UserContactInputSchema = z.object({
 });
 export type UserContactInput = z.infer<typeof UserContactInputSchema>;
 
-// ─── Users ────────────────────────────────────────────────────────────────────
+// Users
 
 /**
  * addUser({ id, contacts, email, phone, pushToken, segments, preferences })
@@ -82,7 +82,7 @@ export type AddContactInput = z.infer<typeof AddContactSchema>;
 export const BatchAddContactsSchema = z.union([AddContactSchema, z.array(AddContactSchema).min(1)]);
 export type BatchAddContactsInput = z.infer<typeof BatchAddContactsSchema>;
 
-// ─── Templates ────────────────────────────────────────────────────────────────
+// Templates
 
 export const TemplateSchema = z.object({
   id: z.string().min(1),
@@ -98,7 +98,7 @@ export const SyncTemplatesSchema = z.object({
 });
 export type SyncTemplatesInput = z.input<typeof SyncTemplatesSchema>;
 
-// ─── notify() ─────────────────────────────────────────────────────────────────
+// notify()
 
 /** Inline user object accepted by notify({ user: {...} }). */
 export const InlineUserSchema = AddUserSchema;
@@ -180,7 +180,7 @@ export const WorkflowNotifyPayloadSchema = NotifyRequestFields.superRefine((val,
 });
 export type WorkflowNotifyInput = z.input<typeof WorkflowNotifyPayloadSchema>;
 
-// ─── Workflows ────────────────────────────────────────────────────────────────
+// Workflows
 
 export const TriggerWorkflowSchema = z.object({
   name: z.string().min(1),
@@ -189,7 +189,7 @@ export const TriggerWorkflowSchema = z.object({
 });
 export type TriggerWorkflowInput = z.input<typeof TriggerWorkflowSchema>;
 
-// ─── Events ───────────────────────────────────────────────────────────────────
+// Events
 
 export const IngestEventSchema = z.object({
   name: z.string().min(1),
@@ -230,7 +230,7 @@ export const CreateWorkflowSchema = z.object({
 });
 export type CreateWorkflowInput = z.input<typeof CreateWorkflowSchema>;
 
-// ─── Projects ─────────────────────────────────────────────────────────────────
+// Projects
 
 export const UpdateProjectSchema = z.object({
   rateLimitRpm: z.number().nullable().optional(),
@@ -239,7 +239,7 @@ export const UpdateProjectSchema = z.object({
 });
 export type UpdateProjectInput = z.infer<typeof UpdateProjectSchema>;
 
-// ─── Response Entities ────────────────────────────────────────────────────────
+// Response Entities
 
 export interface UserContactResponse {
   id: string;

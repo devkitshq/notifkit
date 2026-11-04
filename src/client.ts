@@ -320,7 +320,7 @@ export class NotifkitClient {
     return this.request("/v1/segments", "GET");
   }
 
-  // ─── Campaigns ───────────────────────────────────────────────────────────────
+  // Campaigns
 
   /** List campaign labels seen in the delivery log, most recent activity first. */
   async listCampaigns(options?: {
@@ -371,7 +371,7 @@ export class NotifkitClient {
     return this.request(`/v1/campaigns/${encodeURIComponent(campaign)}/stats`, "GET");
   }
 
-  // ─── Suppressions ────────────────────────────────────────────────────────────
+  // Suppressions
 
   /** List suppressed destinations. */
   async listSuppressions(options?: {
@@ -406,7 +406,7 @@ export class NotifkitClient {
     );
   }
 
-  // ─── Notification Status & Cancellation ─────────────────────────────────────
+  // Notification Status & Cancellation
 
   /** Get real-time status and delivery logs for a specific notification task. */
   async getNotificationStatus(
@@ -425,7 +425,7 @@ export class NotifkitClient {
     return this.request("/v1/notifications/scheduled", "GET");
   }
 
-  // ─── User Profile & Preferences ─────────────────────────────────────────────
+  // User Profile & Preferences
 
   /** Get user profile and contacts by ID. */
   async getUser(id: string): Promise<UserResponse> {
@@ -450,7 +450,7 @@ export class NotifkitClient {
     return this.request(`/v1/users/${encodeURIComponent(id)}/preferences`, "PATCH", preferences);
   }
 
-  // ─── Templates Querying ─────────────────────────────────────────────────────
+  // Templates Querying
 
   /** List all templates for the project. */
   async listTemplates(): Promise<{ templates: TemplateRecordResponse[] }> {
@@ -462,7 +462,7 @@ export class NotifkitClient {
     return this.request(`/v1/templates/${encodeURIComponent(id)}`, "GET");
   }
 
-  // ─── System Health, Metrics & DLQ ───────────────────────────────────────────
+  // System Health, Metrics & DLQ
 
   /** Get system health and worker status. */
   async getSystemHealth(): Promise<SystemHealthRecord> {

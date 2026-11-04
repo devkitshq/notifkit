@@ -4,8 +4,6 @@ import { globalEmitter, AsyncSemaphore } from "@/shared/index.js";
 import { metrics } from "@/metrics/index.js";
 export * from "./health.js";
 
-// ─── Types ─────────────────────────────────────────────────────────────────
-
 export class NonRetryableError extends Error {
   readonly nonRetryable = true;
   constructor(message: string) {
@@ -43,8 +41,6 @@ export interface WorkerOptions {
   recoveryIntervalMs?: number;
   maxRetriesBeforeDlq?: number;
 }
-
-// ─── BaseWorker ────────────────────────────────────────────────────────────
 
 export abstract class BaseWorker {
   protected readonly logger: Logger;

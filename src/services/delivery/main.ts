@@ -39,8 +39,6 @@ import { publishDeliveryEvents } from "./live-events.js";
 import { ProviderThrottle } from "./throttle.js";
 import { metrics } from "@/metrics/index.js";
 
-// ─── Bootstrap ─────────────────────────────────────────────────────────────
-
 loadEnv();
 const config = readBaseConfig();
 
@@ -828,8 +826,6 @@ export async function startDeliveryWorker() {
   // Outcomes for the API's live event stream, which may be in another process.
   stopLiveEvents = publishDeliveryEvents(redis.native, globalEmitter);
 
-  // ─── Health check interval ──────────────────────────────────────────────────
-
   healthInterval = startHealthReporter("delivery", worker, redis, logger);
 
   logger.info(
@@ -842,8 +838,6 @@ export async function startDeliveryWorker() {
 export function getDeliveryWorker(): DeliveryWorker | undefined {
   return worker as DeliveryWorker | undefined;
 }
-
-// ─── Shutdown ──────────────────────────────────────────────────────────────
 
 export async function stopDeliveryWorker(): Promise<void> {
   await shutdownWorker("delivery", {
