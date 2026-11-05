@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.1.18](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.17...notifkit-v0.1.18) (2026-11-05)
+
+
+### Features
+
+* **scheduler:** delete delivery logs older than LOG_RETENTION_DAYS ([a6ab165](https://github.com/devkitshq/notifkit/commit/a6ab1654954b3bbfe157e1a14577d5816d9e4086))
+
+
+### Bug Fixes
+
+* **api:** fail notify when the inline user cannot be saved ([099f5ed](https://github.com/devkitshq/notifkit/commit/099f5edd117f042eafeee8870485cb3958bfba9b))
+* **api:** let read-only sessions log out ([386c132](https://github.com/devkitshq/notifkit/commit/386c13234d71d9004396d3ce2b66c6f4aa4b7564))
+* **config:** validate RATE_LIMIT_PER_HOUR with the rest of the config ([cea8025](https://github.com/devkitshq/notifkit/commit/cea8025c0c6caf577805a0e862e4784770d69495))
+* **engine:** keep the lease short for scheduled sends ([66b57d0](https://github.com/devkitshq/notifkit/commit/66b57d09c5dbfb378e5306e4ff551319d15760c4))
+* **scheduler:** keep delivery logs unless LOG_RETENTION_DAYS is set ([bab14cd](https://github.com/devkitshq/notifkit/commit/bab14cdb79681a5c8d8bc5b1a1045de01f5fa1cd))
+* **workflow:** only reap instances that are still running ([276d7aa](https://github.com/devkitshq/notifkit/commit/276d7aa5594383f22ae4af55cf6fd0e133676ae4))
+
 ## [0.1.17](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.16...notifkit-v0.1.17) (2026-11-01)
 
 
