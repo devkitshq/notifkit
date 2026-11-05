@@ -6,7 +6,7 @@ import {
   getAdminSession,
   DUMMY_PASSWORD_HASH,
 } from "@/services/auth/index.js";
-import { readJsonBody, sendJson, sendValidationError } from "../http.js";
+import { extractAuthToken, readJsonBody, sendJson, sendValidationError } from "../http.js";
 import { z } from "zod";
 import { type Deps } from "./shared.js";
 
@@ -63,11 +63,7 @@ export function createAuthHandlers(deps: Deps) {
   }
 
   async function logout(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const authHeader = req.headers["authorization"];
-    let token: string | undefined;
-    if (typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")) {
-      token = authHeader.slice(7).trim();
-    }
+    const token = extractAuthToken(req);
     if (token) {
       await revokeAdminSession(deps.redis.native, token);
     }
@@ -75,11 +71,7 @@ export function createAuthHandlers(deps: Deps) {
   }
 
   async function getMe(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const authHeader = req.headers["authorization"];
-    let token: string | undefined;
-    if (typeof authHeader === "string" && authHeader.toLowerCase().startsWith("bearer ")) {
-      token = authHeader.slice(7).trim();
-    }
+    const token = extractAuthToken(req);
     if (!token) {
       sendJson(res, 401, { error: "unauthorized", message: "Missing token" });
       return;

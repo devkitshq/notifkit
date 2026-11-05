@@ -8,11 +8,7 @@ const scryptAsync = promisify(scrypt);
 const DEFAULT_SESSION_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
 const SESSION_PREFIX = "notif:session:";
 
-/**
- * Pre-computed dummy hash conforming to salt(16 bytes hex):hash(64 bytes hex).
- * Used during authentication failure to equalize execution time and prevent
- * user enumeration via scrypt timing side-channels.
- */
+/** Verified against when the user does not exist, so a miss costs as much as a wrong password. */
 export const DUMMY_PASSWORD_HASH =
   "00000000000000000000000000000000:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000";
 
@@ -26,19 +22,13 @@ export interface AdminSession {
   expiresAt: number;
 }
 
-/**
- * Hashes a plaintext password using crypto.scrypt with a random 16-byte salt.
- * Returns salt and hash separated by a colon.
- */
+/** Returns `salt:hash`, both hex. */
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16).toString("hex");
   const derivedKey = (await scryptAsync(password, salt, 64)) as Buffer;
   return `${salt}:${derivedKey.toString("hex")}`;
 }
 
-/**
- * Verifies a plaintext password against a stored salt:hash string using constant-time comparison.
- */
 export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
   const [salt, key] = storedHash.split(":");
   if (!salt || !key) return false;
@@ -52,9 +42,6 @@ export async function verifyPassword(password: string, storedHash: string): Prom
   return timingSafeEqual(derivedKey, keyBuffer);
 }
 
-/**
- * Creates a secure session in Redis for an authenticated admin user.
- */
 export async function createAdminSession(
   redis: RedisClient["native"],
   user: AdminUserRecord,
@@ -76,9 +63,6 @@ export async function createAdminSession(
   return session;
 }
 
-/**
- * Retrieves an admin session from Redis if valid and unexpired.
- */
 export async function getAdminSession(
   redis: RedisClient["native"],
   token: string,
@@ -99,9 +83,6 @@ export async function getAdminSession(
   }
 }
 
-/**
- * Revokes an active admin session.
- */
 export async function revokeAdminSession(
   redis: RedisClient["native"],
   token: string,
