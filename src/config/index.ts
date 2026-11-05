@@ -77,8 +77,8 @@ export const baseConfigSchema = z.object({
     .regex(/^[a-z_][a-z0-9_]{0,62}$/, "must be a lowercase PostgreSQL identifier")
     .default("public"),
   LOG_FLUSH_INTERVAL_MS: z.coerce.number().int().min(50).default(500),
-  /** Days of delivery logs to keep; the scheduler deletes older rows hourly. */
-  LOG_RETENTION_DAYS: z.coerce.number().int().min(1).default(30),
+  /** Days of delivery logs to keep; the scheduler deletes older rows hourly. Unset keeps them forever. */
+  LOG_RETENTION_DAYS: z.coerce.number().int().min(1).optional(),
   LOG_BUFFER_MAX_SIZE: z.coerce.number().int().min(100).default(5000),
   SEGMENT_MAX_USERS: z.coerce.number().int().min(1).default(100_000),
   /**
