@@ -170,7 +170,8 @@ describe("EventWorker: delivery log", () => {
     worker = undefined;
     const [{ n }] = (await infra.sql`SELECT count(*)::int AS n FROM message_logs`) as any;
     expect(n).toBe(5);
-  });
+    // With the flush interval off, stop() waits out BaseWorker's 30s drain before flushing.
+  }, 60_000);
 
   it("ignores event types it has no use for", async () => {
     await start();

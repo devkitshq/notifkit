@@ -13,8 +13,10 @@ export default defineConfig({
     exclude: ["**/node_modules/**", "**/dist/**", "profiling/**", ".agents/**"],
     // Starts the Postgres and Redis every file under tests/integration shares.
     globalSetup: ["tests/integration/support/global-setup.ts"],
-    testTimeout: 1200_000,
-    hookTimeout: 1200_000,
+    // Tests that need longer (chaos, slow pipelines) pass their own timeout.
+    testTimeout: 30_000,
+    // Long enough for a first-time container image pull.
+    hookTimeout: 300_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "json-summary", "html"],

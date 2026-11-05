@@ -29,7 +29,7 @@ import { createMockDb, type MockDb } from "./helpers/mock-db.js";
 /**
  * Repository methods whose behaviour is more than a query: the row-to-domain
  * mapping, the early exits, and the boolean each caller branches on. Queries
- * themselves are exercised against real Postgres in repositories.test.ts.
+ * themselves are exercised against real Postgres in integration/repositories.test.ts.
  */
 
 describe("Repository mapping and guards", () => {
@@ -462,6 +462,42 @@ describe("Repository mapping and guards", () => {
 
       const channelInsert = mockDb.inserts.find((i) => i.table === userChannelPreferences);
       expect(channelInsert).toBeDefined();
+    });
+  });
+
+  describe("UserRepository.upsertManyFull", () => {
+    const serializationFailure = () =>
+      Object.assign(new Error("Serialization error"), { code: "40001" });
+
+    it("retries a serialization failure (40001) until it succeeds", async () => {
+      mockDb.db.transaction
+        .mockRejectedValueOnce(serializationFailure())
+        .mockRejectedValueOnce(serializationFailure())
+        .mockResolvedValueOnce(undefined);
+
+      await new UserRepository(mockDb.db).upsertManyFull("proj-1", [{ userId: "u1" } as any]);
+
+      expect(mockDb.db.transaction).toHaveBeenCalledTimes(3);
+    });
+
+    it("gives up after three serialization failures", async () => {
+      mockDb.db.transaction.mockRejectedValue(serializationFailure());
+
+      await expect(
+        new UserRepository(mockDb.db).upsertManyFull("proj-1", [{ userId: "u1" } as any]),
+      ).rejects.toThrow("Serialization error");
+      expect(mockDb.db.transaction).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not retry any other error", async () => {
+      mockDb.db.transaction.mockRejectedValueOnce(
+        Object.assign(new Error("Syntax error"), { code: "42601" }),
+      );
+
+      await expect(
+        new UserRepository(mockDb.db).upsertManyFull("proj-1", [{ userId: "u1" } as any]),
+      ).rejects.toThrow("Syntax error");
+      expect(mockDb.db.transaction).toHaveBeenCalledTimes(1);
     });
   });
 });
