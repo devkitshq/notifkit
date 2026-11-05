@@ -10,9 +10,7 @@ import { type Deps } from "./shared.js";
 export function createUnsubscribeHandlers(deps: Deps) {
   const { logger } = deps;
 
-  // Both routes are unauthenticated: they are reached from a mail client, which
-  // has no API key. The signed token in the URL is the credential and it
-  // authorises exactly one thing for one address.
+  // Both routes are public; the signed token in the URL is the credential.
 
   function sendHtml(res: ServerResponse, status: number, body: string): void {
     res.writeHead(status, {
@@ -44,14 +42,7 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
 </head><body><h1>${escapeHtml(title)}</h1>${message}</body></html>`;
   }
 
-  /**
-   * GET — the page a human lands on after clicking the link in the mail body.
-   *
-   * Deliberately does not unsubscribe anything. Corporate mail scanners and
-   * link prescanners issue a GET against every URL in a message; performing the
-   * opt-out here would unsubscribe people who never clicked. The mutation lives
-   * behind the POST.
-   */
+  // GET only shows a confirm page: mail scanners GET every link in a message.
   async function unsubscribePage(
     _req: IncomingMessage,
     res: ServerResponse,
@@ -96,23 +87,14 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
     );
   }
 
-  /**
-   * POST — the real opt-out.
-   *
-   * Serves two callers with one handler: a mail client doing RFC 8058 one-click
-   * (body `List-Unsubscribe=One-Click`, token in the query string, no
-   * confirmation possible), and the form on the page above. Neither can carry a
-   * CSRF token, and the one-click spec forbids an interstitial, so the signed
-   * token is the whole of the authorisation.
-   */
+  // POST serves RFC 8058 one-click and the form above. Neither can carry a CSRF
+  // token, so the signed token is the whole authorisation.
   async function unsubscribe(
     req: IncomingMessage,
     res: ServerResponse,
     ctx: RouteContext,
   ): Promise<void> {
-    // The one-click POST carries `List-Unsubscribe=One-Click` as its body and
-    // the token in the query string, so there is nothing here worth reading —
-    // but an unread body leaves bytes on a keep-alive socket. Discard it.
+    // Nothing in the body is needed, but unread bytes would stay on a keep-alive socket.
     req.resume();
 
     const cfg = readBaseConfig();
@@ -148,8 +130,7 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
       const internalId = userRows[0]?.id;
 
       if (claim.topics.length > 0 && internalId) {
-        // Scoped opt-out: silence this kind of mail and leave the rest,
-        // including anything transactional, working.
+        // Scoped opt-out: transactional mail keeps working.
         await deps.db
           .insert(userTopicPreferences)
           .values(claim.topics.map((topic) => ({ userId: internalId, topic, enabled: false })))
@@ -158,9 +139,7 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
             set: { enabled: sql`excluded.enabled` },
           });
       } else {
-        // No topic to scope to, or the user record is gone. Either way the
-        // request has to be honoured, so fall back to suppressing the address
-        // outright — over-honouring an unsubscribe is the safe direction.
+        // No topic, or the user is gone: suppress the address outright.
         await deps.db
           .insert(suppressions)
           .values({
@@ -183,8 +162,6 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
         "unsubscribe honoured",
       );
     } catch (err) {
-      // A 5xx here means the mail client reports failure and, worse, the person
-      // believes they have opted out when they have not.
       logger.error({ err, projectId: claim.projectId }, "unsubscribe failed to apply");
       return sendHtml(
         res,

@@ -31,7 +31,7 @@ export interface Deps {
   liveEvents: LiveDeliveryEvents;
 }
 
-// Inline user shape (email/phone/pushToken already normalised to string[] by Zod).
+// email/phone/pushToken arrive normalised to string[] by Zod.
 export interface InlineUserLike {
   id: string;
   language?: string;
@@ -53,7 +53,6 @@ interface ResolvedContact {
   preferences?: Preferences;
 }
 
-/** Map an inline or user input's contacts and legacy arrays into resolved contact records. */
 export function contactsOf(user: InlineUserLike): ResolvedContact[] {
   const list: ResolvedContact[] = [];
 
@@ -89,7 +88,6 @@ export function contactsOf(user: InlineUserLike): ResolvedContact[] {
   return list;
 }
 
-/** Persist user records + their contacts in bulk. Shared by addUser and inline notify. */
 export async function persistUsers(
   deps: Deps,
   users: InlineUserLike[],
@@ -98,9 +96,7 @@ export async function persistUsers(
   const usersList = users.map((u) => {
     const primaryEmail = u.email?.[0] ?? u.contacts?.find((c) => c.channel === "email")?.target;
 
-    // Omitted fields stay omitted: the upsert merges what is given into the
-    // stored profile, so an inline `{ id, phone }` on notify must not reset the
-    // user's timezone, language or email. Defaults are applied when read.
+    // Omitted fields stay omitted, so an inline `{ id, phone }` keeps the stored timezone and email.
     return {
       userId: u.id,
       language: u.language,
@@ -129,12 +125,7 @@ export async function persistUsers(
   });
 }
 
-/**
- * A dead-letter entry, read the way StreamConsumer writes it: the original
- * event JSON under `data`, carrying a `dlq` block that records which stream it
- * failed on. Flat `payload`/`eventType` fields are accepted for entries written
- * by hand or by older versions.
- */
+/** As StreamConsumer writes it: the event JSON under `data` with a `dlq` block. Flat fields are hand-written entries. */
 export interface DlqEntry {
   id: string;
   eventType: string;
@@ -192,10 +183,7 @@ export function parseDlqEntry(id: string, rawFields: string[]): DlqEntry {
   };
 }
 
-/**
- * Ids that live in uuid columns. Anything else can match no row, and passing it
- * to Postgres fails the query outright — a 500 for what is simply not found.
- */
+/** Postgres errors on a non-uuid in a uuid column; callers answer 404 instead. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const isUuid = (v: string | undefined): v is string =>
   typeof v === "string" && UUID_RE.test(v);
@@ -232,26 +220,16 @@ export function decodeLogCursor(
   return null;
 }
 
-/**
- * A LIKE pattern matching `term` anywhere, with the term's own `%`, `_` and
- * `\` taken literally rather than as wildcards.
- */
+/** A LIKE pattern matching `term` anywhere, its own wildcards escaped. */
 export function contains(term: string): string {
   return `%${term.replace(/[\\%_]/g, "\\$&")}%`;
 }
 
 export function getQueryParam(ctx: RouteContext, key: string): string | undefined {
-  if (!ctx.query) return undefined;
-  if (typeof ctx.query.get === "function") {
-    return ctx.query.get(key) ?? undefined;
-  }
-  return (ctx.query as any)[key] ?? undefined;
+  return ctx.query.get(key) ?? undefined;
 }
 
-/**
- * Page size from `?limit=`, clamped to [1, max]. Missing or non-numeric
- * values fall back to `fallback`; `undefined` there means "no limit".
- */
+/** `?limit=` clamped to [1, max]; missing or junk gives `fallback` (`undefined` = no limit). */
 export function parseLimit<F extends number | undefined>(
   ctx: RouteContext,
   fallback: F,

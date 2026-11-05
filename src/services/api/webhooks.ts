@@ -1,16 +1,16 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { inArray } from "drizzle-orm";
+import type { Db } from "@/db/index.js";
 import type { Logger } from "@/logger/index.js";
 import type { Transport } from "@/transport/index.js";
 import { messageLogs, suppressions } from "@/db/schema.js";
 import { normaliseTarget } from "@/shared/index.js";
 import { readRawBody, sendJson } from "./http.js";
 
-/** The POST route a provider delivers webhook events to. */
 export function createWebhookHandler(
   transport: Transport,
   channel: string,
-  deps: { db: any; logger: Logger },
+  deps: { db: Db; logger: Logger },
 ) {
   const { db, logger } = deps;
   return async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -64,17 +64,13 @@ export function createWebhookHandler(
                 if (row.providerMessageId) {
                   logsToProject.set(row.providerMessageId, row.projectId);
                   logsToTask.set(row.providerMessageId, row.taskId);
-                  // Inherit the campaign from the delivery this event is
-                  // about, or an open never counts toward the send that
-                  // earned it.
+                  // So an open counts toward the campaign of the send it is about.
                   logsToCampaign.set(row.providerMessageId, row.campaignId);
                 }
               }
             }
 
-            // Only record events we can attribute to a real message. An
-            // unresolvable providerMessageId used to be written against a
-            // zero-UUID project, which is unjoinable and leaks across tenants.
+            // Unattributable events are dropped: there is no project to store them under.
             const attributable = events.filter(
               (e) => e.providerMessageId && logsToProject.has(e.providerMessageId),
             );
@@ -101,14 +97,11 @@ export function createWebhookHandler(
             }
 
             if (rows.length > 0) {
-              // Providers retry on any non-2xx, so redelivery of an event we have
-              // already recorded must be a no-op rather than a constraint error.
+              // Providers redeliver on any non-2xx; a repeat must be a no-op.
               await db.insert(messageLogs).values(rows).onConflictDoNothing();
             }
 
-            // An unsubscribe, a spam complaint, or a permanently dead
-            // address must stop future sends — logging it is not enough.
-            // Soft bounces are excluded: the address is still good.
+            // Stop future sends on unsubscribes, complaints and hard bounces (not soft ones).
             const suppressionRows = attributable
               .filter(
                 (e) =>
@@ -127,8 +120,7 @@ export function createWebhookHandler(
               }));
 
             if (suppressionRows.length > 0) {
-              // First reason wins: a later bounce should not overwrite the
-              // record that the person actively unsubscribed.
+              // First reason wins: a later bounce must not hide an unsubscribe.
               await db.insert(suppressions).values(suppressionRows).onConflictDoNothing();
               logger.info(
                 { channel, count: suppressionRows.length },
@@ -144,8 +136,6 @@ export function createWebhookHandler(
                   e.status === "bounced"),
             ).length;
             if (unsuppressable > 0) {
-              // Worth shouting about: the event arrived, we logged it, and
-              // we still cannot stop mailing the person.
               logger.warn(
                 { channel, count: unsuppressable },
                 "suppression events carried no recipient address — transport must set WebhookEvent.recipient",
@@ -159,8 +149,7 @@ export function createWebhookHandler(
         }),
       ]);
     } catch (err) {
-      // The detail is ours to log, not the provider's: providers keep
-      // response bodies in their delivery logs.
+      // No detail in the body: providers keep response bodies in their logs.
       logger.error({ err, channel }, "webhook processing error or timeout");
       if (!res.headersSent) {
         sendJson(res, 500, { error: "internal_error" });

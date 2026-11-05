@@ -47,9 +47,7 @@ export function createProjectsHandlers(deps: Deps) {
     // next notification instead of waiting out the cache TTL.
     await deps.redis.native.publish(PUBSUB_CHANNELS.PROJECT_INVALIDATED, id);
 
-    // rateLimitRpm is read through the API's auth cache, which is keyed by token
-    // hash rather than project — dropping the whole cache is the only way to
-    // pick up a new limit promptly. Project updates are rare admin operations.
+    // The auth cache is keyed by token, not project, so a new limit needs it all dropped.
     if (parsed.data.rateLimitRpm !== undefined) {
       await deps.redis.native.publish(PUBSUB_CHANNELS.API_KEY_INVALIDATED, "*");
     }

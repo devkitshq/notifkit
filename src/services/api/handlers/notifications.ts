@@ -37,7 +37,6 @@ export function createNotificationsHandlers(deps: Deps) {
     if (!parsed.success) return sendValidationError(res, parsed.error);
     const body = parsed.data;
 
-    // Resolve the (unresolved) target. Inline users are synced first.
     let targets: NotificationTarget[] = [];
     const inlineUsersToSync: InlineUserLike[] = [];
     if (body.user !== undefined) {
@@ -204,13 +203,9 @@ export function createNotificationsHandlers(deps: Deps) {
       );
     }
 
-    // One entry per task, newest activity first. Rows are scanned in
-    // (timestamp, id) order — a batch of deliveries shares one timestamp, so
-    // the timestamp alone cannot mark a place — and a task is listed at its
-    // newest row. The cursor is that row for the first task of the next page,
-    // and any task with a row newer than the cursor was listed on an earlier
-    // page. Paging on a millisecond timestamp over `limit * 2` rows skipped
-    // tasks that shared a timestamp and dropped any that did not fit the slice.
+    // One entry per task, at its newest row. Rows are scanned by (timestamp, id)
+    // because a batch shares one timestamp; a task with a row newer than the
+    // cursor was already listed on an earlier page.
     const start = decodeLogCursor(cursor);
     const tsText = sql<string>`${messageLogs.timestamp}::text`;
     const position = (ts: string, id: string) => sql`(${ts}::timestamptz, ${id}::uuid)`;
@@ -299,15 +294,13 @@ export function createNotificationsHandlers(deps: Deps) {
       .orderBy(desc(messageLogs.timestamp));
 
     if (logs.length === 0) {
-      // It might still be pending in Redis or scheduled
       return sendJson(res, 404, {
         error: "not_found",
         message: "Task not found or not processed yet",
       });
     }
 
-    // Newest first, so `status` is the latest known state rather than whichever
-    // row Postgres happened to return first.
+    // Newest first, so `status` is the latest known state.
     sendJson(res, 200, { status: logs[0]?.status, logs });
   }
 

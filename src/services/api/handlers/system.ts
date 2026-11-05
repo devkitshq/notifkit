@@ -67,7 +67,7 @@ export function createSystemHandlers(deps: Deps) {
     });
   }
 
-  // Helper to resolve true unconsumed backlog (consumer group lag + pending entries)
+  // Unconsumed backlog: consumer group lag plus pending entries.
   async function getStreamBacklog(
     redis: any,
     streamKey: string,

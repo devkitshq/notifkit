@@ -6,8 +6,6 @@ import { messageLogs } from "@/db/schema.js";
 import { type Deps, contains, getQueryParam, parseLimit } from "./shared.js";
 
 export function createCampaignsHandlers(deps: Deps) {
-  // One row per campaign label, newest activity first, with support for filtering
-  // by search keyword, channel, date range, and minimum message counts.
   async function listCampaigns(
     _req: IncomingMessage,
     res: ServerResponse,
@@ -74,12 +72,8 @@ export function createCampaignsHandlers(deps: Deps) {
     });
   }
 
-  // The delivery funnel for one campaign, in a single grouped scan.
-  //
-  // Every figure counts *distinct tasks*, not rows: a task accumulates a
-  // dispatch row, an attempt row, and any number of engagement rows, so
-  // counting rows would inflate every number by a different factor. Opening the
-  // same email twice is one person who opened it.
+  // Every figure counts distinct tasks, not rows: one task has a dispatch row,
+  // an attempt row and any number of engagement rows.
   async function getCampaignStats(
     _req: IncomingMessage,
     res: ServerResponse,
@@ -128,10 +122,7 @@ export function createCampaignsHandlers(deps: Deps) {
       if (ENGAGEMENT.includes(row.kind as Engagement)) {
         bucket[row.kind as Engagement] += n;
       } else if (row.kind === "dispatched") {
-        // `sent` is every task that reached a provider at all, which is the
-        // denominator a bounce rate is measured against. Each attempt logs a
-        // dispatched row besides its outcome row, and the two are grouped
-        // separately, so counting both counted every message twice.
+        // Every task that reached a provider: the denominator for bounce rate.
         bucket.sent += n;
       } else {
         if (row.status === "delivered") bucket.delivered += n;
@@ -149,9 +140,7 @@ export function createCampaignsHandlers(deps: Deps) {
 
     const pct = (n: number, d: number) => (d > 0 ? Number(((n / d) * 100).toFixed(2)) : null);
 
-    // Engagement only exists where a provider reports it back. Saying "0% open
-    // rate" for an SMS blast, or for email with no webhook wired, reads as a
-    // failed campaign rather than an untracked one.
+    // No engagement data means untracked, not 0%: SMS, or email without a webhook.
     const channels = [...byChannel.keys()];
     const engagementCapable = channels.some((c) => c === "email");
     const sawEngagement = ENGAGEMENT.some((k) => total[k] > 0);

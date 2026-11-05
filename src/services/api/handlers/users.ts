@@ -228,8 +228,7 @@ export function createUsersHandlers(deps: Deps) {
     const contactTargets = contacts.map((c) => c.target);
     let logs: any[] = [];
     if (contactTargets.length > 0) {
-      // One statement: fetching every task id the addresses were ever sent and
-      // passing them back as parameters failed outright past 65,535 sends.
+      // A subquery, not a list of ids: Postgres caps bind parameters at 65,535.
       const sentTo = deps.db
         .select({ taskId: deliveryOutbox.taskId })
         .from(deliveryOutbox)

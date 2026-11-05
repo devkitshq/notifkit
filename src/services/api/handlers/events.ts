@@ -21,8 +21,7 @@ export function createEventsHandlers(deps: Deps) {
       const eventTime = new Date(tsStr as string).getTime();
       const expMs = parseInt(expiryStr as string, 10) * 1000;
 
-      // An unreadable timestamp or expiry made every comparison false, which
-      // let the event through unchecked.
+      // An unreadable date would make every comparison false and let the event through.
       if (Number.isNaN(eventTime) || Number.isNaN(expMs)) {
         sendJson(res, 400, {
           error: "invalid_timestamp",

@@ -3,7 +3,7 @@ import { loadEnv, readBaseConfig } from "@/config/index.js";
 import { createLogger } from "@/logger/index.js";
 import { RedisClient } from "@/redis/index.js";
 import { StreamProducer } from "@/queue/index.js";
-import { createDatabase } from "@/db/index.js";
+import { createDatabase, type Db, type Sql } from "@/db/index.js";
 import {
   UserRepository,
   ContactRepository,
@@ -16,7 +16,7 @@ import {
 import { STREAMS } from "@/contracts/index.js";
 import { readJsonBody, sendJson, HttpError, extractAuthToken } from "./http.js";
 import { Router } from "./router.js";
-import { createHandlers } from "./handlers.js";
+import { createHandlers, type Deps } from "./handlers.js";
 import { handleAdminRequest } from "./admin-static.js";
 import { RedisLiveDeliveryEvents } from "./live-events.js";
 import { createHealthHandlers } from "./health.js";
@@ -33,26 +33,21 @@ import { ApiRateLimiter } from "@/rate-limiter/index.js";
 
 export { extractAuthToken };
 
-/** Pub/sub channel used to drop a cached API key across every API process. */
 export const API_KEY_INVALIDATION_CHANNEL = "apikey.invalidated";
 
-/** Default window length in milliseconds for API rate limiting (1 minute). */
 export const API_RATE_LIMIT_WINDOW_MS = 60_000;
-
-// ─── Bootstrap ─────────────────────────────────────────────────────────────
 
 loadEnv();
 const config = readBaseConfig();
 
 let logger: ReturnType<typeof createLogger>;
 let redis: RedisClient;
-let sql: any;
-let db: any;
+let sql: Sql;
+let db: Db;
 let producers: Record<string, StreamProducer>;
-let deps: any;
-let h: any;
-// Short-TTL LRU so a hot key does not hit the DB on every request. Kept small
-// and invalidated on key change so a revoked key stops working promptly.
+let deps: Deps;
+let h: ReturnType<typeof createHandlers>;
+// Revoked keys are also dropped via pub/sub, so the TTL only bounds a missed message.
 interface CachedAuthKey {
   projectId: string;
   projectRateLimitRpm: number;
@@ -68,7 +63,6 @@ let router: Router;
 let liveEvents: RedisLiveDeliveryEvents | null = null;
 let apiRateLimiter: ApiRateLimiter;
 
-/** Whether `token` is ADMIN_API_KEY, compared in constant time. */
 function isAdminApiKey(token: string): boolean {
   if (!config.ADMIN_API_KEY) return false;
   const expectedBuffer = Buffer.from(config.ADMIN_API_KEY);
@@ -79,21 +73,15 @@ function isAdminApiKey(token: string): boolean {
   );
 }
 
-/**
- * What a dashboard user's role may do. `admin_users.role` is free text (the
- * create-admin script takes any value), so only the roles known to grant
- * writes do; anything else, `read_only` included, is read-only.
- */
+/** `admin_users.role` is free text, so anything but a known writer role is read-only. */
 export function sessionKeyRole(role: string): "admin" | "read_only" {
   return role === "superadmin" || role === "admin" ? "admin" : "read_only";
 }
 
 /**
- * Resolves the client address, given how many proxies (TRUST_PROXY) are in
- * front of the API. Each one appends the address it saw to X-Forwarded-For,
- * so the client is `trustedHops` back from the connecting peer. The leftmost
- * entry is the one a client can write itself, so it is used only when the
- * chain is shorter than the configured hops.
+ * Each trusted proxy appends the address it saw to X-Forwarded-For, so the
+ * client is `trustedHops` back from the peer. Entries further left are
+ * client-written.
  */
 export function getClientIp(req: IncomingMessage, trustedHops: number): string {
   const peer = req.socket.remoteAddress || "unknown";
@@ -123,8 +111,6 @@ async function handleCreateProject(req: IncomingMessage, res: ServerResponse): P
   await db.insert(projectApiKeys).values({ projectId, keyHash: apiKeyHash, role: "admin" });
   sendJson(res, 201, { id: projectId, apiKey });
 }
-
-// ─── HTTP server ────────────────────────────────────────────────────────────
 
 let server: ReturnType<typeof createServer>;
 
@@ -270,10 +256,7 @@ export async function startApiServer() {
   server.keepAliveTimeout = 5_000;
 
   async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    // Fast pathname extraction: avoid allocating a full WHATWG URL object on every
-    // request. `new URL()` parses scheme, host, port, path, and query — most of
-    // which we never use on the hot path. URLSearchParams is built lazily and only
-    // materialises when a handler or the auth block actually needs it.
+    // URL is parsed only if something reads the query.
     const rawUrl = req.url ?? "/";
     const qIdx = rawUrl.indexOf("?");
     const pathname = qIdx === -1 ? rawUrl : rawUrl.slice(0, qIdx);
@@ -325,9 +308,7 @@ export async function startApiServer() {
 
     const isProjectManagement = pathname === "/v1/projects" || pathname.startsWith("/v1/projects/");
 
-    // Unsubscribe is reached from a mail client, which has no API key and never
-    // will. The signed token in the URL is the credential, and it authorises
-    // exactly one action for one address.
+    // Reached from a mail client; the signed token in the URL is the credential.
     const isPublicUnsubscribe = pathname === "/v1/unsubscribe";
     const isPublicAuth = pathname === "/v1/auth/login";
 
@@ -412,15 +393,13 @@ export async function startApiServer() {
           });
           tokenHashToToken.set(tokenHash, token);
           if (tokenHashToToken.size > 2000) {
-            // A cached token must stay findable by its hash, or revoking it
-            // cannot evict it, so the two are dropped together.
+            // Cleared together so every cached token stays revocable by hash.
             tokenHashToToken.clear();
             authCache.clear();
           }
         }
       }
 
-      // Role Check
       // Logging out only ends the caller's own session, so read-only users may.
       if (keyRole === "read_only" && pathname !== "/v1/auth/logout") {
         const isMutating = req.method !== "GET" && req.method !== "OPTIONS";
@@ -430,19 +409,12 @@ export async function startApiServer() {
         }
       }
 
-      // Project rate limit - In-Memory Token Leasing with Redis Sliding Window
-      const allowed = apiRateLimiter
-        ? await apiRateLimiter.check(projectId || "global", projectRateLimitRpm)
-        : true;
-
-      if (!allowed) {
-        if (!res.headersSent) {
-          res.setHeader("Retry-After", "60");
-          sendJson(res, 429, {
-            error: "too_many_requests",
-            message: `Project rate limit exceeded (max ${projectRateLimitRpm} req/min)`,
-          });
-        }
+      if (!(await apiRateLimiter.check(projectId || "global", projectRateLimitRpm))) {
+        res.setHeader("Retry-After", "60");
+        sendJson(res, 429, {
+          error: "too_many_requests",
+          message: `Project rate limit exceeded (max ${projectRateLimitRpm} req/min)`,
+        });
         return;
       }
     } else if (isProjectManagement) {
@@ -457,8 +429,7 @@ export async function startApiServer() {
       if (token.startsWith("nk_sess_")) {
         const session = await getAdminSession(redis.native, token);
         if (session) {
-          // Creating projects and minting keys hands out admin credentials, so
-          // a read-only dashboard user gets to look and nothing more.
+          // Minting keys hands out admin credentials, so read-only sessions may only look.
           if (sessionKeyRole(session.role) === "read_only" && req.method !== "GET") {
             sendJson(res, 403, { error: "forbidden", message: "Session is read-only" });
             return;
@@ -476,10 +447,7 @@ export async function startApiServer() {
       isAdminToken = true;
     }
 
-    // The unsubscribe routes skip the block above, and with it the per-project
-    // rate limit — they are public by necessity. Cap them per client instead so
-    // an open endpoint cannot be used to hammer the process. Generous, because
-    // a shared corporate egress IP can legitimately produce a burst.
+    // Public, so capped per client instead of per project; generous for shared corporate IPs.
     if (isPublicUnsubscribe) {
       const clientIp = getClientIp(req, config.TRUST_PROXY);
       try {
@@ -491,14 +459,12 @@ export async function startApiServer() {
           return;
         }
       } catch (err) {
-        // Redis being down must not stop someone unsubscribing — failing open
-        // here is the lesser evil against a recipient who cannot opt out.
+        // Fail open: a recipient who cannot opt out is worse than an unthrottled endpoint.
         logger.warn({ err }, "unsubscribe rate limit unavailable — allowing request");
       }
     }
 
-    // The login route is unauthenticated and CPU-intensive due to password hashing (scrypt).
-    // Throttle login attempts per IP to prevent credential brute-forcing and CPU exhaustion.
+    // Per-IP cap against brute force; each attempt also costs a scrypt hash.
     if (isPublicAuth) {
       const clientIp = getClientIp(req, config.TRUST_PROXY);
       try {
@@ -602,8 +568,6 @@ export async function startApiServer() {
   });
 }
 
-// ─── Shutdown ──────────────────────────────────────────────────────────────
-
 export async function stopApiServer(): Promise<void> {
   logger?.info("api shutdown initiated");
   if (server) {
@@ -619,8 +583,7 @@ export async function stopApiServer(): Promise<void> {
   }
   await liveEvents?.close();
   liveEvents = null;
-  // These are module-scoped, so a restart in the same process must not inherit
-  // the previous instance's cached auth.
+  // Module-scoped, so a restart in the same process must not inherit cached auth.
   authCache = new LRUCache<string, CachedAuthKey>(1000, AUTH_CACHE_TTL_MS);
   tokenHashToToken.clear();
   if (sql) await sql.end();

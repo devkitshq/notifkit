@@ -1034,7 +1034,7 @@ describe("API Handlers", () => {
         await handlers.listTemplates({} as any, res, {
           projectId: "proj_1",
           params: {},
-          query: { channel: "email", limit: "1" },
+          query: new URLSearchParams({ channel: "email", limit: "1" }),
         } as any);
 
         expect(res.statusCode).toBe(200);
@@ -1052,7 +1052,7 @@ describe("API Handlers", () => {
         await handlers.listWorkflows({} as any, res, {
           projectId: "proj_1",
           params: {},
-          query: { limit: "2" },
+          query: new URLSearchParams({ limit: "2" }),
         } as any);
 
         expect(res.statusCode).toBe(200);
@@ -1079,7 +1079,7 @@ describe("API Handlers", () => {
         await handlers.getScheduledMessages({} as any, res, {
           projectId: "proj_1",
           params: {},
-          query: { limit: "2" },
+          query: new URLSearchParams({ limit: "2" }),
         } as any);
 
         expect(res.statusCode).toBe(200);
