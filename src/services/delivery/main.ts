@@ -59,28 +59,14 @@ let stopLiveEvents: (() => void) | null = null;
 /** How long a send may run before its dispatched log entry is published alone. */
 const DISPATCH_LOG_DELAY_MS = 1_000;
 
-/**
- * Wait before re-trying a send that failed at the provider, by prior failures.
- * The first step matches the circuit breaker's reset timeout, so a retry of a
- * task the open breaker turned away reaches the provider's recovery probe
- * rather than the same closed door.
- */
+// Backoff by prior failures. The first step equals the breaker's reset timeout,
+// so a retry reaches the half-open probe instead of the still-open breaker.
 const RETRY_BACKOFF_MS = [30_000, 120_000, 600_000];
 
-/**
- * How many times a send may be put back for want of provider capacity before
- * it is failed. Separate from `maxAttempts`, which counts sends the provider
- * refused: waiting in line is not a failed attempt, and a campaign several
- * windows deeper than the provider's limit has to be able to wait that long.
- */
+// Deferrals for provider capacity. Not counted against maxAttempts: waiting is not a failure.
 export const MAX_THROTTLE_DEFERRALS = 50;
 
-/**
- * Names the provider at `transports[i]` for its rate limit and circuit breaker.
- * The rate limit's budget lives in Redis and is shared by every delivery
- * process, so the name must come out the same everywhere: the class name,
- * numbered when a channel has two providers of one class.
- */
+// Stable across processes because the rate limit budget is shared in Redis.
 function providerKey(channel: string, transports: any[], i: number): string {
   const name = transports[i].constructor?.name ?? "provider";
   const nth = transports.slice(0, i).filter((t) => t.constructor?.name === name).length;
@@ -143,9 +129,7 @@ export class DeliveryWorker extends BaseWorker {
       options.providerThrottle ?? new ProviderThrottle(options.redis, this.logger);
     this.templateCache = options.templateCache;
 
-    // Every message waits on these flushes before it is acked, so they bound
-    // the worker's throughput: allow a few in flight and let batches grow with
-    // the configured concurrency.
+    // Acks wait on these flushes, so they cap throughput.
     const batchSize = Math.max(10, Math.min(options.concurrency ?? 50, 500));
     const flushConcurrency = 4;
 
@@ -184,11 +168,7 @@ export class DeliveryWorker extends BaseWorker {
     await super.stop();
   }
 
-  /**
-   * Renders a task the engine dispatched unrendered. Done here, after the
-   * throttle and the lease, so the body is built once per actual send and never
-   * travels through the outbound stream.
-   */
+  /** Rendered after the throttle and lease, so once per real send. */
   private async render(task: NotificationDispatchedPayload): Promise<RenderedContent> {
     if (!task.templateId) return renderWithTemplate(null, task.templateVariables);
     const template = this.templateCache
@@ -201,11 +181,7 @@ export class DeliveryWorker extends BaseWorker {
     return renderWithTemplate(template, task.templateVariables);
   }
 
-  /**
-   * Parks a task in Postgres and the scheduler until `sendAt`. The payload
-   * carries the send time, so the scheduler can rebuild it if Redis loses its
-   * data.
-   */
+  /** Parks a task until `sendAt`. Postgres keeps the send time so Redis can be rebuilt. */
   private async reschedule(
     task: DispatchedTaskPayload,
     sendAt: Date,
@@ -271,14 +247,11 @@ export class DeliveryWorker extends BaseWorker {
     const task = payloadResult.data as NotificationDispatchedPayload;
     // Attempts made on earlier trips through the scheduler, plus this one.
     const attemptNo = (task.deliveryAttemptCount ?? 0) + attempt;
-    // What gets parked for a retry: the task as it arrived, before rendering
-    // and the transport's abort signal were attached to it.
+    // Parked on retry: the task before rendering and the abort signal were added.
     const original: DispatchedTaskPayload = { ...task };
 
-    // The attempt's `dispatched` log entry normally rides on its outcome event,
-    // one stream entry instead of two. A send still running after
-    // DISPATCH_LOG_DELAY_MS is logged on its own, so a slow or stuck attempt is
-    // visible while it is in flight, as it always was.
+    // The `dispatched` entry rides on the outcome event; a send slower than
+    // DISPATCH_LOG_DELAY_MS logs it alone so stuck sends stay visible.
     let dispatchStarted = false;
     let dispatchLogged = false;
     let dispatchedAt = "";
@@ -315,11 +288,7 @@ export class DeliveryWorker extends BaseWorker {
       dispatchLogged = true;
       return { ...payload, attempt: attemptNo, dispatchedAt };
     };
-    /**
-     * Queues the task's `notification.failed` event; once sending has started it
-     * is the attempt's outcome. Only the non-push provider failure leaves out
-     * `recipientId`.
-     */
+    /** Queues `notification.failed`. Only the non-push provider failure omits recipientId. */
     const failed = (failureReason: string, failureCode: string, withRecipientId = true) => {
       const payload = {
         projectId: task.projectId,
@@ -464,9 +433,7 @@ export class DeliveryWorker extends BaseWorker {
         return;
       }
 
-      // Spread over more windows the longer a task has waited. Every task turned
-      // away in one window used to come back at the same boundary, where the
-      // limit again let one window's worth through and bounced the rest.
+      // Spread retries over more windows the longer a task waits, so they don't all return at once.
       const spreadMs = Number.isFinite(windowMs)
         ? Math.random() * windowMs * Math.min(task.throttleAttemptCount, 10)
         : 0;
@@ -502,16 +469,10 @@ export class DeliveryWorker extends BaseWorker {
     }
 
     const tDispatchStart = Date.now();
-    const MAX_DISPATCH_BUDGET_MS = 25_000; // Strictly shorter than lock lease (30s)
+    const MAX_DISPATCH_BUDGET_MS = 25_000; // well under the 60 s lease taken above
 
     let retryScheduled = false;
-    /**
-     * Re-queues a send the provider turned away, unless it said the failure is
-     * permanent or the task is out of attempts. An outage, a timeout or an open
-     * circuit is exactly what a later attempt can get past; failing the task
-     * outright turned every blip into lost mail. The attempt stays in the log as
-     * dispatched, and the task's outcome is whatever its last attempt comes to.
-     */
+    /** Re-queues a failed send unless the provider called it permanent or attempts ran out. */
     const retryLater = async (failure: { retryable?: boolean; error?: string }) => {
       const maxAttempts = task.deliveryOptions?.maxAttempts ?? 3;
       if (failure.retryable === false || attemptNo >= maxAttempts) return false;
@@ -554,8 +515,7 @@ export class DeliveryWorker extends BaseWorker {
       let result: any = { success: false, error: "No transports" };
       for (let i = startAt; i < transports.length; i++) {
         const transport = transports[i];
-        // The starting provider's slot was taken above. Failing over to a
-        // later one spends that provider's own budget, or skips it if spent.
+        // The first provider's slot was taken above; later ones spend their own.
         if (i > startAt && !(await this.providerGate(task.channel, transports, i)).allowed) {
           continue;
         }
@@ -591,9 +551,7 @@ export class DeliveryWorker extends BaseWorker {
                   );
                 }),
               ]);
-              // A permanent rejection (a bad address) is the provider working:
-              // returned, not thrown, so the breaker does not count it. A run
-              // of them in one list used to open it for every project.
+              // Permanent rejections (bad address) are returned, not thrown, so the breaker ignores them.
               if (!res.success && !(isPush && res.invalidToken) && res.retryable !== false) {
                 throw providerFailure(res);
               }
@@ -762,8 +720,7 @@ export class DeliveryWorker extends BaseWorker {
 
 export async function startDeliveryWorker() {
   ({ logger, redis, sql, db } = createWorkerRuntime(config, "delivery"));
-  // Delivery spends most of its time waiting on providers, so it needs far
-  // more messages in flight than the CPU-bound stages do.
+  // Mostly waiting on providers, so it runs more in flight than CPU-bound stages.
   const deliveryConcurrency = config.DELIVERY_CONCURRENCY ?? config.WORKER_CONCURRENCY;
   const consumerId = uniqueConsumerId("delivery");
   ({ consumer, pendingScanner } = createStreamConsumer(
@@ -818,7 +775,7 @@ export async function startDeliveryWorker() {
     templateCache,
   });
 
-  // Delivery renders templates now, so it has to hear about edits too.
+  // Delivery renders templates, so it needs template invalidations too.
   subscriber = redis.native.duplicate({ enableAutoPipelining: false });
   await subscriber.subscribe(PUBSUB_CHANNELS.TEMPLATE_INVALIDATED);
   subscriber.on("message", (_channel: string, key: string) => templateCache.invalidateKey(key));

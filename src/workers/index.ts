@@ -189,21 +189,13 @@ export abstract class BaseWorker {
   }
 
   /**
-   * Processes an event produced by an upstream stage in this same process,
-   * skipping the stream hop in between.
-   *
-   * The caller is still holding its own stream entry, and does not ack it until
-   * this returns. A thrown error therefore leaves that entry pending and the
-   * whole chain is replayed from the upstream stage; the idempotency keys each
-   * stage already checks make the replay safe. Non-retryable failures go to the
-   * dead-letter stream here, as they would have from this worker's own stream,
-   * so they do not send the upstream message there instead.
+   * Processes an event from an upstream stage in this process, skipping the stream.
+   * A throw leaves the caller's entry pending, so the chain replays from upstream.
+   * Non-retryable failures are dead-lettered here so the upstream message isn't.
    */
   async processInline(event: StreamEvent): Promise<void> {
     try {
-      // `{ ack: false }` means another holder owns this message right now. Its
-      // own stream entry is what gets retried if it fails, so there is nothing
-      // for the caller to wait on.
+      // `{ ack: false }`: another holder owns it and its own entry gets retried.
       await this.process({ id: event.id, event, deliveryCount: 1, inline: true }, 1);
       this.processedCount += 1;
       this.lastProcessedAt = new Date().toISOString();
@@ -308,11 +300,8 @@ export abstract class BaseWorker {
   }
 
   /**
-   * Runs `process` while keeping the entry's idle time below the reclaim
-   * threshold. Without this, a handler that outlasts `recoveryIntervalMs` (a
-   * large segment fan-out) is reclaimed mid-run and started again elsewhere,
-   * over and over, until it is dead-lettered while the first run still works.
-   * If this process dies the touches stop, so the entry is reclaimed as before.
+   * Keeps the entry's idle time under the reclaim threshold while `process` runs,
+   * so a long fan-out isn't reclaimed mid-run. If this process dies, the touches stop.
    */
   private async processHoldingLease(message: StreamMessage, attempt: number) {
     const stream = message.stream;
@@ -334,12 +323,8 @@ export abstract class BaseWorker {
   }
 
   /**
-   * `recoveryIntervalMs` is how long an entry must sit idle before it is
-   * claimed, not how often to look. Scanning only once per interval, timed from
-   * this worker's start, meant a worker restarted more often than that (a crash
-   * loop, an eager autoscaler) never scanned at all, and whatever its
-   * predecessors held stayed pending for good. So scan on start and then
-   * several times per interval; the idle threshold alone decides what is taken.
+   * `recoveryIntervalMs` is the idle time before a claim, not the scan period.
+   * Scan on start and several times per interval so crash-looping workers still recover.
    */
   private startRecoveryLoop(): void {
     const scan = () => {

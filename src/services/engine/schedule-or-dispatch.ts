@@ -41,7 +41,6 @@ export async function scheduleOrDispatch(
     opts.traceId,
   );
 
-  // Route by scheduledAt
   const now = Date.now();
   const scheduledAt = opts.scheduledAt ? new Date(opts.scheduledAt).getTime() : now;
 

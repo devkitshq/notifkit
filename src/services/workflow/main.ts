@@ -100,9 +100,7 @@ export class WorkflowWorker extends BaseWorker {
   }
 
   override async stop(): Promise<void> {
-    // The flush interval keeps running until in-flight runs settle: a step's
-    // notify is waiting on it, and clearing it first left the drain to the 30s
-    // stop timeout with the instance lock still being renewed.
+    // Keep the flush interval until in-flight runs settle; a step's notify waits on it.
     await super.stop();
     if (this.flushTimer) {
       clearInterval(this.flushTimer);
@@ -178,7 +176,6 @@ export class WorkflowWorker extends BaseWorker {
 
     let handler = workflowRegistry.get(name);
     if (!handler) {
-      // Fallback: check dynamic JSON workflows
       const defRows = await this.dbConn
         .select()
         .from(workflowDefinitions)
@@ -229,10 +226,8 @@ export class WorkflowWorker extends BaseWorker {
       "NX",
     );
     if (!acquired) {
-      // Another process is mid-run on this instance — typically still
-      // persisting the very suspension this resume answers, when the awaited
-      // event arrived quickly. Acking here dropped the resume, and with the
-      // waiter already consumed nothing would ever wake the instance again.
+      // Another process is mid-run, often still saving the suspension this resume
+      // answers. The waiter is already consumed, so the resume must not be dropped.
       this.logger.info({ instanceId }, "Workflow is locked by another process, deferring resume");
       await this.deferResume(payload);
       return;
@@ -305,7 +300,6 @@ export class WorkflowWorker extends BaseWorker {
         if (row?.status === "canceled") throw new WorkflowCanceledError();
       };
 
-      // Load existing steps
       const existingSteps = await this.dbConn
         .select()
         .from(workflowSteps)

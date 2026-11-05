@@ -17,20 +17,9 @@ interface ParkedTask {
 }
 
 /**
- * Re-checks parked sends at the moment they are released.
- *
- * The engine clears a message against suppressions, opt-outs and contacts when
- * it first sees it. A send parked for later — a `sendAt`, a quiet-hours
- * deferral, a retry — can sit for hours or days, and whatever the person did in
- * between (unsubscribed, complained, hard-bounced, removed the address) must
- * still stop it. Without this the scheduler sent to them anyway.
- *
- * Reads Postgres directly rather than through the repositories' caches: this
- * runs once per poll, not once per message, and a stale "still subscribed" is
- * the very thing it exists to prevent.
- *
- * Returns the blocked tasks with the reason. Throws if a lookup fails, so the
- * caller holds the batch rather than sending it unchecked.
+ * Re-checks parked sends at release: an unsubscribe, bounce or removed address
+ * since parking must still stop them. Reads Postgres, not the caches, and
+ * throws on a failed lookup so the batch is held rather than sent unchecked.
  */
 export async function findBlockedAtRelease(
   db: any,
@@ -95,8 +84,7 @@ function decide(
     | undefined,
   contactsByUser: Map<string, { channel: string; target: string; preferences?: any }[]>,
 ): BlockReason | undefined {
-  // Checked first and for every priority, as the engine does: a suppression
-  // records that the address asked us to stop or is dead.
+  // First and for every priority, as in the engine.
   if (t.destination && suppressed.has(`${t.channel}:${normaliseTarget(t.destination)}`)) {
     return "suppressed";
   }

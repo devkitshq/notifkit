@@ -132,8 +132,7 @@ export class EventWorker extends BaseWorker {
       for (const e of events) e.reject(error);
     } finally {
       this.flushesInFlight--;
-      // Rows that arrived while every flush slot was busy would otherwise wait
-      // out the interval with their worker slots held.
+      // Flush rows that queued while every slot was busy, instead of waiting out the interval.
       if (this.messageLogBuffer.length >= this.flushThreshold) {
         void this.flushLogs();
       }
@@ -141,9 +140,7 @@ export class EventWorker extends BaseWorker {
   }
 
   override async stop(): Promise<void> {
-    // The interval keeps running until in-flight messages settle: each of them
-    // is waiting on a flush, and clearing it first left them to the 30s stop
-    // timeout.
+    // Keep the flush interval until in-flight messages settle; they wait on it.
     await super.stop();
     if (this.flushInterval) clearInterval(this.flushInterval);
     const deadline = Date.now() + 10_000;
@@ -240,7 +237,6 @@ export class EventWorker extends BaseWorker {
       return;
     }
 
-    // Find matching waiters
     const now = new Date();
     const waiters = await this.dbConn
       .select()
@@ -256,7 +252,6 @@ export class EventWorker extends BaseWorker {
     const data: Record<string, any> = eventData && typeof eventData === "object" ? eventData : {};
 
     for (const waiter of waiters) {
-      // Check match criteria
       let matched = true;
       const criteria = waiter.matchCriteria as Record<string, any>;
       if (criteria && typeof criteria === "object") {
@@ -303,7 +298,6 @@ export class EventWorker extends BaseWorker {
           continue;
         }
 
-        // Find the step that is waiting
         const steps = await this.dbConn
           .select()
           .from(workflowSteps)
@@ -318,7 +312,6 @@ export class EventWorker extends BaseWorker {
         const pendingStep = steps.find((s: any) => s.output === null);
 
         if (pendingStep) {
-          // Update the step with the event payload
           await this.dbConn
             .update(workflowSteps)
             .set({ output: data })
@@ -351,11 +344,9 @@ export class EventWorker extends BaseWorker {
           }),
         );
 
-        // Delete the waiter
         await this.dbConn.delete(workflowWaiters).where(eq(workflowWaiters.id, waiter.id));
 
-        // The timer ZSET entry is left to expire: the poll loop re-checks the
-        // instance status and drops the entry if it is no longer pending.
+        // The timer entry is left; the poll loop drops it once the instance isn't pending.
       }
     }
 

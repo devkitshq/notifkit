@@ -30,11 +30,12 @@ import {
 loadEnv();
 const config = readBaseConfig();
 
-/**
- * A caller's own idempotency key (X-Idempotency-Key, or a workflow step's) is a
- * documented 24-hour promise. Without one the key is the event's id, which only
- * a redelivery can bring back, so the guard's shorter TTL is enough.
- */
+const chunkArray = <T>(arr: T[], size: number): T[][] =>
+  Array.from({ length: Math.ceil(arr.length / size) }, (_, i) =>
+    arr.slice(i * size, i * size + size),
+  );
+
+// A caller's own idempotency key is promised 24 h; an event id only needs to outlive redelivery.
 const CALLER_KEY_TTL_SECONDS = 86_400;
 const dedupeTtl = (raw: { idempotencyKey?: string }) =>
   raw.idempotencyKey ? CALLER_KEY_TTL_SECONDS : undefined;
@@ -139,19 +140,15 @@ export class EnricherWorker extends BaseWorker {
   }
 
   /**
-   * Hands enriched events for single-user notifications straight to `next`
-   * instead of the enriched stream. Fan-outs still go through the stream: an
-   * inline chain holds this worker's slot until the last send completes, and a
-   * segment would hold one slot for thousands of them.
+   * Single-user notifications skip the enriched stream. Fan-outs keep it, since an
+   * inline chain holds this worker's slot until its last send completes.
    */
   setInlineNext(next: ((event: StreamEvent) => Promise<void>) | null): void {
     this.inlineNext = next;
   }
 
   override async stop(): Promise<void> {
-    // The timers keep running until in-flight messages settle: each of them is
-    // waiting on one of these flushes, and clearing them first left the drain
-    // to the 30s stop timeout.
+    // Keep the flush timers until in-flight messages settle; they wait on them.
     await super.stop();
     if (this.batchTimer) {
       clearTimeout(this.batchTimer);
@@ -266,9 +263,7 @@ export class EnricherWorker extends BaseWorker {
         const profile = await this.userRepo.findRecordById(raw.projectId, raw.recipientId);
         if (!profile) return;
 
-        // Opt-outs are keyed on the template's topics, as on the requested
-        // path. `event.type` is always "notification.created", which no user
-        // ever opts out of, so checking it here let every opt-out through.
+        // Opt-outs are keyed on the template's topics, not the event type.
         const template = raw.templateId
           ? await this.templateCache.getCachedTemplate(raw.projectId, raw.templateId)
           : null;
@@ -295,8 +290,7 @@ export class EnricherWorker extends BaseWorker {
               quietHours: profile.preferences.quietHours,
             },
           },
-          // No campaignId: this is the legacy `notification.created` path,
-          // which predates campaigns and carries no label to attribute to.
+          // The legacy payload has no campaign.
           scheduledAt: raw.scheduledAt,
         };
 
@@ -334,7 +328,6 @@ export class EnricherWorker extends BaseWorker {
       return;
     }
 
-    // Handle new notification.requested
     const raw = (requestedResult as any).data;
     const dedupeId = `${raw.projectId}:${raw.idempotencyKey ?? event.id}`;
     if (!(await this.idempotency.checkAndMark(dedupeId, 60))) return;
@@ -353,7 +346,6 @@ export class EnricherWorker extends BaseWorker {
         this.logger.info({ topic: raw.target.topic, count: userIds.length }, "Resolved topic");
       } else {
         this.logger.warn({ target: raw.target }, "Segment/topic resolution not fully implemented");
-        // Stub: maybe resolve later
       }
 
       const maxUsers = readBaseConfig().SEGMENT_MAX_USERS;
@@ -363,17 +355,13 @@ export class EnricherWorker extends BaseWorker {
           { count: userIds.length, max: maxUsers, projectId: raw.projectId, eventId: event.id },
           "Segment fan-out exceeds maximum allowed limit",
         );
-        // Reported to the caller, not published: a `notification.failed` on
-        // the enriched stream is not a payload the engine can read, so the
-        // refusal used to vanish there without a trace.
+        // Reported via the emitter: the engine can't read a failure on the enriched stream.
         globalEmitter.emit("notification:failed", event.id, reason, event.type);
         await this.idempotency.markProcessed(dedupeId, dedupeTtl(raw));
         return;
       }
 
-      // Topic opt-outs are keyed on the TEMPLATE's topics, not the envelope type.
-      // `event.type` here is "notification.requested", which no user ever sets a
-      // preference against, so keying on it silently disabled every opt-out.
+      // Opt-outs are keyed on the template's topics, not the event type.
       const template = raw.templateId
         ? await this.templateCache.getCachedTemplate(raw.projectId, raw.templateId)
         : null;
@@ -382,11 +370,6 @@ export class EnricherWorker extends BaseWorker {
       const channels: NotificationChannel[] =
         raw.channels && raw.channels.length > 0 ? raw.channels : ["email"];
       const isFallback = (raw as any).fallback === true;
-
-      const chunkArray = <T>(arr: T[], size: number) =>
-        Array.from({ length: Math.ceil(arr.length / size) }, (v, i) =>
-          arr.slice(i * size, i * size + size),
-        );
 
       const chunks = chunkArray(userIds, 500);
       const inline = raw.target.type === "user" ? this.inlineNext : null;
@@ -411,8 +394,7 @@ export class EnricherWorker extends BaseWorker {
 
         for (const profile of profiles) {
           const contacts = contactsByUser.get(profile.userId) ?? [];
-          // This user's addresses on a channel, less any that opted out of one
-          // of this template's topics.
+          // The user's addresses on a channel, minus those opted out of this template's topics.
           const usable = (channel: string) =>
             contacts.filter(
               (contact: any) =>
@@ -420,9 +402,7 @@ export class EnricherWorker extends BaseWorker {
                 !topics.some((t) => contact.preferences?.topics?.[t] === false),
             );
 
-          // Without fallback every requested channel is sent at once. With it,
-          // start at the first channel this user can be reached on and chain the
-          // rest behind it — a user with no email address still gets the SMS.
+          // With fallback, start at the first reachable channel and chain the rest behind it.
           let userChannels: NotificationChannel[] = channels;
           let fallbackChain: NotificationChannel[] | undefined;
           if (isFallback) {
@@ -440,8 +420,7 @@ export class EnricherWorker extends BaseWorker {
 
           for (const channel of userChannels) {
             const channelContacts = usable(channel);
-            // Push resolves its active tokens at send time so token invalidation
-            // remains current. Other channels need one task per address.
+            // Push resolves its tokens at send time; other channels get one task per address.
             const resolved: ({ id: string; target: string } | undefined)[] =
               channel === "push" ? [undefined] : channelContacts;
             if (resolved.length === 0) {
@@ -486,8 +465,7 @@ export class EnricherWorker extends BaseWorker {
                 },
                 scheduledAt: raw.scheduledAt,
                 fallbackChain: fallbackChain?.length ? fallbackChain : undefined,
-                // Lets the engine send to this contact without reading the
-                // user's contacts a second time.
+                // Saves the engine a second contacts read.
                 contactId: contact?.id,
                 destination,
                 campaignId: raw.campaignId,
@@ -548,8 +526,7 @@ export class EnricherWorker extends BaseWorker {
         "event enriched",
       );
     } catch (err) {
-      // Release the marker, or a retry landing inside its TTL is taken for a
-      // duplicate and acked without ever being processed.
+      // Release the marker, or the retry is acked as a duplicate.
       await this.idempotency.unmark(dedupeId).catch(() => {});
       throw err;
     }
@@ -565,8 +542,7 @@ export class EnricherWorker extends BaseWorker {
 
 export async function startEnricherWorker() {
   ({ logger, redis, sql, db } = createWorkerRuntime(config, "enricher"));
-  // A fused pipeline holds the enricher's slot through engine and delivery, so
-  // it needs delivery's concurrency, not the CPU-bound default.
+  // Fused, the enricher's slot is held through delivery, so it needs delivery's concurrency.
   const enricherConcurrency = config.PIPELINE_FUSED
     ? Math.max(config.WORKER_CONCURRENCY, config.DELIVERY_CONCURRENCY ?? config.WORKER_CONCURRENCY)
     : config.WORKER_CONCURRENCY;

@@ -24,7 +24,6 @@ import {
 } from "@/workers/bootstrap.js";
 import { findBlockedAtRelease } from "./send-gate.js";
 import { maybePruneDeliveryLogs } from "./retention.js";
-// ─── Bootstrap ─────────────────────────────────────────────────────────────
 
 loadEnv();
 const config = readBaseConfig();
@@ -118,8 +117,7 @@ export async function executeSchedulerPoll(
     const results = await pipeline.exec();
     const perShard = results?.map((res: any) => (res[0] ? [] : ((res[1] ?? []) as string[]))) ?? [];
     const tasks = perShard.flat();
-    // A shard that came back full may still have due tasks behind it, which is
-    // what tells the caller to poll again rather than wait for the next tick.
+    // A full shard may have more due tasks behind it.
     const anyShardFull = perShard.some((shard) => shard.length >= perShardLimit);
 
     if (tasks.length === 0) return false;
@@ -143,9 +141,7 @@ export async function executeSchedulerPoll(
       .where(inArray(scheduledPayloads.taskId, taskIds));
     const payloadMap = new Map(dbPayloads.map((row: any) => [row.taskId, row.payload]));
 
-    // What the person did while this sat parked still applies. A failed
-    // lookup throws to the catch below: the claimed tasks reappear after the
-    // visibility timeout instead of going out unchecked.
+    // Throws on a failed lookup, so claimed tasks come back after the visibility timeout.
     const blocked = await findBlockedAtRelease(db, [...payloadMap.values()] as any[]);
 
     const batchedEvents: Record<"critical" | "normal" | "low", Omit<any, "id" | "timestamp">[]> = {
@@ -157,9 +153,7 @@ export async function executeSchedulerPoll(
     const cleanupPipeline = redis.pipeline();
     const dbCleanupIds: string[] = [];
 
-    // After a rebuild the same task can sit in the ZSET twice (the original
-    // member carries a trace id Postgres does not keep), so release each task
-    // once and just clear any second copy.
+    // After a rebuild a task can be in the ZSET twice (one copy has a trace id); release it once.
     const released = new Set<string>();
 
     for (let i = 0; i < parsedTasks.length; i++) {
@@ -204,9 +198,6 @@ export async function executeSchedulerPoll(
       cleanupPipeline.zrem(zsetKey(shardOf(taskId)), taskStr);
     }
 
-    // Every bucket, not a hardcoded subset: a task binned into one that is not
-    // published here has already been added to the cleanup list, so it would be
-    // deleted from Redis and Postgres without ever being sent.
     for (const p of Object.keys(batchedEvents) as (keyof typeof batchedEvents)[]) {
       if (batchedEvents[p].length > 0) {
         const producer = outboundProducers[p] ?? outboundProducers["normal"]!;
@@ -216,10 +207,8 @@ export async function executeSchedulerPoll(
 
     if (dbCleanupIds.length > 0) {
       try {
-        // Only the payload that was released. By now delivery may have
-        // throttled the task and parked it again under the same id with a
-        // later send time; deleting by id alone removed that newer payload,
-        // and its ZSET entry was then dropped as canceled — the send was lost.
+        // Match the released send time: delivery may already have re-parked
+        // this task id with a later one.
         const sendAt = drizzleSql`${scheduledPayloads.payload}->>'scheduledAt'`;
         await db.delete(scheduledPayloads).where(
           or(
@@ -245,9 +234,7 @@ export async function executeSchedulerPoll(
 
     logger.info({ count: parsedTasks.length }, "scheduled tasks released to outbound");
 
-    // "Poll again immediately" — the caller loops while this is true. The old
-    // test was `tasks.length === 100` against a total drawn from 16 shards, so
-    // a real backlog reported "nothing more" and waited for the next tick.
+    // True tells the caller to poll again right away.
     return anyShardFull;
   } catch (err) {
     logger.error({ err }, "error in scheduler polling loop");
@@ -338,7 +325,6 @@ export async function startSchedulerWorker() {
     redis: redis.native,
   });
 
-  // ─── Polling Loop ─────────────────────────────────────────────────────────
   isPolling = true;
   const pollLoop = async (): Promise<void> => {
     if (!isPolling) return;
@@ -360,15 +346,11 @@ export async function startSchedulerWorker() {
   };
   void pollLoop();
 
-  // ─── Health check interval ──────────────────────────────────────────────────
-
   healthInterval = startHealthReporter("scheduler", worker, redis, logger);
 
   logger.info({ env: config.NODE_ENV }, "scheduler starting");
   await worker.start();
 }
-
-// ─── Shutdown ──────────────────────────────────────────────────────────────
 
 export async function stopSchedulerWorker(): Promise<void> {
   isPolling = false;

@@ -54,8 +54,6 @@ const NO_IDEMPOTENCY = {
   unmark: async (_id: string) => {},
 };
 
-// ─── Bootstrap ─────────────────────────────────────────────────────────────
-
 loadEnv();
 const config = readBaseConfig();
 
@@ -148,15 +146,8 @@ export class EngineWorker extends BaseWorker {
     { batchDelayMs: 2, maxBatchSize: 500 },
   );
 
-  /**
-   * Suppressed destinations for one (project, channel), as a normalised set.
-   *
-   * Loaded per project+channel rather than per address: a campaign is thousands
-   * of messages against one channel, so this collapses to a single query for
-   * the whole batch. Cached for the loader's lifetime of a tick, which means a
-   * suppression written mid-batch takes effect on the next batch — acceptable,
-   * since the webhook that writes it is itself minutes behind the send.
-   */
+  // One query per (project, channel), not per address: a campaign is thousands
+  // of sends on one channel. Cached 10s; webhooks that suppress lag far more.
   private readonly suppressionsCache = new LRUCache<string, Set<string>>(1000, 10_000);
 
   private readonly suppressionsLoader = new DataLoader<
@@ -188,8 +179,7 @@ export class EngineWorker extends BaseWorker {
         this.suppressionsCache.set(cacheKey, set);
         results.set(cacheKey, set);
       } catch (err) {
-        // A suppression lookup that fails must not silently become "nothing
-        // is suppressed" — that would resume mailing people who opted out.
+        // Failing open here would mail people who opted out.
         this.logger.error(
           { err, projectId: key.projectId, channel: key.channel },
           "suppression lookup failed — holding message",
@@ -214,9 +204,7 @@ export class EngineWorker extends BaseWorker {
 
     const enriched = payloadResult.data;
 
-    // Idempotency
-    // The enricher emits one event per resolved contact, so two addresses on one
-    // channel are two distinct messages here.
+    // One event per resolved contact, so two addresses on a channel are two messages.
     const idempotencyKey =
       `${enriched.rawEventId}:${enriched.recipientId}:${enriched.channel}` +
       (enriched.contactId ? `:${enriched.contactId}` : "");
@@ -229,10 +217,7 @@ export class EngineWorker extends BaseWorker {
       }
     }
 
-    // Inline (fused) runs skip the engine's own marker. They are already
-    // exclusive under the enricher's lock, the send itself is guarded by
-    // delivery's lease on the taskId, and the throttle counts a message once
-    // however often it is retried. Stream-read messages keep the guard.
+    // Inline runs are already exclusive under the enricher's lock and delivery's lease.
     const idempotency = message.inline ? NO_IDEMPOTENCY : this.idempotency;
 
     // A short lease: if this process dies, the redelivery must not find it.
@@ -242,7 +227,6 @@ export class EngineWorker extends BaseWorker {
     }
 
     try {
-      // Opt-in check
       if (enriched.recipient.preferences.optedOut) {
         this.logger.info(
           { messageId: message.id, recipientId: enriched.recipientId, eventType: event.type },
@@ -273,13 +257,9 @@ export class EngineWorker extends BaseWorker {
         return;
       }
 
-      // Quiet hours check
       const qh = enriched.recipient.preferences.quietHours;
       if (qh && qh.length > 0 && enriched.priority !== "critical") {
-        // Judged at the moment the message would go out, not the moment the
-        // engine sees it: a send booked for next week must not be pulled
-        // forward to tonight's quiet-hours end, and one booked for 3am must
-        // wait until the quiet hours are over.
+        // Judged at send time, so a send booked for next week isn't pulled forward.
         const requestedAt = enriched.scheduledAt ? new Date(enriched.scheduledAt) : new Date();
         const sendAt = requestedAt.getTime() > Date.now() ? requestedAt : new Date();
         const qhResult = isInQuietHours(enriched.recipient.timezone, qh, sendAt);
@@ -296,9 +276,7 @@ export class EngineWorker extends BaseWorker {
         }
       }
 
-      // Rate limit. Per-project overrides win over the process-wide default;
-      // a lookup failure must not drop the notification, so fall back rather
-      // than propagate.
+      // A failed settings lookup falls back to the global default, never drops the send.
       let projectThrottle: { throttleLimit: number | null; throttleWindowHours: number | null } = {
         throttleLimit: null,
         throttleWindowHours: null,
@@ -369,17 +347,9 @@ export class EngineWorker extends BaseWorker {
         ...(enriched.aiPrompts ?? {}),
       };
 
-      // Drives whether this message gets an unsubscribe header, and what the
-      // resulting opt-out applies to.
       const templateTopics: string[] = dbTemplate?.topics ?? [];
-
-      // AI-generated messages take the same gates as any other — contacts,
-      // topic opt-outs and suppressions below — and are handed to the AI worker
-      // per contact once they have passed them.
+      // AI sends pass the same gates below before going to the AI worker.
       const useAi = Object.keys(aiPrompts).length > 0;
-
-      // Rendering happens in delivery, just before the send, so the rendered
-      // body does not travel through the outbound stream.
 
       // The enricher already resolved the contact; only events without one
       // (push, channel fallbacks, the AI worker) need the user's contacts.
@@ -427,9 +397,7 @@ export class EngineWorker extends BaseWorker {
           continue;
         }
 
-        // A suppression outranks every other gate, `critical` included: it
-        // records that the person asked us to stop, or that the address is
-        // dead. Sending anyway is what gets a domain blocked.
+        // Suppression beats every other gate, `critical` included.
         if (contact.target && suppressedTargets.has(normaliseTarget(contact.target))) {
           this.logger.info(
             {
@@ -451,11 +419,7 @@ export class EngineWorker extends BaseWorker {
         const taskId = `${enriched.rawEventId}:${contact.id || randomUUID()}`;
         const resolvedDestination = contact.target;
 
-        // One-click unsubscribe headers, but only on mail that should carry
-        // them. A template with no topic is transactional by this codebase's
-        // own convention — a password reset, a receipt — and putting an
-        // unsubscribe button on those invites people to switch off mail they
-        // actually need, with no topic to scope the opt-out to anyway.
+        // Only mail with a topic gets unsubscribe headers; no topic means transactional.
         const unsubscribeHeaders =
           enriched.channel === "email" &&
           templateTopics.length > 0 &&
@@ -608,9 +572,7 @@ export async function startEngineWorker() {
     maxPerHour: config.RATE_LIMIT_PER_HOUR,
   });
 
-  // Per-project throttle overrides, cached because this is read once per
-  // notification. Stale entries expire on their own; the pub/sub subscriber
-  // below only makes an admin's change take effect sooner.
+  // Read once per send, so cached; the pub/sub subscriber below drops stale entries early.
   const projectRepo = new ProjectRepository(db);
   const projectSettings = new ProjectSettingsCache((projectId) =>
     projectRepo.findThrottleSettings(projectId),
@@ -650,8 +612,6 @@ export async function startEngineWorker() {
     }
   });
 
-  // ─── Health check interval ──────────────────────────────────────────────────
-
   healthInterval = startHealthReporter("engine", worker, redis, logger);
 
   logger.info({ env: config.NODE_ENV }, "engine starting");
@@ -661,8 +621,6 @@ export async function startEngineWorker() {
 export function getEngineWorker(): EngineWorker | undefined {
   return worker as EngineWorker | undefined;
 }
-
-// ─── Shutdown ──────────────────────────────────────────────────────────────
 
 export async function stopEngineWorker(): Promise<void> {
   await shutdownWorker("engine", {
