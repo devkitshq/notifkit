@@ -703,3 +703,51 @@ describe("NotifkitClient", () => {
     });
   });
 });
+
+describe("NotifkitClient Templates Syncing", () => {
+  it("calls syncTemplates endpoint when client.sync() is triggered", async () => {
+    const templates = [
+      { id: "test-template", channel: "email" as const, content: { subject: "Hello", text: "Hi" } },
+    ];
+    const client = new NotifkitClient({
+      baseUrl: "http://localhost:3000",
+      templates,
+    });
+
+    const mockRequest = vi.fn().mockResolvedValueOnce({ synced: 1 });
+    (client as any).request = mockRequest;
+
+    const result = await client.sync();
+
+    expect(mockRequest).toHaveBeenCalledWith("/v1/templates", "PUT", { templates });
+    expect(result).toEqual({ synced: 1 });
+  });
+
+  it("returns zero synced if no templates are configured", async () => {
+    const client = new NotifkitClient({
+      baseUrl: "http://localhost:3000",
+    });
+
+    const result = await client.sync();
+    expect(result).toEqual({ synced: 0 });
+  });
+});
+
+describe("NotifkitClient API Key Support", () => {
+  it("appends Bearer Authorization token header when apiKey is supplied in constructor", () => {
+    const client = new NotifkitClient({
+      baseUrl: "http://localhost:3000",
+      apiKey: "client-secret-token",
+    });
+
+    expect((client as any).headers["Authorization"]).toBe("Bearer client-secret-token");
+  });
+
+  it("does not append Bearer Authorization token header if apiKey is omitted", () => {
+    const client = new NotifkitClient({
+      baseUrl: "http://localhost:3000",
+    });
+
+    expect((client as any).headers["Authorization"]).toBeUndefined();
+  });
+});

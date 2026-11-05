@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   ContactRepository,
   PreferenceRepository,
@@ -499,5 +499,60 @@ describe("Repository mapping and guards", () => {
       ).rejects.toThrow("Syntax error");
       expect(mockDb.db.transaction).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("PreferenceRepository", () => {
+  let mockDb: any;
+  let repo: PreferenceRepository;
+
+  beforeEach(() => {
+    mockDb = {
+      select: vi.fn().mockReturnThis(),
+      from: vi.fn().mockReturnThis(),
+      where: vi.fn(),
+    };
+    repo = new PreferenceRepository(mockDb);
+  });
+
+  it("findByUserId loads topic preferences correctly", async () => {
+    // 1. Mock users query
+    mockDb.where.mockResolvedValueOnce([{ id: "db-user-uuid" }]);
+    // 2. Mock userTopicPreferences query
+    mockDb.where.mockResolvedValueOnce([
+      { topic: "marketing", enabled: false },
+      { topic: "transactional", enabled: true },
+    ]);
+
+    const prefs = await repo.findByUserId("proj_123", "usr_external_123");
+
+    expect(prefs).toHaveLength(2);
+    expect(prefs[0]).toEqual({
+      userId: "usr_external_123",
+      eventType: "marketing",
+      optedIn: false,
+    });
+    expect(prefs[1]).toEqual({
+      userId: "usr_external_123",
+      eventType: "transactional",
+      optedIn: true,
+    });
+  });
+
+  it("isOptedIn checks loaded preferences and defaults to true", async () => {
+    // 1. Mock users query
+    mockDb.where.mockResolvedValueOnce([{ id: "db-user-uuid" }]);
+    // 2. Mock userTopicPreferences query
+    mockDb.where.mockResolvedValueOnce([{ topic: "marketing", enabled: false }]);
+
+    const optedInMarketing = await repo.isOptedIn("proj_123", "usr_external_123", "marketing");
+    expect(optedInMarketing).toBe(false);
+
+    // Reset mocks for checking default value
+    mockDb.where.mockResolvedValueOnce([{ id: "db-user-uuid" }]);
+    mockDb.where.mockResolvedValueOnce([]);
+
+    const optedInDefault = await repo.isOptedIn("proj_123", "usr_external_123", "unknown_topic");
+    expect(optedInDefault).toBe(true);
   });
 });

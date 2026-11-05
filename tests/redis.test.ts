@@ -222,3 +222,9 @@ describe("RedisClient.shared", () => {
     a.native.disconnect();
   });
 });
+
+describe("LUA_SCHEDULER_POLL", () => {
+  it("defaults the visibility timeout so a 3-arg call cannot error", () => {
+    expect(LUA_SCHEDULER_POLL).toContain("tonumber(ARGV[3]) or 0");
+  });
+});

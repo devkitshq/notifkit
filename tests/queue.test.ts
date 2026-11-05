@@ -827,3 +827,84 @@ describe("StreamProducer", () => {
     expect(mockPipeline.exec).toHaveBeenCalled();
   });
 });
+
+describe("PendingMessageScanner across streams", () => {
+  it("claims each pending id against the stream it is actually pending on", async () => {
+    const xpending = vi.fn().mockImplementation(async (stream: string) => {
+      if (stream === "stream-1") return [["1-0", "c", 99_999, 1]];
+      if (stream === "stream-2") return [["2-0", "c", 99_999, 1]];
+      return [];
+    });
+    const xclaim = vi.fn().mockResolvedValue([]);
+    const scanner = new PendingMessageScanner({
+      redis: { xpending, xclaim } as any,
+      stream: ["stream-1", "stream-2"] as any,
+      group: "g" as any,
+      consumer: "c",
+    });
+
+    await scanner.autoclaim(1, 10);
+
+    // Ids gathered from stream-1 must never be claimed against stream-2.
+    for (const [stream, , , , ...ids] of xclaim.mock.calls) {
+      if (stream === "stream-1") expect(ids).toEqual(["1-0"]);
+      if (stream === "stream-2") expect(ids).toEqual(["2-0"]);
+    }
+    expect(xclaim).toHaveBeenCalledTimes(2);
+  });
+
+  it("tags pending entries with their stream", async () => {
+    const xpending = vi
+      .fn()
+      .mockImplementation(async (stream: string) =>
+        stream === "stream-1" ? [["1-0", "c", 5, 1]] : [["2-0", "c", 5, 1]],
+      );
+    const scanner = new PendingMessageScanner({
+      redis: { xpending } as any,
+      stream: ["stream-1", "stream-2"] as any,
+      group: "g" as any,
+      consumer: "c",
+    });
+
+    const entries = await scanner.getPendingEntries(10);
+    expect(entries.map((e) => e.stream)).toEqual(["stream-1", "stream-2"]);
+  });
+});
+
+describe("StreamConsumer read order", () => {
+  it("sometimes rotates the stream order so low priority is not starved", async () => {
+    // readBatch() only yields once a batch parses, so the mock must return one.
+    const streamEvent = {
+      id: "00000000-0000-4000-8000-000000000000",
+      type: "notification.requested",
+      timestamp: new Date().toISOString(),
+      payload: {},
+      metadata: { traceId: "trace-1", source: "test", retryCount: 0 },
+    };
+    const redisMock: any = {
+      xreadgroup: vi
+        .fn()
+        .mockResolvedValue([["stream1", [["1-0", ["data", JSON.stringify(streamEvent)]]]]]),
+      xack: vi.fn(),
+      duplicate: () => redisMock,
+    };
+    const consumer = new StreamConsumer({
+      redis: redisMock,
+      stream: ["stream1", "stream2", "stream3"] as any,
+      group: "group1" as any,
+      consumer: "c1",
+    });
+
+    vi.spyOn(Math, "random").mockReturnValue(0.05); // below 0.1, so it rotates
+    try {
+      await consumer.readBatch().next();
+    } finally {
+      vi.mocked(Math.random).mockRestore();
+    }
+
+    const args = redisMock.xreadgroup.mock.calls[0];
+    const streams = args.slice(args.indexOf("STREAMS") + 1, args.indexOf("STREAMS") + 4);
+    expect(streams).not.toEqual(["stream1", "stream2", "stream3"]);
+    expect([...streams].sort()).toEqual(["stream1", "stream2", "stream3"]);
+  });
+});

@@ -293,3 +293,177 @@ describe("AiWorker Edge Cases", () => {
     });
   });
 });
+
+describe("AiWorker", () => {
+  let worker: AiWorker;
+  let mockRegistry: any;
+  let mockIdempotency: any;
+  let mockRedis: any;
+  let mockGenerateAiContent: any;
+  let mockGetCachedTemplate: any;
+  let mockScheduledProducer: any;
+  let mockOutboundProducers: any;
+
+  beforeEach(() => {
+    mockRegistry = {
+      safeParsePayload: vi.fn().mockReturnValue({
+        success: true,
+        data: {
+          projectId: "123e4567-e89b-12d3-a456-426614174000",
+          enrichedEventId: "evt-enriched-1",
+          recipientId: "usr-1",
+          channel: "email",
+          priority: "normal",
+          recipient: {
+            locale: "en",
+            timezone: "UTC",
+            preferences: { optedOut: false, quietHours: [] },
+          },
+          templateId: "tmpl-1",
+          templateVariables: { name: "Alice", project: "Notifkit" },
+          aiPrompts: { summary: "Summarize this {{name}}" },
+          fallbackChain: [],
+        },
+      }),
+    };
+    mockIdempotency = {
+      isProcessed: vi.fn().mockResolvedValue(false),
+      checkAndMark: vi.fn().mockResolvedValue(true),
+      unmark: vi.fn().mockResolvedValue(true),
+    };
+    mockRedis = { set: vi.fn() };
+    mockGenerateAiContent = vi.fn().mockResolvedValue("Summary of Alice");
+    mockGetCachedTemplate = vi.fn().mockResolvedValue({
+      content: {
+        subject: "Hello {{name}}",
+        text: "Summary: {{summary}}",
+      },
+    });
+    mockScheduledProducer = { publish: vi.fn() };
+    mockOutboundProducers = { normal: { publish: vi.fn() } };
+
+    const mockLogger = {
+      warn: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+      child: vi.fn().mockReturnThis(),
+    };
+
+    worker = new AiWorker({
+      consumer: { ack: vi.fn(), nack: vi.fn() } as any,
+      pendingScanner: {} as any,
+      logger: mockLogger as any,
+      maxRetriesBeforeDlq: 5,
+      registry: mockRegistry,
+      idempotency: mockIdempotency,
+      redis: mockRedis,
+      generateAiContent: mockGenerateAiContent,
+      templateCache: { getCachedTemplate: mockGetCachedTemplate } as any,
+      scheduledProducer: mockScheduledProducer as any,
+      outboundProducers: mockOutboundProducers as any,
+      db: {
+        insert: vi
+          .fn()
+          .mockReturnValue({ values: vi.fn().mockReturnValue({ onConflictDoNothing: vi.fn() }) }),
+      } as any,
+    });
+  });
+
+  it("generates ai content and interpolates it into the template", async () => {
+    const msg = {
+      id: "msg-ai-1",
+      event: {
+        id: "evt-ai-1",
+        type: "notification.ai_pending",
+        metadata: { traceId: "trace-1" },
+        payload: {},
+      },
+    };
+    await worker.process(msg as any);
+    expect(mockGenerateAiContent).toHaveBeenCalledWith("Summarize this {{name}}", {
+      name: "Alice",
+      project: "Notifkit",
+    });
+    expect(mockOutboundProducers.normal.publish).toHaveBeenCalledTimes(1);
+
+    const published = mockOutboundProducers.normal.publish.mock.calls[0][0];
+    expect(published.payload.renderedContent.content.subject).toBe("Hello Alice");
+    expect(published.payload.renderedContent.content.text).toBe("Summary: Summary of Alice");
+  });
+});
+
+describe("AiWorker (Extended)", () => {
+  let worker: AiWorker;
+  let mockRegistry: any;
+  let mockIdempotency: any;
+  let mockGenerateAiContent: any;
+  let mockScheduledProducer: any;
+  let mockOutboundProducers: any;
+
+  beforeEach(() => {
+    mockRegistry = {
+      safeParsePayload: vi.fn().mockReturnValue({
+        success: true,
+        data: {
+          projectId: "proj-1",
+          enrichedEventId: "enriched-1",
+          recipientId: "usr-1",
+          channel: "email",
+          aiPrompts: { summary: "Summarize this" },
+          templateVariables: { name: "Alice" },
+        },
+      }),
+    };
+    mockIdempotency = {
+      checkAndMark: vi.fn().mockResolvedValue(true),
+      unmark: vi.fn().mockResolvedValue(undefined),
+    };
+    mockGenerateAiContent = vi.fn().mockResolvedValue("AI generated summary");
+    mockScheduledProducer = { publish: vi.fn() };
+    mockOutboundProducers = { normal: { publish: vi.fn() } };
+
+    worker = new AiWorker({
+      consumer: { ack: vi.fn(), nack: vi.fn() } as any,
+      pendingScanner: {} as any,
+      logger: {
+        child: vi.fn().mockReturnThis(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      } as any,
+      maxRetriesBeforeDlq: 5,
+      registry: mockRegistry,
+      idempotency: mockIdempotency,
+      redis: {} as any,
+      generateAiContent: mockGenerateAiContent,
+      templateCache: {
+        getCachedTemplate: vi
+          .fn()
+          .mockResolvedValue({ content: { text: "{{name}}: {{summary}}" } }),
+      } as any,
+      scheduledProducer: mockScheduledProducer,
+      outboundProducers: mockOutboundProducers,
+      db: { insert: vi.fn().mockReturnValue({ values: vi.fn() }) } as any,
+    });
+  });
+
+  it("handles PermanentAiError without throwing so it is not retried", async () => {
+    mockGenerateAiContent.mockRejectedValue(new PermanentAiError("Malformed prompt"));
+    const msg = {
+      id: "msg-ai-1",
+      event: {
+        id: "evt-ai-1",
+        type: "notification.ai_pending",
+        metadata: { traceId: "trace-1" },
+        payload: {},
+      },
+    };
+
+    // Should not throw, which means it will be acked (or failed cleanly without retry loops)
+    await worker.process(msg as any);
+
+    expect(mockIdempotency.unmark).toHaveBeenCalled();
+    expect(mockOutboundProducers.normal.publish).not.toHaveBeenCalled();
+  });
+});
