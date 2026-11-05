@@ -20,6 +20,7 @@ import {
   PUBSUB_CHANNELS,
 } from "@/index.js";
 import { upsertOutboxProviderIds } from "@/db/bulk.js";
+import type { Db } from "@/db/index.js";
 import { scheduledPayloads } from "@/db/schema.js";
 import { sql as drizzleSql } from "drizzle-orm";
 import { ContactRepository, IdempotencyGuard, TemplateRepository } from "@/index.js";
@@ -92,8 +93,8 @@ export interface DeliveryWorkerOptions extends WorkerOptions {
   enrichedProducers: any;
   contactRepo: any;
   eventsProducer: any;
-  globalEmitter: any;
-  db: any;
+  globalEmitter: typeof globalEmitter;
+  db: Db;
   providerThrottle?: ProviderThrottle;
   /** Renders tasks that arrive without `renderedContent`. */
   templateCache?: TemplateCache;
@@ -106,8 +107,8 @@ export class DeliveryWorker extends BaseWorker {
   private readonly enrichedProducers: any;
   private readonly contactRepo: any;
   private readonly eventsProducer: any;
-  private readonly globalEmitter: any;
-  private readonly db: any;
+  private readonly globalEmitter: typeof globalEmitter;
+  private readonly db: Db;
 
   private eventProcessor: BatchProcessor<any, void>;
   private outboxUpdateProcessor: BatchProcessor<any, void>;

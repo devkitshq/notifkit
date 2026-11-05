@@ -1,5 +1,6 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { suppressions } from "@/db/schema.js";
+import type { Db } from "@/db/index.js";
 import { ContactRepository, TemplateRepository, UserRepository } from "@/repositories/index.js";
 import { normaliseTarget } from "@/shared/index.js";
 
@@ -22,7 +23,7 @@ interface ParkedTask {
  * throws on a failed lookup so the batch is held rather than sent unchecked.
  */
 export async function findBlockedAtRelease(
-  db: any,
+  db: Db,
   tasks: ParkedTask[],
 ): Promise<Map<string, BlockReason>> {
   const blocked = new Map<string, BlockReason>();

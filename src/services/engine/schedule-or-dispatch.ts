@@ -2,12 +2,16 @@ import { randomUUID } from "node:crypto";
 import type { Logger } from "@/index.js";
 import { buildStreamEvent, type DispatchedTaskPayload, type StreamEvent } from "@/index.js";
 import { scheduledPayloads } from "@/db/schema.js";
+import type { Db } from "@/db/index.js";
+import type { StreamProducer } from "@/queue/index.js";
 import { getPriorityBucket } from "@/shared/index.js";
 
 export interface ScheduleOrDispatchDeps {
-  db: any;
-  scheduledProducer: any;
-  outboundProducers: any;
+  db: Db;
+  scheduledProducer: Pick<StreamProducer, "publish">;
+  outboundProducers: Partial<
+    Record<"critical" | "normal" | "low", Pick<StreamProducer, "publish">>
+  >;
   logger: Logger;
   /** Delivery in this process, when the pipeline is fused. */
   inlineNext?: ((event: StreamEvent) => Promise<void>) | null;

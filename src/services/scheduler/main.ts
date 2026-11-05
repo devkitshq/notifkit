@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import { loadEnv, readBaseConfig } from "@/index.js";
 import type { Logger } from "@/index.js";
 import type { RedisClient, Redis } from "@/index.js";
-import { type StreamConsumer, type PendingMessageScanner, type StreamMessage } from "@/index.js";
+import {
+  type StreamConsumer,
+  type PendingMessageScanner,
+  type StreamMessage,
+  type StreamProducer,
+} from "@/index.js";
+import type { Db, Sql } from "@/db/index.js";
 import { BaseWorker } from "@/index.js";
 import {
   STREAMS,
@@ -30,8 +36,8 @@ const config = readBaseConfig();
 
 let logger: Logger;
 let redis: RedisClient;
-let sql: any;
-let db: any;
+let sql: Sql;
+let db: Db;
 
 let consumer: StreamConsumer;
 let pendingScanner: PendingMessageScanner;
@@ -90,9 +96,11 @@ export class SchedulerWorker extends BaseWorker {
 
 export async function executeSchedulerPoll(
   redis: Redis,
-  outboundProducers: any,
-  logger: any,
-  db: any,
+  outboundProducers: Partial<
+    Record<"critical" | "normal" | "low", Pick<StreamProducer, "publishBatch">>
+  >,
+  logger: Pick<Logger, "info" | "warn" | "error">,
+  db: Db,
 ): Promise<boolean> {
   const lockKey = "notif:lock:scheduler:poll";
   const lockOwner = randomUUID();
@@ -264,8 +272,8 @@ export const SCHEDULER_SENTINEL_KEY = "notif:scheduler:intact";
  */
 export async function rebuildScheduledQueue(
   redis: Redis,
-  db: any,
-  logger: Logger,
+  db: Db,
+  logger: Pick<Logger, "info" | "warn" | "error">,
   pageSize = 1000,
 ): Promise<number> {
   let after: string | undefined;

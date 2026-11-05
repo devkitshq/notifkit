@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import type { EventEmitter } from "node:events";
+import type { Db } from "@/db/index.js";
 import { loadEnv, readBaseConfig } from "@/index.js";
 import type { Logger } from "@/index.js";
 import type { RedisClient, Redis } from "@/index.js";
@@ -70,33 +72,36 @@ let pendingScanner: PendingMessageScanner;
 let worker: BaseWorker;
 let healthInterval: NodeJS.Timeout | null = null;
 
+type Publisher = Pick<StreamProducer, "publish">;
+
 export interface EngineWorkerOptions extends WorkerOptions {
   registry: EventRegistry;
-  idempotency: any;
-  throttle: any;
+  idempotency: Pick<IdempotencyGuard, "checkAndMark" | "markProcessed" | "unmark">;
+  throttle: Pick<UserThrottle, "check">;
   projectSettings: ProjectSettingsCache;
   redis: Redis;
   templateCache: TemplateCache;
-  aiPendingProducer: any;
-  scheduledProducer: any;
-  outboundProducers: any;
-  globalEmitter: any;
+  aiPendingProducer: Publisher;
+  scheduledProducer: Publisher;
+  outboundProducers: Partial<Record<"critical" | "normal" | "low", Publisher>>;
+  globalEmitter: Pick<EventEmitter, "emit">;
+  // Left loose: tests reach into it to swap its mock.
   contactRepo: any;
-  db: any;
+  db: Db;
 }
 
 export class EngineWorker extends BaseWorker {
   private readonly registry: EventRegistry;
-  private readonly idempotency: any;
-  private readonly throttle: any;
+  private readonly idempotency: EngineWorkerOptions["idempotency"];
+  private readonly throttle: EngineWorkerOptions["throttle"];
   private readonly projectSettings: ProjectSettingsCache;
   private readonly templateCache: TemplateCache;
-  private readonly aiPendingProducer: any;
-  private readonly scheduledProducer: any;
-  private readonly outboundProducers: any;
-  private readonly globalEmitter: any;
+  private readonly aiPendingProducer: Publisher;
+  private readonly scheduledProducer: Publisher;
+  private readonly outboundProducers: EngineWorkerOptions["outboundProducers"];
+  private readonly globalEmitter: EngineWorkerOptions["globalEmitter"];
   private readonly contactRepo: any;
-  private readonly db: any;
+  private readonly db: Db;
   /** Delivery in this process, when the pipeline is fused. */
   private inlineNext: ((event: StreamEvent) => Promise<void>) | null = null;
 

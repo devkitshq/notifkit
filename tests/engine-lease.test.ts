@@ -68,7 +68,7 @@ function engine(redis: ReturnType<typeof fakeRedis>, scheduledPublish: () => Pro
     redis: {} as any,
     templateCache: { getCachedTemplate: vi.fn() } as any,
     aiPendingProducer: { publish: vi.fn() },
-    scheduledProducer: { publish: vi.fn(scheduledPublish) },
+    scheduledProducer: { publish: vi.fn(scheduledPublish) as any },
     outboundProducers: {},
     globalEmitter: { emit: vi.fn() },
     contactRepo: {},
