@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.19](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.18...notifkit-v0.1.19) (2026-11-17)
+
+
+### Bug Fixes
+
+* **contracts:** reject non-IANA user timezones ([#27](https://github.com/devkitshq/notifkit/issues/27)) ([235e20a](https://github.com/devkitshq/notifkit/commit/235e20a0dbb9d63e0d2dc742a32fc81518502b4e)), closes [#26](https://github.com/devkitshq/notifkit/issues/26)
+
 ## [0.1.18](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.17...notifkit-v0.1.18) (2026-11-05)
 
 
