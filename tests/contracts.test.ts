@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { registry, QuietHoursSchema } from "@/contracts/index.js";
+import { registry, QuietHoursSchema, AddUserSchema, UpdateUserSchema } from "@/contracts/index.js";
 
 describe("End-to-End Contract Registry Tests", () => {
   it("successfully parses a valid notification.requested payload", () => {
@@ -59,6 +59,17 @@ describe("End-to-End Contract Registry Tests", () => {
 
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.message).toBe("expected HH:MM (24h, user's timezone)");
+  });
+
+  it("rejects user timezones that are not IANA zones", () => {
+    for (const timezone of ["America/NewYork", "IST", "not a zone"]) {
+      expect(AddUserSchema.safeParse({ id: "u1", timezone }).success).toBe(false);
+      expect(UpdateUserSchema.safeParse({ timezone }).success).toBe(false);
+    }
+    for (const timezone of ["America/New_York", "Asia/Kolkata", "UTC"]) {
+      expect(AddUserSchema.safeParse({ id: "u1", timezone }).success).toBe(true);
+      expect(UpdateUserSchema.safeParse({ timezone }).success).toBe(true);
+    }
   });
 
   it("accepts a non-UUID templateId on delivery outcome events", () => {

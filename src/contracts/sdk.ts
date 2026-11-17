@@ -21,6 +21,21 @@ export const PreferencesSchema = z.object({
 });
 export type Preferences = z.infer<typeof PreferencesSchema>;
 
+// The quiet-hours engine formats with this zone, so an unknown one would silently skip quiet hours.
+// ICU also accepts ambiguous abbreviations like "IST", so require Area/Location (or UTC).
+const TimezoneSchema = z.string().refine(
+  (tz) => {
+    if (tz !== "UTC" && !tz.includes("/")) return false;
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: tz });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  { message: "expected an IANA timezone, e.g. America/New_York" },
+);
+
 // Contacts
 
 /** Channels that carry an addressable target (email address, phone, push token, url, chat id). */
@@ -52,7 +67,7 @@ export type UserContactInput = z.infer<typeof UserContactInputSchema>;
 export const AddUserSchema = z.object({
   id: z.string().min(1),
   language: z.string().optional(),
-  timezone: z.string().optional(),
+  timezone: TimezoneSchema.optional(),
   contacts: z.array(UserContactInputSchema).optional(),
   email: stringOrArray.optional(),
   phone: stringOrArray.optional(),
@@ -65,7 +80,7 @@ export type AddUserInput = z.input<typeof AddUserSchema>;
 /** updateUser(id, patch) — every field optional; id comes from the path. */
 export const UpdateUserSchema = z.object({
   language: z.string().optional(),
-  timezone: z.string().optional(),
+  timezone: TimezoneSchema.optional(),
   contacts: z.array(UserContactInputSchema).optional(),
   email: stringOrArray.optional(),
   phone: stringOrArray.optional(),
