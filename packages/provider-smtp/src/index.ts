@@ -29,6 +29,11 @@ export interface SmtpTransportOptions {
   limits?: { limit: number; windowSeconds: number };
 }
 
+// One plain address. nodemailer parses `to` as a header value, so it doesn't
+// refuse most malformed input: "alice@example.com<br>" is sent to "br", and
+// "a@example.com, b@example.com" is sent to both.
+const PLAIN_ADDRESS = /^[^\s@<>,;:()"]+@[^\s@<>,;:()"]+$/;
+
 export class SmtpTransport implements Transport {
   readonly channel = "email" as const;
   readonly limits?: { limit: number; windowSeconds: number };
@@ -56,6 +61,13 @@ export class SmtpTransport implements Transport {
         success: false,
         retryable: false,
         error: "No destination (recipient address) on task",
+      };
+    }
+    if (!PLAIN_ADDRESS.test(to)) {
+      return {
+        success: false,
+        retryable: false,
+        error: "Destination is not a single email address",
       };
     }
 
@@ -96,7 +108,12 @@ export class SmtpTransport implements Transport {
       // and unset when no reply came back at all (connection refused, timeout).
       // 503 is the one 5xx it leaves retryable, since a new connection gets
       // past it. Only a permanent reply would be refused again.
-      const permanent = error.permanent === true;
+      //
+      // An envelope nodemailer refuses itself has no reply to read, and its
+      // `command` is "API" because no SMTP command was sent. EENVELOPE alone
+      // can't decide this: a 451 to RCPT TO carries the same code.
+      const permanent =
+        error.permanent === true || (error.code === "EENVELOPE" && error.command === "API");
       this.logger?.warn(
         {
           taskId: task.taskId,

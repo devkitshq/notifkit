@@ -62,6 +62,8 @@ from it:
   credentials) fails the task without a retry.
 - A temporary rejection (4xx, such as 451 greylisting), 503, and connection
   errors or timeouts are retried.
+- A destination that isn't one plain address fails without a retry, and nothing
+  is sent. That includes `Alice <alice@example.com>` and comma-separated lists.
 
 SMTP has no delivery webhooks. A bounce that comes back later as an email,
 after the server accepted the message, isn't reported to notifkit.

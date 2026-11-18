@@ -2463,6 +2463,66 @@ describe("SmtpTransport (SMTP Provider)", () => {
     expect(sendMail).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["a tag after the address", "alice@example.com<br>"],
+    ["only a tag", "<br>"],
+    ["angle brackets in the local part", "bad<x>@example.com"],
+    ["a display name", "Alice <alice@example.com>"],
+    ["no @", "not-an-address"],
+    ["two @", "alice@@example.com"],
+    ["no domain", "alice@"],
+    ["a space", "a b@example.com"],
+    ["a line break", "alice@example.com\r\nbob@example.com"],
+    ["a comma-separated list", "alice@example.com, bob@example.com"],
+    ["a semicolon-separated list", "alice@example.com;bob@example.com"],
+    ["a comma in the local part", "a,b@example.com"],
+    ["a semicolon in the local part", "a;b@example.com"],
+    ["a group name", "team:alice@example.com"],
+    ["a comment", "alice(work)@example.com"],
+    ["quotes", '"alice"@example.com'],
+    ["an unmatched <", "<alice@example.com"],
+    ["an unmatched >", "alice@example.com>"],
+    ["an unmatched (", "alice(work@example.com"],
+    ["an unmatched )", "alice)work@example.com"],
+  ])("fails without sending when the destination has %s", async (_name, destination) => {
+    const { transport, sendMail } = streamSmtp();
+
+    const result = await transport.send(smtpTask({}, { destination }));
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "Destination is not a single email address",
+    });
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it.each(["first.last+tag@sub.example.co.uk", "o'brien@example.com", "üser@exämple.com"])(
+    "sends to %s",
+    async (destination) => {
+      const { transport, sendMail } = streamSmtp();
+
+      const result = await transport.send(smtpTask({}, { destination }));
+
+      expect(result.success).toBe(true);
+      expect(sendMail.mock.calls[0]![0]).toMatchObject({ to: destination });
+    },
+  );
+
+  it("does not retry an envelope nodemailer refuses before sending it", async () => {
+    const result = await failingSmtp({
+      message: "No recipients defined",
+      code: "EENVELOPE",
+      command: "API",
+    }).send(smtpTask());
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No recipients defined",
+    });
+  });
+
   it("does not retry a permanent rejection (5xx)", async () => {
     const result = await failingSmtp({
       message:
