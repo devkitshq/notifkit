@@ -295,6 +295,16 @@ export class NotifkitServer extends EventEmitter {
       if (services.includes(name)) await stop();
     }
 
+    // After delivery, so no send is still using them. A pooled SMTP connection
+    // would otherwise keep the process alive.
+    for (const provider of this.options.providers ?? []) {
+      try {
+        await provider.close?.();
+      } catch (err) {
+        this.logger.warn({ err, channel: provider.channel }, "provider close failed");
+      }
+    }
+
     if (this.pgContainer) {
       this.logger.info("Stopping PostgreSQL container...");
       await this.pgContainer.stop();

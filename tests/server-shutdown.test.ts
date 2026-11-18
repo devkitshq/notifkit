@@ -51,4 +51,28 @@ describe("NotifkitServer.stop", () => {
     // Events records what delivery did, so it goes last.
     expect(stopped.at(-1)).toBe("events");
   });
+
+  it("closes providers after delivery stops, so a pooled connection can't keep the process up", async () => {
+    stopped.length = 0;
+    const provider = {
+      channel: "email" as const,
+      send: vi.fn(),
+      close: vi.fn(async () => {
+        stopped.push("provider");
+      }),
+    };
+    const server = new NotifkitServer({
+      services: ["delivery"],
+      redisUrl: "redis://127.0.0.1:1",
+      databaseUrl: "postgres://x@127.0.0.1:1/x",
+      autoMigrate: false,
+      logLevel: "silent",
+      providers: [provider, { channel: "sms", send: vi.fn() }],
+    });
+    await server.start();
+    await server.stop();
+
+    expect(provider.close).toHaveBeenCalledOnce();
+    expect(stopped).toEqual(["delivery", "provider"]);
+  });
 });

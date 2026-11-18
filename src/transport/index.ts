@@ -42,6 +42,8 @@ export interface Transport {
   readonly channel: NotificationChannel;
   readonly limits?: { limit: number; windowSeconds: number };
   send(task: NotificationDispatchedPayload): Promise<DeliveryResult>;
+  /** Releases held connections. `NotifkitServer.stop()` calls it after delivery stops. */
+  close?: () => void | Promise<void>;
 
   webhookPath?: string;
   /**
