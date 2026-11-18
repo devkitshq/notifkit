@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.20](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.19...notifkit-v0.1.20) (2026-11-18)
+
+
+### Features
+
+* close providers when the server stops ([5cc8bb5](https://github.com/devkitshq/notifkit/commit/5cc8bb5aeb94de99ef101764ba399a9180cb943c))
+* **create-notifkit:** scaffold an app with several providers ([2aa20d7](https://github.com/devkitshq/notifkit/commit/2aa20d7ad93bdbfa796a750cb7ae0b721c13ec1f))
+* **provider-smtp:** add an SMTP email transport built on nodemailer ([#29](https://github.com/devkitshq/notifkit/issues/29)) ([9e15928](https://github.com/devkitshq/notifkit/commit/9e159283cbca0c6e7d11bd31d83cbeb7c0ecabd8))
+
+
+### Bug Fixes
+
+* **contracts:** reject email contacts that aren't one plain address ([506e085](https://github.com/devkitshq/notifkit/commit/506e085625303530bd07a237670d70a53c7f1df4))
+* **provider-smtp:** give up on a stalled server within delivery's send timeout ([e49f5e6](https://github.com/devkitshq/notifkit/commit/e49f5e647cd8b8952a2ae854315576917a8d8ad7))
+
 ## [0.1.19](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.18...notifkit-v0.1.19) (2026-11-17)
 
 
