@@ -2352,3 +2352,245 @@ describe("provider regressions", () => {
     expect(body.endsWith("…")).toBe(true);
   });
 });
+
+import { createServer } from "node:net";
+import type { NodemailerError } from "nodemailer";
+import { SmtpTransport } from "../packages/provider-smtp/src/index.js";
+
+describe("SmtpTransport (SMTP Provider)", () => {
+  const smtpTask = (content: Record<string, unknown> = {}, overrides = {}): any => ({
+    taskId: "task-uuid-123",
+    destination: "recipient@example.com",
+    renderedContent: {
+      content: {
+        subject: "Welcome Alice",
+        body: "Hello Alice",
+        htmlBody: "<h1>Hello Alice</h1>",
+        ...content,
+      },
+    },
+    ...overrides,
+  });
+
+  // nodemailer's stream transport builds the message the way the SMTP
+  // transport does, then hands it back instead of sending it, so these tests
+  // read the exact message without an SMTP server.
+  const streamSmtp = () => {
+    const transport = new SmtpTransport({
+      smtp: { streamTransport: true, buffer: true, newline: "unix" } as any,
+      from: "notifications@example.com",
+    });
+    const sendMail = vi.spyOn((transport as any).transporter, "sendMail");
+    const sent = async (): Promise<string> =>
+      ((await sendMail.mock.results[0]!.value) as { message: Buffer }).message.toString();
+    return { transport, sendMail, sent };
+  };
+
+  // A transport plugin that fails every send with `error`, shaped like the
+  // errors nodemailer's SMTP transport passes back for a refused message.
+  const failingSmtp = (error: Partial<NodemailerError>) =>
+    new SmtpTransport({
+      smtp: {
+        name: "failing",
+        version: "1.0.0",
+        send: (_mail: unknown, callback: (err: Error) => void) =>
+          callback(Object.assign(new Error(error.message), error)),
+      } as any,
+      from: "notifications@example.com",
+    });
+
+  it("sends the email and returns its Message-ID as providerMessageId", async () => {
+    const { transport, sent } = streamSmtp();
+
+    const result = await transport.send(smtpTask());
+
+    expect(result.success).toBe(true);
+    expect(result.providerMessageId).toMatch(/^<.+@example\.com>$/);
+
+    const message = await sent();
+    expect(message).toContain("From: notifications@example.com\n");
+    expect(message).toContain("To: recipient@example.com\n");
+    expect(message).toContain("Subject: Welcome Alice\n");
+    expect(message).toContain(`Message-ID: ${result.providerMessageId}\n`);
+    expect(message).toContain("Content-Type: text/plain");
+    expect(message).toContain("Hello Alice");
+    expect(message).toContain("Content-Type: text/html");
+    expect(message).toContain("<h1>Hello Alice</h1>");
+  });
+
+  it("builds an escaped HTML part for a text-only template", async () => {
+    const { transport, sent } = streamSmtp();
+
+    await transport.send(smtpTask({ htmlBody: undefined, body: "Hi <b>Alice</b>\nBye" }));
+
+    expect(await sent()).toContain("<p>Hi &lt;b&gt;Alice&lt;/b&gt;<br>Bye</p>");
+  });
+
+  it("uses the template's from and replyTo, and passes the unsubscribe headers", async () => {
+    const { transport, sent } = streamSmtp();
+
+    await transport.send(
+      smtpTask(
+        { from: "Acme Offers <marketing@example.com>", replyTo: "hello@example.com" },
+        { deliveryOptions: { headers: { "List-Unsubscribe": "<https://x/u?t=1>" } } },
+      ),
+    );
+
+    const message = await sent();
+    expect(message).toContain("From: Acme Offers <marketing@example.com>\n");
+    expect(message).toContain("Reply-To: hello@example.com\n");
+    expect(message).toContain("List-Unsubscribe: <https://x/u?t=1>\n");
+  });
+
+  it("falls back to the constructor's from when the template's is not a string", async () => {
+    const { transport, sent } = streamSmtp();
+
+    await transport.send(smtpTask({ from: 123 }));
+
+    expect(await sent()).toContain("From: notifications@example.com\n");
+  });
+
+  it("fails without sending when the task has no destination", async () => {
+    const { transport, sendMail } = streamSmtp();
+
+    const result = await transport.send(smtpTask({}, { destination: undefined }));
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No destination (recipient address) on task",
+    });
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a tag after the address", "alice@example.com<br>"],
+    ["only a tag", "<br>"],
+    ["angle brackets in the local part", "bad<x>@example.com"],
+    ["a display name", "Alice <alice@example.com>"],
+    ["no @", "not-an-address"],
+    ["two @", "alice@@example.com"],
+    ["no domain", "alice@"],
+    ["a space", "a b@example.com"],
+    ["a line break", "alice@example.com\r\nbob@example.com"],
+    ["a comma-separated list", "alice@example.com, bob@example.com"],
+    ["a semicolon-separated list", "alice@example.com;bob@example.com"],
+    ["a comma in the local part", "a,b@example.com"],
+    ["a semicolon in the local part", "a;b@example.com"],
+    ["a group name", "team:alice@example.com"],
+    ["a comment", "alice(work)@example.com"],
+    ["quotes", '"alice"@example.com'],
+    ["an unmatched <", "<alice@example.com"],
+    ["an unmatched >", "alice@example.com>"],
+    ["an unmatched (", "alice(work@example.com"],
+    ["an unmatched )", "alice)work@example.com"],
+  ])("fails without sending when the destination has %s", async (_name, destination) => {
+    const { transport, sendMail } = streamSmtp();
+
+    const result = await transport.send(smtpTask({}, { destination }));
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "Destination is not a single email address",
+    });
+    expect(sendMail).not.toHaveBeenCalled();
+  });
+
+  it.each(["first.last+tag@sub.example.co.uk", "o'brien@example.com", "üser@exämple.com"])(
+    "sends to %s",
+    async (destination) => {
+      const { transport, sendMail } = streamSmtp();
+
+      const result = await transport.send(smtpTask({}, { destination }));
+
+      expect(result.success).toBe(true);
+      expect(sendMail.mock.calls[0]![0]).toMatchObject({ to: destination });
+    },
+  );
+
+  it("does not retry an envelope nodemailer refuses before sending it", async () => {
+    const result = await failingSmtp({
+      message: "No recipients defined",
+      code: "EENVELOPE",
+      command: "API",
+    }).send(smtpTask());
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No recipients defined",
+    });
+  });
+
+  it("does not retry a permanent rejection (5xx)", async () => {
+    const result = await failingSmtp({
+      message:
+        "Can't send mail - all recipients were rejected: 550 5.1.1 <recipient@example.com>: Recipient address rejected: User unknown",
+      code: "EENVELOPE",
+      command: "RCPT TO",
+      responseCode: 550,
+      permanent: true,
+    }).send(smtpTask());
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error:
+        "Can't send mail - all recipients were rejected: 550 5.1.1 <recipient@example.com>: Recipient address rejected: User unknown",
+    });
+  });
+
+  it.each([
+    [451, "451 4.7.1 Greylisted, try again later"],
+    [421, "421 4.3.2 Service shutting down"],
+    // nodemailer counts 503 (bad sequence of commands) as transient: a new
+    // connection gets past it.
+    [503, "503 5.5.1 Error: nested MAIL command"],
+  ])("retries a transient rejection (%i)", async (responseCode, response) => {
+    const result = await failingSmtp({
+      message: `Mail command failed: ${response}`,
+      code: "EENVELOPE",
+      command: "MAIL FROM",
+      response,
+      responseCode,
+      permanent: false,
+    }).send(smtpTask());
+
+    expect(result.success).toBe(false);
+    expect(result).not.toHaveProperty("retryable");
+    expect(result.error).toBe(`Mail command failed: ${response}`);
+  });
+
+  it("retries when the server can't be reached", async () => {
+    // A port that was free a moment ago, so the connection is refused.
+    const port = await new Promise<number>((resolve) => {
+      const server = createServer().listen(0, "127.0.0.1", () => {
+        const { port } = server.address() as { port: number };
+        server.close(() => resolve(port));
+      });
+    });
+    const transport = new SmtpTransport({
+      smtp: { host: "127.0.0.1", port },
+      from: "notifications@example.com",
+    });
+
+    const result = await transport.send(smtpTask());
+
+    expect(result.success).toBe(false);
+    expect(result).not.toHaveProperty("retryable");
+    expect(result.error).toMatch(/ECONNREFUSED/);
+  });
+
+  it("close() closes the underlying transporter", () => {
+    const close = vi.fn();
+    const transport = new SmtpTransport({
+      smtp: { name: "closable", version: "1.0.0", send: vi.fn(), close } as any,
+      from: "notifications@example.com",
+    });
+
+    transport.close();
+
+    expect(close).toHaveBeenCalledOnce();
+  });
+});
