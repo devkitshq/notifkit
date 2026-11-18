@@ -59,6 +59,9 @@ jobs:
       # Publishes every package whose current version isn't on npm yet, so
       # packages the release didn't bump are skipped.
       - name: Publish to npm
+        # shortcut: token only for @notifkit/provider-smtp's first publish (trusted publishing needs the package to exist); remove once its trusted publisher is set up.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           for dir in . packages/*; do

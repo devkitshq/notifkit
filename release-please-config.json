@@ -30,6 +30,9 @@
     "packages/provider-slack": {
       "package-name": "@notifkit/provider-slack"
     },
+    "packages/provider-smtp": {
+      "package-name": "@notifkit/provider-smtp"
+    },
     "packages/provider-telegram": {
       "package-name": "@notifkit/provider-telegram"
     },
