@@ -8,7 +8,8 @@
 
 export const NOTIFKIT_VERSION = "0.1.15";
 
-export type ProviderId = "console" | "resend" | "twilio" | "fcm";
+export type ProviderId =
+  "console" | "resend" | "twilio" | "fcm" | "slack" | "discord" | "telegram" | "whatsapp";
 
 export interface EnvVar {
   name: string;
@@ -23,7 +24,7 @@ export interface ProviderSpec {
   packageName: string;
   version: string;
   className: string;
-  channel: "push" | "email" | "sms";
+  channel: "push" | "email" | "sms" | "slack" | "discord" | "telegram" | "whatsapp";
   /** Constructor argument, as source, indented for server.ts. */
   options: string;
   /** Credentials and settings the transport reads. */
@@ -106,6 +107,82 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     ],
     target: { env: "TO_PUSH_TOKEN", comment: "FCM registration token of a test device" },
     content: `{ title: "Welcome, {{name}}!", body: "Your notifkit app is working." }`,
+  },
+  slack: {
+    id: "slack",
+    label: "Slack (incoming webhook)",
+    packageName: "@notifkit/provider-slack",
+    version: "0.1.3",
+    className: "SlackTransport",
+    channel: "slack",
+    // An incoming-webhook URL as the contact target needs no bot token.
+    options: "",
+    env: [],
+    target: {
+      env: "TO_SLACK_WEBHOOK_URL",
+      comment: "Incoming webhook URL, from https://api.slack.com/apps > Incoming Webhooks",
+    },
+    content: `{ subject: "Welcome, {{name}}!", text: "Your notifkit app is working." }`,
+  },
+  discord: {
+    id: "discord",
+    label: "Discord (webhook)",
+    packageName: "@notifkit/provider-discord",
+    version: "0.1.4",
+    className: "DiscordTransport",
+    channel: "discord",
+    options: "",
+    env: [],
+    target: {
+      env: "TO_DISCORD_WEBHOOK_URL",
+      comment: "Webhook URL, from Server Settings > Integrations > Webhooks",
+    },
+    content: `{ subject: "Welcome, {{name}}!", text: "Your notifkit app is working." }`,
+  },
+  telegram: {
+    id: "telegram",
+    label: "Telegram (bot)",
+    packageName: "@notifkit/provider-telegram",
+    version: "0.1.3",
+    className: "TelegramTransport",
+    channel: "telegram",
+    options: `{
+      botToken: process.env.TELEGRAM_BOT_TOKEN!,
+    }`,
+    env: [{ name: "TELEGRAM_BOT_TOKEN", comment: "From @BotFather on Telegram" }],
+    target: {
+      env: "TO_TELEGRAM_CHAT_ID",
+      comment: "Chat id of a chat that has messaged your bot",
+    },
+    content: `{ text: "Welcome, {{name}}! Your notifkit app is working." }`,
+  },
+  whatsapp: {
+    id: "whatsapp",
+    label: "WhatsApp (Meta Cloud API)",
+    packageName: "@notifkit/provider-whatsapp",
+    version: "0.1.3",
+    className: "WhatsAppTransport",
+    channel: "whatsapp",
+    options: `{
+      phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID!,
+      accessToken: process.env.WHATSAPP_ACCESS_TOKEN!,
+    }`,
+    env: [
+      {
+        name: "WHATSAPP_PHONE_NUMBER_ID",
+        comment: "From Meta's App Dashboard > WhatsApp > API Setup",
+      },
+      {
+        name: "WHATSAPP_ACCESS_TOKEN",
+        comment: "From Meta's App Dashboard > WhatsApp > API Setup",
+      },
+    ],
+    target: {
+      env: "TO_PHONE",
+      comment:
+        "Where `send` delivers the test message, in E.164 form. It must have messaged your number in the last 24h",
+    },
+    content: `{ text: "Welcome, {{name}}! Your notifkit app is working." }`,
   },
 };
 
