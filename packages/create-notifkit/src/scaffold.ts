@@ -1,13 +1,20 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { NOTIFKIT_VERSION, PROVIDERS, type ProviderId, type ProviderSpec } from "./providers.js";
+import {
+  NOTIFKIT_VERSION,
+  PROVIDERS,
+  type EnvVar,
+  type ProviderId,
+  type ProviderSpec,
+} from "./providers.js";
 
 export type PackageManager = "npm" | "pnpm" | "yarn" | "bun";
 
 export interface RenderOptions {
   name: string;
-  provider: ProviderId;
+  /** In the order picked; on a shared channel, that is the fallback order. */
+  providers: ProviderId[];
   adminKey: string;
   packageManager?: PackageManager;
 }
@@ -36,19 +43,34 @@ export function generateAdminKey(): string {
 
 /** Every file of a new app, keyed by path relative to the app directory. */
 export function renderProject(opts: RenderOptions): Record<string, string> {
-  const spec = PROVIDERS[opts.provider];
+  const specs = [...new Set(opts.providers)].map((id) => PROVIDERS[id]);
   const pm = opts.packageManager ?? "npm";
   return {
-    "package.json": packageJson(opts.name, spec),
+    "package.json": packageJson(opts.name, specs),
     "tsconfig.json": TSCONFIG,
     ".gitignore": "node_modules\ndist\n.env\n",
-    ".env": envFile(spec, opts.adminKey),
-    ".env.example": envFile(spec, ""),
-    "server.ts": serverTs(spec),
+    ".env": envFile(specs, opts.adminKey),
+    ".env.example": envFile(specs, ""),
+    "server.ts": serverTs(specs),
     "setup.ts": setupTs(opts.name, pm),
-    "send.ts": sendTs(spec, pm),
-    "README.md": readme(opts.name, spec, pm),
+    "send.ts": sendTs(specs, pm),
+    "README.md": readme(opts.name, specs, pm),
   };
+}
+
+/** The first provider picked for each channel; the test notification goes through it. */
+function perChannel(specs: ProviderSpec[]): ProviderSpec[] {
+  const seen = new Set<string>();
+  return specs.filter((s) => !seen.has(s.channel) && seen.add(s.channel));
+}
+
+/** Env vars the user fills in, each once: resend and smtp share TO_EMAIL. */
+function envVars(specs: ProviderSpec[]): EnvVar[] {
+  const vars = specs.flatMap((s) =>
+    "env" in s.target ? [...s.env, { name: s.target.env, comment: s.target.comment }] : s.env,
+  );
+  const seen = new Set<string>();
+  return vars.filter((v) => !seen.has(v.name) && seen.add(v.name));
 }
 
 /**
@@ -73,7 +95,7 @@ export function writeProject(
   }
 }
 
-function packageJson(name: string, spec: ProviderSpec): string {
+function packageJson(name: string, specs: ProviderSpec[]): string {
   const pkg = {
     name,
     version: "0.1.0",
@@ -87,7 +109,7 @@ function packageJson(name: string, spec: ProviderSpec): string {
     },
     dependencies: {
       notifkit: `^${NOTIFKIT_VERSION}`,
-      [spec.packageName]: `^${spec.version}`,
+      ...Object.fromEntries(specs.map((s) => [s.packageName, `^${s.version}`])),
     },
     devDependencies: {
       "@testcontainers/postgresql": "^12.0.4",
@@ -119,7 +141,7 @@ const TSCONFIG =
     2,
   ) + "\n";
 
-function envFile(spec: ProviderSpec, adminKey: string): string {
+function envFile(specs: ProviderSpec[], adminKey: string): string {
   const lines = [
     "# Admin credential for the admin API, including minting project keys.",
     `ADMIN_API_KEY=${adminKey}`,
@@ -137,21 +159,28 @@ function envFile(spec: ProviderSpec, adminKey: string): string {
     "# DATABASE_URL=postgres://user:pass@localhost:5432/notifkit",
     "# REDIS_URL=redis://localhost:6379",
   ];
-  for (const v of spec.env) lines.push("", `# ${v.comment}`, `${v.name}=`);
-  if ("env" in spec.target) lines.push("", `# ${spec.target.comment}`, `${spec.target.env}=`);
+  for (const v of envVars(specs)) lines.push("", `# ${v.comment}`, `${v.name}=`);
   return lines.join("\n") + "\n";
 }
 
-function serverTs(spec: ProviderSpec): string {
+function serverTs(specs: ProviderSpec[]): string {
+  const imports = specs.map((s) => `import { ${s.className} } from "${s.packageName}";`);
+  const providers = specs.map((s) => `    new ${s.className}(${s.options}),`);
+  const fallback =
+    perChannel(specs).length < specs.length
+      ? "\n  // Providers on the same channel are tried in the order listed: the first\n  // delivers, and the next takes over when it fails."
+      : "";
   return `import { NotifkitServer } from "notifkit";
-import { ${spec.className} } from "${spec.packageName}";
+${imports.join("\n")}
 
 // With no DATABASE_URL or REDIS_URL, notifkit starts throwaway PostgreSQL and
 // Redis containers for development, so Docker must be running.
 const server = new NotifkitServer({
   services: ["all"],
-  port: Number(process.env.PORT ?? 3000),
-  providers: [new ${spec.className}(${spec.options})],
+  port: Number(process.env.PORT ?? 3000),${fallback}
+  providers: [
+${providers.join("\n")}
+  ],
 });
 
 await server.start();
@@ -198,18 +227,43 @@ console.log("Project created. Its API key is saved in .env as NOTIFKIT_API_KEY."
 `;
 }
 
-function sendTs(spec: ProviderSpec, pm: PackageManager): string {
-  const target =
-    "env" in spec.target
-      ? `
-const to = process.env.${spec.target.env};
-if (!to) {
-  console.error("Set ${spec.target.env} in .env to where the test notification should go.");
+function sendTs(specs: ProviderSpec[], pm: PackageManager): string {
+  // A template belongs to one channel, so each channel gets its own.
+  const channels = perChannel(specs);
+  const targetEnvs = [
+    ...new Set(channels.flatMap((s) => ("env" in s.target ? [s.target.env] : []))),
+  ];
+  const check = targetEnvs.length
+    ? `
+const missing = ${JSON.stringify(targetEnvs).replace(/,/g, ", ")}.filter((name) => !process.env[name]);
+if (missing.length) {
+  console.error(\`Set \${missing.join(", ")} in .env to where the test notifications should go.\`);
   process.exit(1);
 }
 `
-      : "";
-  const targetExpr = "env" in spec.target ? "to" : JSON.stringify(spec.target.value);
+    : "";
+  const templates = channels.map(
+    (s) => `    {
+      id: "welcome-${s.channel}",
+      channel: "${s.channel}",
+      content: ${s.content},
+    },`,
+  );
+  const contacts = channels.map((s) => {
+    const target =
+      "env" in s.target ? `process.env.${s.target.env}!` : JSON.stringify(s.target.value);
+    return `  { channel: "${s.channel}", target: ${target} },`;
+  });
+  const notifies = channels.map(
+    (s) => `
+const ${s.channel} = await notifkit.notify({
+  user: "usr_123",
+  template: "welcome-${s.channel}",
+  channels: ["${s.channel}"],
+  data: { name: "Ada" },
+});
+console.log(\`Queued ${s.channel} notification \${${s.channel}.notificationId}.\`);`,
+  );
   return `import { NotifkitClient } from "notifkit";
 
 const apiKey = process.env.NOTIFKIT_API_KEY;
@@ -217,7 +271,7 @@ if (!apiKey) {
   console.error("NOTIFKIT_API_KEY is not set. Run \`${runScript(pm, "setup")}\` first.");
   process.exit(1);
 }
-${target}
+${check}
 const notifkit = new NotifkitClient({
   baseUrl: process.env.NOTIFKIT_URL || "http://localhost:3000",
   apiKey,
@@ -225,35 +279,27 @@ const notifkit = new NotifkitClient({
 
 await notifkit.syncTemplates({
   templates: [
-    {
-      id: "welcome",
-      channel: "${spec.channel}",
-      content: ${spec.content},
-    },
+${templates.join("\n")}
   ],
 });
 
-await notifkit.addUser("usr_123", [{ channel: "${spec.channel}", target: ${targetExpr} }]);
+await notifkit.addUser("usr_123", [
+${contacts.join("\n")}
+]);
+${notifies.join("\n")}
 
-const { notificationId } = await notifkit.notify({
-  user: "usr_123",
-  template: "welcome",
-  channels: ["${spec.channel}"],
-  data: { name: "Ada" },
-});
-
-console.log(\`Queued notification \${notificationId}. Watch the server terminal for the delivery.\`);
+console.log("Watch the server terminal for the deliveries.");
 `;
 }
 
-function readme(name: string, spec: ProviderSpec, pm: PackageManager): string {
-  const fill = [...spec.env.map((v) => v.name), ...("env" in spec.target ? [spec.target.env] : [])];
+function readme(name: string, specs: ProviderSpec[], pm: PackageManager): string {
+  const fill = envVars(specs).map((v) => v.name);
   const credentials = fill.length
     ? `\nFirst fill in ${fill.map((n) => `\`${n}\``).join(", ")} in \`.env\`.\n`
     : "";
   return `# ${name}
 
-A [notifkit](https://notifkit.dev) app using ${spec.label}.
+A [notifkit](https://notifkit.dev) app using ${specs.map((s) => s.label).join(", ")}.
 
 You need Node 22+ and Docker running. In development notifkit starts
 throwaway PostgreSQL and Redis containers for you.
@@ -269,7 +315,7 @@ ${runScript(pm, "setup")}   # create a project and save its API key to .env
 ${runScript(pm, "send")}    # send a test notification
 \`\`\`
 
-- \`server.ts\` runs notifkit with your provider.
+- \`server.ts\` runs notifkit with your providers.
 - \`send.ts\` shows the client: sync a template, add a user, notify them.
 - The admin dashboard is at http://localhost:3000/admin. To sign in, uncomment
   \`ADMIN_EMAIL\` and \`ADMIN_PASSWORD\` in \`.env\` and restart the server.

@@ -29,7 +29,8 @@ export interface CliIo {
 
 export interface CliArgs {
   name: string | undefined;
-  provider: string | undefined;
+  /** From every `-p`, split on commas. Empty when none was given. */
+  providers: string[];
   install: boolean;
   force: boolean;
   help: boolean;
@@ -41,7 +42,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
     args: argv,
     allowPositionals: true,
     options: {
-      provider: { type: "string", short: "p" },
+      provider: { type: "string", short: "p", multiple: true },
       "no-install": { type: "boolean" },
       force: { type: "boolean" },
       help: { type: "boolean", short: "h" },
@@ -50,12 +51,19 @@ export function parseCliArgs(argv: string[]): CliArgs {
   });
   return {
     name: positionals[0],
-    provider: values.provider,
+    providers: splitList((values.provider ?? []).join(",")),
     install: !values["no-install"],
     force: values.force ?? false,
     help: values.help ?? false,
     version: values.version ?? false,
   };
+}
+
+function splitList(value: string): string[] {
+  return value
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 export function detectPackageManager(userAgent: string | undefined): PackageManager {
@@ -71,7 +79,8 @@ function helpText(): string {
     "Scaffolds a notifkit server and client into ./<name>. Use . for the current directory.",
     "",
     "Options:",
-    "  -p, --provider <id>  Delivery provider (default: console)",
+    "  -p, --provider <id>  Delivery provider (default: console). Comma-separate or",
+    "                       repeat it for several, e.g. -p resend,twilio",
     "      --no-install     Skip installing dependencies",
     "      --force          Write into a non-empty directory",
     "  -h, --help           Show this help",
@@ -87,16 +96,16 @@ function ownVersion(): string {
   return pkg.version;
 }
 
-async function askProvider(io: CliIo): Promise<string> {
-  io.log("Which provider should deliver notifications?");
+async function askProviders(io: CliIo): Promise<string[]> {
+  io.log("Which providers should deliver notifications? Pick one or more, e.g. 2,4");
   PROVIDER_IDS.forEach((id, i) => io.log(`  ${i + 1}. ${PROVIDERS[id].label}`));
-  const answer = (await io.prompt(`Provider [1]: `)).trim();
-  if (!answer) return "console";
-  const index = Number(answer);
-  if (Number.isInteger(index) && index >= 1 && index <= PROVIDER_IDS.length) {
-    return PROVIDER_IDS[index - 1]!;
-  }
-  return answer;
+  const answers = splitList(await io.prompt(`Providers [1]: `));
+  return answers.map((answer) => {
+    const index = Number(answer);
+    return Number.isInteger(index) && index >= 1 && index <= PROVIDER_IDS.length
+      ? PROVIDER_IDS[index - 1]!
+      : answer;
+  });
 }
 
 /** Runs the CLI and returns its exit code. */
@@ -131,13 +140,15 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
     return 1;
   }
 
-  let provider = args.provider;
-  if (!provider && io.interactive) provider = await askProvider(io);
-  provider ||= "console";
-  if (!isProviderId(provider)) {
-    io.error(`unknown provider "${provider}". Choose one of: ${PROVIDER_IDS.join(", ")}.`);
+  let picked = args.providers;
+  if (!picked.length && io.interactive) picked = await askProviders(io);
+  if (!picked.length) picked = ["console"];
+  const unknown = picked.find((p) => !isProviderId(p));
+  if (unknown !== undefined) {
+    io.error(`unknown provider "${unknown}". Choose from: ${PROVIDER_IDS.join(", ")}.`);
     return 1;
   }
+  const providers = [...new Set(picked as ProviderId[])];
 
   // A scoped name like @acme/notify goes in ./notify, not ./@acme/notify.
   const dirName = name.split("/").pop()!;
@@ -145,7 +156,7 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
   const pm = detectPackageManager(io.userAgent);
   const files = renderProject({
     name,
-    provider: provider as ProviderId,
+    providers,
     adminKey: generateAdminKey(),
     packageManager: pm,
   });
@@ -156,7 +167,8 @@ export async function run(argv: string[], io: CliIo): Promise<number> {
     io.error((err as Error).message);
     return 1;
   }
-  io.log(`\nCreated ${name} with ${PROVIDERS[provider].label} in ${dir}`);
+  const labels = providers.map((id) => PROVIDERS[id].label).join(", ");
+  io.log(`\nCreated ${name} with ${labels} in ${dir}`);
 
   let installed = false;
   if (args.install) {

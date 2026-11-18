@@ -29,20 +29,21 @@ With the default `console` provider the notification is printed in the server te
 ```
 create-notifkit [name] [options]
 
-  -p, --provider <id>  console (default), resend, smtp, twilio, fcm, slack, discord, telegram, whatsapp
+  -p, --provider <id>  console (default), resend, smtp, twilio, fcm, slack, discord, telegram, whatsapp.
+                       Comma-separate or repeat it for several, e.g. -p resend,twilio
       --no-install     Skip installing dependencies
       --force          Write into a non-empty directory
   -h, --help           Show help
   -v, --version        Show the version
 ```
 
-Pass `.` as the name to scaffold into the current directory. With no name in an interactive terminal, it asks for the name and provider. pnpm, yarn and bun are detected when you run it through them (`pnpm create notifkit`).
+Pass `.` as the name to scaffold into the current directory. With no name in an interactive terminal, it asks for the name and providers. With several providers, `send` sends one test notification per channel. Two providers on the same channel, such as `resend,smtp`, become a primary and a fallback. pnpm, yarn and bun are detected when you run it through them (`pnpm create notifkit`).
 
 ## What you get
 
 | File           | Purpose                                                        |
 | :------------- | :------------------------------------------------------------- |
-| `server.ts`    | `NotifkitServer` with the provider you picked                  |
+| `server.ts`    | `NotifkitServer` with the providers you picked                 |
 | `setup.ts`     | Creates a project and writes `NOTIFKIT_API_KEY` to `.env`      |
 | `send.ts`      | `NotifkitClient`: sync a template, add a user, notify them     |
 | `.env`         | A random `ADMIN_API_KEY`, plus blanks for provider credentials |

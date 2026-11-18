@@ -100,7 +100,7 @@ describe("generateAdminKey", () => {
 
 describe("renderProject", () => {
   it.each(PROVIDER_IDS)("renders a complete app for %s", (id) => {
-    const files = renderProject({ name: "my-app", provider: id, adminKey: "k123" });
+    const files = renderProject({ name: "my-app", providers: [id], adminKey: "k123" });
     expect(Object.keys(files).sort()).toEqual(
       [
         ".env",
@@ -147,14 +147,64 @@ describe("renderProject", () => {
 
   it("needs no provider credentials for the console provider", () => {
     expect(PROVIDERS.console.env).toEqual([]);
-    const files = renderProject({ name: "x", provider: "console", adminKey: "k" });
+    const files = renderProject({ name: "x", providers: ["console"], adminKey: "k" });
     expect(files["send.ts"]).not.toContain("process.env.TO_");
+  });
+
+  it("renders several providers into one app", () => {
+    const files = renderProject({
+      name: "x",
+      providers: ["resend", "smtp", "twilio", "whatsapp"],
+      adminKey: "k",
+    });
+    const pkg = JSON.parse(files["package.json"]!);
+    expect(Object.keys(pkg.dependencies)).toEqual([
+      "notifkit",
+      "@notifkit/provider-resend",
+      "@notifkit/provider-smtp",
+      "@notifkit/provider-twilio",
+      "@notifkit/provider-whatsapp",
+    ]);
+
+    const server = files["server.ts"]!;
+    for (const cls of [
+      "ResendTransport",
+      "SmtpTransport",
+      "TwilioTransport",
+      "WhatsAppTransport",
+    ]) {
+      expect(server).toContain(`new ${cls}(`);
+    }
+    // resend and smtp share the email channel, so the second is the fallback.
+    expect(server).toMatch(/tried in the order listed/);
+
+    // TO_EMAIL serves resend and smtp, TO_PHONE serves twilio and whatsapp.
+    const env = files[".env"]!;
+    expect(env.match(/^TO_EMAIL=$/gm)).toHaveLength(1);
+    expect(env.match(/^TO_PHONE=$/gm)).toHaveLength(1);
+    expect(env).toMatch(/^SMTP_URL=$/m);
+    expect(env).toMatch(/^RESEND_API_KEY=$/m);
+
+    // One template and one notification per channel; a template has one channel.
+    const send = files["send.ts"]!;
+    for (const channel of ["email", "sms", "whatsapp"]) {
+      expect(send).toContain(`id: "welcome-${channel}"`);
+      expect(send).toContain(`channels: ["${channel}"]`);
+      expect(send.match(new RegExp(`channel: "${channel}", target`, "g"))).toHaveLength(1);
+    }
+    expect(send).toContain(`["TO_EMAIL", "TO_PHONE"]`);
+    expect(files["README.md"]).toContain("Resend (email), SMTP (email, any server)");
+  });
+
+  it("only mentions fallback order when two providers share a channel", () => {
+    const files = renderProject({ name: "x", providers: ["resend", "twilio"], adminKey: "k" });
+    expect(files["server.ts"]).not.toMatch(/tried in the order listed/);
   });
 
   it("uses the package manager in the README commands", () => {
     const files = renderProject({
       name: "x",
-      provider: "console",
+      providers: ["console"],
       adminKey: "k",
       packageManager: "pnpm",
     });
@@ -203,7 +253,7 @@ describe("parseCliArgs", () => {
   it("reads the name and flags", () => {
     expect(parseCliArgs(["my-app", "--provider", "resend", "--no-install", "--force"])).toEqual({
       name: "my-app",
-      provider: "resend",
+      providers: ["resend"],
       install: false,
       force: true,
       help: false,
@@ -216,7 +266,16 @@ describe("parseCliArgs", () => {
   });
 
   it("accepts -p and -h", () => {
-    expect(parseCliArgs(["-p", "fcm", "-h"])).toMatchObject({ provider: "fcm", help: true });
+    expect(parseCliArgs(["-p", "fcm", "-h"])).toMatchObject({ providers: ["fcm"], help: true });
+  });
+
+  it("reads several providers, comma-separated or repeated", () => {
+    expect(parseCliArgs(["-p", "resend, twilio", "--provider", "fcm"]).providers).toEqual([
+      "resend",
+      "twilio",
+      "fcm",
+    ]);
+    expect(parseCliArgs([]).providers).toEqual([]);
   });
 
   it("throws on unknown flags", () => {
@@ -313,6 +372,27 @@ describe("run", () => {
     expect(readJson(path.join(io.cwd, "x", "package.json")).dependencies).toHaveProperty(
       "@notifkit/provider-fcm",
     );
+  });
+
+  it("scaffolds several providers from the flag, dropping repeats", async () => {
+    const { io, out } = makeIo();
+    expect(await run(["app", "--no-install", "-p", "resend,twilio,resend"], io)).toBe(0);
+    const deps = readJson(path.join(io.cwd, "app", "package.json")).dependencies;
+    expect(Object.keys(deps)).toEqual([
+      "notifkit",
+      "@notifkit/provider-resend",
+      "@notifkit/provider-twilio",
+    ]);
+    expect(out.join("\n")).toContain("with Resend (email), Twilio (SMS)");
+  });
+
+  it("accepts several providers at the prompt, by number or name", async () => {
+    const answers = ["x", "2, twilio"];
+    const { io } = makeIo({ interactive: true, prompt: vi.fn(async () => answers.shift()!) });
+    expect(await run(["--no-install"], io)).toBe(0);
+    const deps = readJson(path.join(io.cwd, "x", "package.json")).dependencies;
+    expect(deps).toHaveProperty(PROVIDERS[PROVIDER_IDS[1]!].packageName);
+    expect(deps).toHaveProperty("@notifkit/provider-twilio");
   });
 
   it("does not prompt when not interactive", async () => {
