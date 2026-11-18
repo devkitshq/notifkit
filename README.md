@@ -156,6 +156,12 @@ The test suite starts its own PostgreSQL and Redis containers, so Docker is the 
 
 Questions, bugs, or ideas: [contact.devkitshq@gmail.com](mailto:contact.devkitshq@gmail.com), or open an issue. If notifkit saved you from building notification plumbing, a [star](https://github.com/devkitshq/notifkit) helps other developers find it.
 
+## Contributors
+
+<a href="https://github.com/devkitshq/notifkit/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=devkitshq/notifkit" alt="Contributors" />
+</a>
+
 ## License
 
 MIT. Use it for anything, including commercially. Every feature is in this repository: there is no paid edition and no hosted tier.
