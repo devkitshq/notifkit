@@ -47,14 +47,28 @@ const stringOrArray = z
   .union([z.string().min(1), z.array(z.string().min(1))])
   .transform((v) => (Array.isArray(v) ? v : [v]));
 
-export const UserContactInputSchema = z.object({
-  channel: ContactChannelSchema,
-  target: z.string().min(1),
-  label: z.string().optional(),
-  isPrimary: z.boolean().optional(),
-  enabled: z.boolean().optional(),
-  preferences: PreferencesSchema.optional(),
-});
+// One plain address: suppressions match the stored target, and a display name or
+// list would also be delivered to every address nodemailer parses out of it.
+const PLAIN_ADDRESS = /^[^\s@<>,;:()"]+@[^\s@<>,;:()"]+$/;
+const EMAIL_TARGET_MESSAGE = "expected one plain email address, e.g. alice@example.com";
+const emailTarget = z.string().regex(PLAIN_ADDRESS, EMAIL_TARGET_MESSAGE);
+const emailOrArray = z
+  .union([emailTarget, z.array(emailTarget)])
+  .transform((v) => (Array.isArray(v) ? v : [v]));
+
+export const UserContactInputSchema = z
+  .object({
+    channel: ContactChannelSchema,
+    target: z.string().min(1),
+    label: z.string().optional(),
+    isPrimary: z.boolean().optional(),
+    enabled: z.boolean().optional(),
+    preferences: PreferencesSchema.optional(),
+  })
+  .refine((c) => c.channel !== "email" || PLAIN_ADDRESS.test(c.target), {
+    message: EMAIL_TARGET_MESSAGE,
+    path: ["target"],
+  });
 export type UserContactInput = z.infer<typeof UserContactInputSchema>;
 
 // Users
@@ -69,7 +83,7 @@ export const AddUserSchema = z.object({
   language: z.string().optional(),
   timezone: TimezoneSchema.optional(),
   contacts: z.array(UserContactInputSchema).optional(),
-  email: stringOrArray.optional(),
+  email: emailOrArray.optional(),
   phone: stringOrArray.optional(),
   pushToken: stringOrArray.optional(),
   segments: z.array(z.string().min(1)).optional(),
@@ -82,7 +96,7 @@ export const UpdateUserSchema = z.object({
   language: z.string().optional(),
   timezone: TimezoneSchema.optional(),
   contacts: z.array(UserContactInputSchema).optional(),
-  email: stringOrArray.optional(),
+  email: emailOrArray.optional(),
   phone: stringOrArray.optional(),
   pushToken: stringOrArray.optional(),
   segments: z.array(z.string().min(1)).optional(),

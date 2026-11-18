@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { registry, QuietHoursSchema, AddUserSchema, UpdateUserSchema } from "@/contracts/index.js";
+import {
+  registry,
+  QuietHoursSchema,
+  AddUserSchema,
+  UpdateUserSchema,
+  BatchAddContactsSchema,
+} from "@/contracts/index.js";
 
 describe("End-to-End Contract Registry Tests", () => {
   it("successfully parses a valid notification.requested payload", () => {
@@ -70,6 +76,27 @@ describe("End-to-End Contract Registry Tests", () => {
       expect(AddUserSchema.safeParse({ id: "u1", timezone }).success).toBe(true);
       expect(UpdateUserSchema.safeParse({ timezone }).success).toBe(true);
     }
+  });
+
+  it("rejects email targets that are not one plain address", () => {
+    // Suppressions match the stored target, and nodemailer delivers to every
+    // address it can parse out of `to`, so a list or display name must not be stored.
+    for (const target of ["Alice <a@example.com>", "a@example.com, b@example.com", "nope"]) {
+      const contact = { channel: "email", target };
+      expect(AddUserSchema.safeParse({ id: "u1", contacts: [contact] }).success).toBe(false);
+      expect(UpdateUserSchema.safeParse({ email: target }).success).toBe(false);
+      expect(BatchAddContactsSchema.safeParse(contact).success).toBe(false);
+    }
+    for (const target of ["a@example.com", "o'brien@example.com", "üser@exämple.com"]) {
+      const contact = { channel: "email", target };
+      expect(AddUserSchema.safeParse({ id: "u1", contacts: [contact] }).success).toBe(true);
+      expect(UpdateUserSchema.safeParse({ email: [target] }).success).toBe(true);
+      expect(BatchAddContactsSchema.safeParse([contact]).success).toBe(true);
+    }
+    // Other channels keep free-form targets.
+    expect(
+      BatchAddContactsSchema.safeParse({ channel: "sms", target: "+15550000001" }).success,
+    ).toBe(true);
   });
 
   it("accepts a non-UUID templateId on delivery outcome events", () => {
