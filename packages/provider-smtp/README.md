@@ -38,12 +38,12 @@ await notifkit.addContact("usr_123", { channel: "email", target: "alice@example.
 
 ## Options
 
-| Option   | What it's for                                                                                                                                                                                                                                      |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `smtp`   | Passed to nodemailer's [`createTransport`](https://nodemailer.com/smtp/) as is: `host`, `port`, `secure`, `auth`, TLS settings, and `pool: true` to reuse connections between sends. A URL such as `smtps://user:pass@smtp.example.com` works too. |
-| `from`   | Default sender. A template can name its own `from`.                                                                                                                                                                                                |
-| `logger` | Optional notifkit logger.                                                                                                                                                                                                                          |
-| `limits` | Optional send rate, `{ limit, windowSeconds }`. There's no default, since it depends on your server. Set it to your relay's quota.                                                                                                                 |
+| Option   | What it's for                                                                                                                                                                                                                                                                            |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `smtp`   | Passed to nodemailer's [`createTransport`](https://nodemailer.com/smtp/), with 10 s timeouts unless you set your own: `host`, `port`, `secure`, `auth`, TLS settings, and `pool: true` to reuse connections between sends. A URL such as `smtps://user:pass@smtp.example.com` works too. |
+| `from`   | Default sender. A template can name its own `from`.                                                                                                                                                                                                                                      |
+| `logger` | Optional notifkit logger.                                                                                                                                                                                                                                                                |
+| `limits` | Optional send rate, `{ limit, windowSeconds }`. There's no default, since it depends on your server. Set it to your relay's quota.                                                                                                                                                       |
 
 ## Templates
 
@@ -65,22 +65,27 @@ from it:
 - A destination that isn't one plain address fails without a retry, and nothing
   is sent. That includes `Alice <alice@example.com>` and comma-separated lists.
 
+Connecting, the greeting and each socket wait time out after 10 seconds, to
+match notifkit's default send timeout. nodemailer's own defaults run to minutes.
+To change them, set `connectionTimeout`, `greetingTimeout` or `socketTimeout`
+in `smtp`, or in the URL's query.
+
+SMTP has no idempotency key. If the server accepts a message but its reply is
+lost, for example to a timeout, the retry sends the message a second time.
+
 SMTP has no delivery webhooks. A bounce that comes back later as an email,
 after the server accepted the message, isn't reported to notifkit.
 
 ## Shutting down
 
-With `pool: true`, the open connections keep Node running after notifkit
-stops, and notifkit doesn't close providers itself. Call `close()` after
-`server.stop()`:
+From notifkit 0.1.20, `server.stop()` closes the transport after delivery
+stops. On older versions, a pool's open connections keep Node running, so call
+`close()` yourself:
 
 ```ts
 await server.stop();
 smtp.close();
 ```
-
-The server's own SIGINT/SIGTERM handler exits the process, so this matters
-when you stop the server from your own code.
 
 Requires `notifkit` as a peer dependency. Documentation:
 [notifkit.dev/docs](https://notifkit.dev/docs/). MIT licensed.

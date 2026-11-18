@@ -34,6 +34,11 @@ export interface SmtpTransportOptions {
 // "a@example.com, b@example.com" is sent to both.
 const PLAIN_ADDRESS = /^[^\s@<>,;:()"]+@[^\s@<>,;:()"]+$/;
 
+// Delivery abandons a send after 10 s by default. nodemailer's own defaults (2 min
+// connect, 30 s greeting, 10 min socket) kept a stalled server's sockets and pool
+// slots busy long after that. The user's options, and a URL's query, still win.
+const TIMEOUTS = { connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 10_000 };
+
 export class SmtpTransport implements Transport {
   readonly channel = "email" as const;
   readonly limits?: { limit: number; windowSeconds: number };
@@ -45,7 +50,9 @@ export class SmtpTransport implements Transport {
   constructor({ smtp, from, logger, limits }: SmtpTransportOptions) {
     // One transporter for the transport's lifetime, so `pool: true` reuses
     // connections across sends instead of opening one per email.
-    this.transporter = nodemailer.createTransport(smtp);
+    this.transporter = nodemailer.createTransport(
+      typeof smtp === "string" ? { ...TIMEOUTS, url: smtp } : { ...TIMEOUTS, ...smtp },
+    );
     this.from = from;
     this.logger = logger;
     this.limits = limits;
@@ -133,9 +140,9 @@ export class SmtpTransport implements Transport {
   }
 
   /**
-   * Close the transporter's connections. notifkit doesn't call this itself:
-   * with `pool: true` the open sockets keep the process alive, so call it on
-   * shutdown, after `server.stop()`.
+   * Close the transporter's connections. `server.stop()` calls this from
+   * notifkit 0.1.20; before that, call it after `server.stop()`, since with
+   * `pool: true` the open sockets keep the process alive.
    */
   close(): void {
     this.transporter.close();

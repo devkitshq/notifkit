@@ -2582,6 +2582,31 @@ describe("SmtpTransport (SMTP Provider)", () => {
     expect(result.error).toMatch(/ECONNREFUSED/);
   });
 
+  it("gives up on a stalled server within delivery's send timeout", () => {
+    // nodemailer's defaults (2 min connect, 30 s greeting, 10 min socket) far
+    // outlast delivery's 10 s per-send timeout, so a hung server held sockets
+    // and pool slots for minutes after the send had already been given up.
+    const options = (smtp: any) =>
+      (new SmtpTransport({ smtp, from: "n@example.com" }) as any).transporter.transporter.options;
+
+    expect(options({ host: "127.0.0.1", port: 25 })).toMatchObject({
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 10_000,
+    });
+    expect(options({ host: "127.0.0.1", port: 25, pool: true })).toMatchObject({
+      socketTimeout: 10_000,
+    });
+    expect(options({ host: "127.0.0.1", socketTimeout: 60_000 })).toMatchObject({
+      socketTimeout: 60_000,
+      connectionTimeout: 10_000,
+    });
+    expect(options("smtp://127.0.0.1:25")).toMatchObject({ socketTimeout: 10_000 });
+    expect(options("smtp://127.0.0.1:25?socketTimeout=60000")).toMatchObject({
+      socketTimeout: 60_000,
+    });
+  });
+
   it("close() closes the underlying transporter", () => {
     const close = vi.fn();
     const transport = new SmtpTransport({
