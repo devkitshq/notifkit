@@ -9,7 +9,7 @@
 export const NOTIFKIT_VERSION = "0.1.15";
 
 export type ProviderId =
-  "console" | "resend" | "twilio" | "fcm" | "slack" | "discord" | "telegram" | "whatsapp";
+  "console" | "resend" | "smtp" | "twilio" | "fcm" | "slack" | "discord" | "telegram" | "whatsapp";
 
 export interface EnvVar {
   name: string;
@@ -65,6 +65,27 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     env: [
       { name: "RESEND_API_KEY", comment: "From https://resend.com/api-keys" },
       { name: "RESEND_FROM", comment: "Sender address on a domain verified in Resend" },
+    ],
+    target: { env: "TO_EMAIL", comment: "Where `send` delivers the test email" },
+    content: `{ subject: "Welcome, {{name}}!", text: "Your notifkit app is working." }`,
+  },
+  smtp: {
+    id: "smtp",
+    label: "SMTP (email, any server)",
+    packageName: "@notifkit/provider-smtp",
+    version: "0.1.0",
+    className: "SmtpTransport",
+    channel: "email",
+    options: `{
+      smtp: process.env.SMTP_URL!,
+      from: process.env.SMTP_FROM!,
+    }`,
+    env: [
+      {
+        name: "SMTP_URL",
+        comment: "Your server as a URL, e.g. smtps://user:pass@smtp.example.com",
+      },
+      { name: "SMTP_FROM", comment: "Sender address your server may send as" },
     ],
     target: { env: "TO_EMAIL", comment: "Where `send` delivers the test email" },
     content: `{ subject: "Welcome, {{name}}!", text: "Your notifkit app is working." }`,
