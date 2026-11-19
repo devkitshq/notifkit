@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { DeliveryWorker, MAX_THROTTLE_DEFERRALS } from "@/services/delivery/main.js";
+import { DeliveryWorker, MAX_THROTTLE_DEFERRALS, retryDelayMs } from "@/services/delivery/main.js";
 import { NonRetryableError } from "@/workers/index.js";
 import { registry } from "@/index.js";
 
@@ -1400,5 +1400,21 @@ describe("DeliveryWorker", () => {
     expect(err).toBeDefined();
     expect(err.nonRetryable).toBe(true);
     expect(err.message).toContain("Account suspended");
+  });
+});
+
+describe("retryDelayMs", () => {
+  it("spreads retries so sends that failed together don't all come back together", () => {
+    for (const [priorFailures, base] of [
+      [0, 30_000],
+      [1, 120_000],
+      [2, 600_000],
+    ] as const) {
+      const delays = Array.from({ length: 200 }, () => retryDelayMs(priorFailures));
+      // Never earlier than the step: the first must still reach the breaker's half-open probe.
+      expect(Math.min(...delays)).toBeGreaterThanOrEqual(base);
+      expect(Math.max(...delays)).toBeLessThanOrEqual(base * 1.5);
+      expect(new Set(delays).size).toBeGreaterThan(100);
+    }
   });
 });

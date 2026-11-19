@@ -82,7 +82,10 @@ function providerFailure(res: { error?: string; retryable?: boolean }): Error {
 }
 
 export function retryDelayMs(priorFailures: number): number {
-  return RETRY_BACKOFF_MS[Math.min(priorFailures, RETRY_BACKOFF_MS.length - 1)]!;
+  const step = RETRY_BACKOFF_MS[Math.min(priorFailures, RETRY_BACKOFF_MS.length - 1)]!;
+  // Up to half a step later, never earlier, so a burst that failed together
+  // (a provider throttling or down) doesn't come back in the same instant.
+  return step + Math.floor(Math.random() * (step / 2));
 }
 
 export interface DeliveryWorkerOptions extends WorkerOptions {
