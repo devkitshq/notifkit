@@ -1,0 +1,43 @@
+{
+  "name": "@notifkit/provider-ses",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sesv2": "^3.1172.0"
+  },
+  "peerDependencies": {
+    "notifkit": "^0.1.0"
+  },
+  "devDependencies": {
+    "notifkit": "file:../../",
+    "typescript": "^5.8.3"
+  },
+  "description": "AWS SES email transport for notifkit, built on the AWS SDK's SESv2 client.",
+  "license": "MIT",
+  "author": "devkitshq",
+  "homepage": "https://notifkit.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devkitshq/notifkit.git",
+    "directory": "packages/provider-ses"
+  },
+  "bugs": {
+    "url": "https://github.com/devkitshq/notifkit/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
