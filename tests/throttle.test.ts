@@ -259,7 +259,7 @@ describe("ProviderThrottle (leased provider rate limiting)", () => {
 
   it("denies with a retry at the end of the current window once the budget is spent", async () => {
     const redis: any = { leaseApiRateLimit: vi.fn().mockResolvedValue(0) };
-    const logger = { warn: vi.fn() };
+    const logger = { warn: vi.fn(), debug: vi.fn() };
     const throttle = new ProviderThrottle(redis, logger);
 
     const result = await throttle.check("sms", { limit: 10, windowSeconds: 60 });
@@ -267,7 +267,9 @@ describe("ProviderThrottle (leased provider rate limiting)", () => {
     expect(result.allowed).toBe(false);
     expect(result.retryAfterMs).toBeGreaterThan(0);
     expect(result.retryAfterMs).toBeLessThanOrEqual(60_000);
-    expect(logger.warn).toHaveBeenCalled();
+    // A big send hits this on every deferral, so a warning per hit floods the logs.
+    expect(logger.debug).toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it("keeps channels on separate budgets", async () => {

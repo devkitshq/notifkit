@@ -45,7 +45,8 @@ export class ProviderThrottle {
     }
 
     const retryAfterMs = windowMs - (Date.now() % windowMs);
-    this.logger?.warn(
+    // Debug, not warn: a big send lands here on every deferral of every task.
+    this.logger?.debug(
       { channel, limit: config.limit, windowSeconds: config.windowSeconds, retryAfterMs },
       "Provider rate limit hit — task must be rescheduled",
     );
