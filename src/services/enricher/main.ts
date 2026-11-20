@@ -452,6 +452,7 @@ export class EnricherWorker extends BaseWorker {
                   telegram: channel === "telegram" ? destination : undefined,
                   discord: channel === "discord" ? destination : undefined,
                   slack: channel === "slack" ? destination : undefined,
+                  teams: channel === "teams" ? destination : undefined,
                   locale: profile.language ?? "en",
                   timezone: profile.timezone ?? "UTC",
                   preferences: {

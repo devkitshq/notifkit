@@ -37,7 +37,7 @@ export function registerUsersTools(server: McpServer, api: NotifkitApi): void {
           .optional()
           .describe(
             "Only list users who have a registered contact for this channel " +
-              "(email, sms, push, webhook, telegram, discord, whatsapp, slack).",
+              "(email, sms, push, webhook, telegram, discord, whatsapp, slack, teams).",
           ),
       },
       annotations: { title: "List users", readOnlyHint: true },

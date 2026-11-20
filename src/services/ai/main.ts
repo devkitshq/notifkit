@@ -200,9 +200,11 @@ export class AiWorker extends BaseWorker {
                   ? pending.recipient.discord
                   : pending.channel === "slack"
                     ? pending.recipient.slack
-                    : pending.channel === "push"
-                      ? (pending.recipient.pushTokens?.[0] ?? pending.recipient.pushToken)
-                      : undefined);
+                    : pending.channel === "teams"
+                      ? pending.recipient.teams
+                      : pending.channel === "push"
+                        ? (pending.recipient.pushTokens?.[0] ?? pending.recipient.pushToken)
+                        : undefined);
       const resolvedDestination =
         destination ?? (pending.channel === "push" ? undefined : pending.recipientId);
 

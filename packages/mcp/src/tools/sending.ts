@@ -91,10 +91,10 @@ export function registerSendingTools(server: McpServer, api: NotifkitApi): void 
       title: "Send a campaign to a list of addresses",
       description:
         "Send one template to a list of recipient destinations (email, SMS/phone, push tokens, webhook URLs, " +
-        "Telegram chat ids, Discord webhook URLs, WhatsApp phone numbers, or Slack channel/user IDs/webhook URLs) given directly — the tool creates or updates a user " +
+        "Telegram chat ids, Discord webhook URLs, WhatsApp phone numbers, Slack channel/user IDs/webhook URLs, or Teams webhook URLs) given directly — the tool creates or updates a user " +
         "record for each address, then sends, and tags every message with a campaign label so the results " +
         "can be read back later with get_campaign_stats. Supports 'email', 'sms', 'push', 'webhook', " +
-        "'telegram', 'discord', 'whatsapp', and 'slack' channels. Use this when the person supplies the recipients themselves " +
+        "'telegram', 'discord', 'whatsapp', 'slack', and 'teams' channels. Use this when the person supplies the recipients themselves " +
         "(a pasted list, a spreadsheet column). Always report the returned campaign label back to the user " +
         "— it is how they ask about results later. Suppressed addresses (previous unsubscribes, complaints, " +
         "hard bounces) are dropped automatically at send time, so the delivered count is normally lower than " +
@@ -113,7 +113,7 @@ export function registerSendingTools(server: McpServer, api: NotifkitApi): void 
           .enum(CONTACT_CHANNELS)
           .optional()
           .describe(
-            "Channel to send on ('email', 'sms', 'push', 'webhook', 'telegram', 'discord', 'whatsapp', or 'slack'). Defaults to 'email'.",
+            "Channel to send on ('email', 'sms', 'push', 'webhook', 'telegram', 'discord', 'whatsapp', 'slack', or 'teams'). Defaults to 'email'.",
           ),
         recipients: z
           .array(z.string().min(1))
@@ -122,7 +122,7 @@ export function registerSendingTools(server: McpServer, api: NotifkitApi): void 
           .optional()
           .describe(
             "Recipient destination addresses: email addresses for email, E.164 phone numbers for sms/whatsapp, " +
-              "device tokens for push, URLs for webhook, chat ids for telegram, webhook URLs for discord, or channel/user IDs for slack.",
+              "device tokens for push, URLs for webhook, chat ids for telegram, webhook URLs for discord or teams, or channel/user IDs for slack.",
           ),
         emails: z
           .array(z.string().email())
