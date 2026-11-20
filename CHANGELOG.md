@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.21](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.20...notifkit-v0.1.21) (2026-11-20)
+
+
+### Features
+
+* **provider-ses:** add an AWS SES email transport ([#31](https://github.com/devkitshq/notifkit/issues/31)) ([202afe5](https://github.com/devkitshq/notifkit/commit/202afe53fd00b4ce1dc51b53342d0da4b38ff339))
+
+
+### Bug Fixes
+
+* **delivery:** log provider rate-limit hits at debug, not warn ([4b8e703](https://github.com/devkitshq/notifkit/commit/4b8e703681c839f53476496654ef3f1afd25d60f))
+* **delivery:** spread retries so a failed burst doesn't retry at once ([65bf1af](https://github.com/devkitshq/notifkit/commit/65bf1af7eabc7900b4bce1184ca9f4b5f269ea22))
+
 ## [0.1.20](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.19...notifkit-v0.1.20) (2026-11-18)
 
 
