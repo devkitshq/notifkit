@@ -2645,6 +2645,8 @@ describe("SesTransport (AWS SES Provider)", () => {
     body: unknown;
   }
 
+  const limits = { limit: 14, windowSeconds: 1 };
+
   // A real SESv2 client with its HTTP layer swapped out, so these tests read
   // the exact signed request and the SDK parses SES's error replies the way it
   // does in production. Nothing leaves the machine.
@@ -2671,7 +2673,12 @@ describe("SesTransport (AWS SES Provider)", () => {
       maxAttempts: 1,
       requestHandler: { handle } as any,
     });
-    const transport = new SesTransport({ client, from: "notifications@example.com", ...options });
+    const transport = new SesTransport({
+      client,
+      from: "notifications@example.com",
+      limits,
+      ...options,
+    });
     const request = () => handle.mock.calls[0]![0];
     const sent = () => JSON.parse(new TextDecoder().decode(request().body));
     return { transport, handle, request, sent };
@@ -2851,21 +2858,25 @@ describe("SesTransport (AWS SES Provider)", () => {
     expect(result).toEqual({ success: false, error: "AbortError: Request aborted" });
   });
 
-  it("sends one email a second by default, the SES sandbox rate", () => {
-    expect(
-      new SesTransport({ from: "notifications@example.com", region: "eu-west-1" }).limits,
-    ).toEqual({ limit: 1, windowSeconds: 1 });
-    expect(
-      new SesTransport({
-        from: "notifications@example.com",
-        region: "eu-west-1",
-        limits: { limit: 14, windowSeconds: 1 },
-      }).limits,
-    ).toEqual({ limit: 14, windowSeconds: 1 });
+  it("requires limits, since send rates differ from one account to the next", () => {
+    const options = { from: "notifications@example.com", region: "eu-west-1" };
+
+    expect(() => new SesTransport(options as any)).toThrow("SesTransport: limits is required");
+    expect(() => new SesTransport({ ...options, limits: { limit: 0, windowSeconds: 1 } })).toThrow(
+      "SesTransport: limits is required",
+    );
+    expect(() => new SesTransport({ ...options, limits: { limit: 14 } as any })).toThrow(
+      "SesTransport: limits is required",
+    );
+    expect(new SesTransport({ ...options, limits }).limits).toEqual(limits);
   });
 
   it("builds its own client in the given region, with the SDK's retries turned off", async () => {
-    const transport = new SesTransport({ from: "notifications@example.com", region: "eu-west-1" });
+    const transport = new SesTransport({
+      from: "notifications@example.com",
+      region: "eu-west-1",
+      limits,
+    });
     const config = (transport as any).client.config;
 
     expect(await config.region()).toBe("eu-west-1");
@@ -2873,11 +2884,15 @@ describe("SesTransport (AWS SES Provider)", () => {
   });
 
   it("close() destroys its own client but leaves a passed-in client open", () => {
-    const own = new SesTransport({ from: "notifications@example.com", region: "eu-west-1" });
+    const own = new SesTransport({
+      from: "notifications@example.com",
+      region: "eu-west-1",
+      limits,
+    });
     const ownDestroy = vi.spyOn((own as any).client, "destroy");
     const client = new SESv2Client({ region: "eu-west-1" });
     const passedDestroy = vi.spyOn(client, "destroy");
-    const passed = new SesTransport({ from: "notifications@example.com", client });
+    const passed = new SesTransport({ from: "notifications@example.com", client, limits });
 
     own.close();
     passed.close();

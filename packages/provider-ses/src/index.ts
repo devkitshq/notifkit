@@ -26,11 +26,13 @@ export interface SesTransportOptions {
   configurationSetName?: string;
   logger?: Logger;
   /**
-   * Send rate, by default 1 a second, the SES sandbox rate, so a burst waits
-   * its turn instead of being throttled and retried. Raise it to the
-   * account's maximum send rate, e.g. `{ limit: 14, windowSeconds: 1 }`.
+   * Send rate. Set it to the account's maximum send rate, e.g.
+   * `{ limit: 14, windowSeconds: 1 }`, so a burst waits its turn instead of
+   * being throttled. SES shows it under Sending limits on the account
+   * dashboard, and `aws sesv2 get-account` returns it as
+   * `SendQuota.MaxSendRate`. The sandbox rate is 1 a second.
    */
-  limits?: { limit: number; windowSeconds: number };
+  limits: { limit: number; windowSeconds: number };
 }
 
 // SES reports its send rate and daily quota as throttling, and some of these
@@ -46,7 +48,7 @@ const THROTTLING_ERRORS = new Set([
 
 export class SesTransport implements Transport {
   readonly channel = "email" as const;
-  readonly limits?: { limit: number; windowSeconds: number };
+  readonly limits: { limit: number; windowSeconds: number };
 
   private readonly client: SESv2Client;
   private readonly ownsClient: boolean;
@@ -54,14 +56,16 @@ export class SesTransport implements Transport {
   private readonly configurationSetName?: string;
   private readonly logger?: Logger;
 
-  constructor({
-    from,
-    region,
-    client,
-    configurationSetName,
-    logger,
-    limits = { limit: 1, windowSeconds: 1 },
-  }: SesTransportOptions) {
+  constructor({ from, region, client, configurationSetName, logger, limits }: SesTransportOptions) {
+    // Send rates differ from one account to the next, so no default fits. With
+    // none, SES throttles a burst and the circuit breaker fails the rest
+    // without trying them.
+    if (!limits || !(limits.limit > 0) || !(limits.windowSeconds > 0)) {
+      throw new Error(
+        "SesTransport: limits is required. Set it to the account's maximum send rate, e.g. { limit: 14, windowSeconds: 1 }",
+      );
+    }
+
     // notifkit already retries a failed send with backoff, so the SDK's own
     // three attempts would multiply that and outlast delivery's send timeout.
     this.client = client ?? new SESv2Client({ ...(region ? { region } : {}), maxAttempts: 1 });
