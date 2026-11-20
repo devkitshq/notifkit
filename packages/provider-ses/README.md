@@ -3,6 +3,17 @@
 AWS SES email transport for [notifkit](https://github.com/devkitshq/notifkit),
 built on the AWS SDK's SESv2 client.
 
+> **Sending only, for now.** This package doesn't read SES bounce and
+> complaint notifications yet, so notifkit doesn't suppress an address that
+> bounced and will keep mailing it. SES reviews, and can pause, an account
+> whose bounce or complaint rate climbs. Until bounce handling lands, keep the
+> SES account-level suppression list on for bounces and complaints, so SES
+> drops mail to those addresses itself:
+>
+> ```bash
+> aws sesv2 put-account-suppression-attributes --suppressed-reasons BOUNCE COMPLAINT
+> ```
+
 ```bash
 npm install @notifkit/provider-ses
 ```
@@ -83,7 +94,8 @@ notifkit's send timeout, 10 seconds by default.
 SES has no idempotency key. If SES accepts a message but its reply is lost,
 for example to a timeout, the retry sends the message a second time.
 
-This package doesn't read SES bounce and complaint notifications yet.
+This package doesn't read SES bounce and complaint notifications yet. See the
+note at the top.
 
 ## Shutting down
 
