@@ -1564,6 +1564,174 @@ describe("DiscordTransport (Discord Provider)", () => {
   });
 });
 
+// ─── ntfy ────────────────────────────────────────────────────────────────────
+
+import { NtfyTransport } from "../packages/provider-ntfy/src/index.js";
+
+const NTFY_TOPIC = "order-alerts";
+
+/** Stubs `fetch` with an ntfy Response double. */
+function stubNtfy(body: unknown, status = 200) {
+  const fn = vi.fn().mockResolvedValue({
+    status,
+    ok: status >= 200 && status < 300,
+    json: async () => body,
+    text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+  });
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+function ntfyTask(overrides: Record<string, unknown> = {}): any {
+  return {
+    taskId: "task-uuid-nt-1",
+    destination: NTFY_TOPIC,
+    priority: "normal",
+    renderedContent: { content: { body: "Build finished" } },
+    ...overrides,
+  };
+}
+
+describe("NtfyTransport (ntfy Provider)", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as any;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("registers against the push channel", () => {
+    expect(new NtfyTransport().channel).toBe("push");
+  });
+
+  it("posts plain text to the topic with Title and Priority headers and returns the message id", async () => {
+    const fetchMock = stubNtfy({ id: "abc123" });
+
+    const result = await new NtfyTransport().send(
+      ntfyTask({
+        priority: "high",
+        renderedContent: { content: { subject: "Deploy", body: "shipped" } },
+      }),
+    );
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(`https://ntfy.sh/${NTFY_TOPIC}`);
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ Title: "Deploy", Priority: "4" });
+    expect(init.body).toBe("shipped");
+    expect(result).toEqual({ success: true, providerMessageId: "abc123" });
+  });
+
+  it.each([
+    ["low", "2"],
+    ["normal", "3"],
+    ["high", "4"],
+    ["critical", "5"],
+  ])("maps priority %s to Priority header %s", async (priority, header) => {
+    const fetchMock = stubNtfy({ id: "p1" });
+
+    await new NtfyTransport().send(ntfyTask({ priority }));
+
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).headers).toMatchObject({
+      Priority: header,
+    });
+  });
+
+  it("sends the Bearer token and a custom server URL when configured", async () => {
+    const fetchMock = stubNtfy({ id: "s1" });
+
+    await new NtfyTransport({ serverUrl: "https://ntfy.example.com/", accessToken: "tk_123" }).send(
+      ntfyTask(),
+    );
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(`https://ntfy.example.com/${NTFY_TOPIC}`);
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).headers).toMatchObject({
+      Authorization: "Bearer tk_123",
+    });
+  });
+
+  it("prefers content.text over content.body and omits the Title header without a subject", async () => {
+    const fetchMock = stubNtfy({ id: "t1" });
+
+    await new NtfyTransport().send(
+      ntfyTask({ renderedContent: { content: { text: "from text", body: "from body" } } }),
+    );
+
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(init.body).toBe("from text");
+    expect(init.headers).not.toHaveProperty("Title");
+  });
+
+  it("fails without reaching ntfy when the task carries no destination", async () => {
+    const fetchMock = stubNtfy({ id: "m1" });
+
+    const result = await new NtfyTransport().send(ntfyTask({ destination: undefined }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No destination (ntfy topic) on task",
+    });
+  });
+
+  it.each([["../admin"], ["a/b"], ["has space"], ["x".repeat(65)]])(
+    "rejects invalid topic %s without dispatching fetch",
+    async (badTopic) => {
+      const fetchMock = stubNtfy({ id: "m-evil" });
+
+      const result = await new NtfyTransport().send(ntfyTask({ destination: badTopic }));
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result.retryable).toBe(false);
+      expect(result.error).toContain("Invalid ntfy topic");
+    },
+  );
+
+  it.each([
+    [401, false],
+    [403, false],
+    [500, undefined],
+    [429, undefined],
+  ])("classifies a %i response as retryable=%s", async (status, retryable) => {
+    stubNtfy("nope", status);
+
+    const result = await new NtfyTransport().send(ntfyTask());
+
+    expect(result).toEqual({
+      success: false,
+      ...(retryable === false ? { retryable } : {}),
+      error: `ntfy error ${status}: nope`,
+    });
+  });
+
+  it("reports a transport-level failure as retryable", async () => {
+    const log = logger();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("socket hang up")));
+
+    const result = await new NtfyTransport({ logger: log }).send(ntfyTask());
+
+    expect(result).toEqual({ success: false, error: "socket hang up" });
+    expect(result.retryable).toBeUndefined();
+    expect(log.error).toHaveBeenCalledWith(
+      { taskId: "task-uuid-nt-1", error: "socket hang up" },
+      "ntfy unexpected error",
+    );
+  });
+
+  it("logs an accepted send", async () => {
+    const log = logger();
+    stubNtfy({ id: "msg-42" });
+
+    await new NtfyTransport({ logger: log }).send(ntfyTask());
+
+    expect(log.debug).toHaveBeenCalledWith(
+      { taskId: "task-uuid-nt-1", providerMessageId: "msg-42" },
+      "ntfy message sent",
+    );
+  });
+});
+
 // ─── Slack ───────────────────────────────────────────────────────────────────
 
 import { SlackTransport } from "../packages/provider-slack/src/index.js";
