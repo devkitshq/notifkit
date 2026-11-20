@@ -39,14 +39,14 @@ await notifkit.addContact("usr_123", { channel: "email", target: "alice@example.
 
 ## Options
 
-| Option                 | What it's for                                                                                                                                                                   |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `from`                 | Default sender, a verified identity. A template can name its own `from`.                                                                                                        |
-| `region`               | The SES account's region. Without it the SDK reads `AWS_REGION` or the shared config.                                                                                           |
-| `client`               | An `SESv2Client` you built yourself, for custom credentials or settings. It's used as is, so its retry and timeout settings are yours, and `close()` leaves it open.            |
-| `configurationSetName` | SES configuration set to send with, such as one that publishes events.                                                                                                          |
-| `logger`               | Optional notifkit logger.                                                                                                                                                       |
-| `limits`               | Optional send rate, `{ limit, windowSeconds }`. There's no default, since it depends on your account. Set it to your maximum send rate, e.g. `{ limit: 14, windowSeconds: 1 }`. |
+| Option                 | What it's for                                                                                                                                                                                                                    |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `from`                 | Default sender, a verified identity. A template can name its own `from`.                                                                                                                                                         |
+| `region`               | The SES account's region. Without it the SDK reads `AWS_REGION` or the shared config.                                                                                                                                            |
+| `client`               | An `SESv2Client` you built yourself, for custom credentials or settings. It's used as is, so its retry and timeout settings are yours, and `close()` leaves it open.                                                             |
+| `configurationSetName` | SES configuration set to send with, such as one that publishes events.                                                                                                                                                           |
+| `logger`               | Optional notifkit logger.                                                                                                                                                                                                        |
+| `limits`               | Send rate, `{ limit, windowSeconds }`. Defaults to 1 a second, the SES sandbox rate, so a burst waits its turn instead of being throttled. Raise it to your account's maximum send rate, e.g. `{ limit: 14, windowSeconds: 1 }`. |
 
 ## Templates
 
@@ -64,8 +64,10 @@ The transport decides from the error SES returns:
   covers a rejected message, an unverified sender or MAIL FROM domain, a bad
   address, a paused or suspended account, and a configuration set that doesn't
   exist.
-- Throttling is retried, including the daily quota and the maximum send rate,
-  as are 5xx errors, timeouts and network errors.
+- Throttling is retried, which covers short spikes over the send rate. It
+  can't wait out the daily quota, which resets over 24 hours, so keep your
+  quota above your daily volume. 5xx errors, timeouts and network errors are
+  retried too.
 
 The client the transport builds has the SDK's own retries turned off, because
 notifkit already retries with backoff. Each send is cancelled when it reaches

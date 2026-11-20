@@ -2851,6 +2851,19 @@ describe("SesTransport (AWS SES Provider)", () => {
     expect(result).toEqual({ success: false, error: "AbortError: Request aborted" });
   });
 
+  it("sends one email a second by default, the SES sandbox rate", () => {
+    expect(
+      new SesTransport({ from: "notifications@example.com", region: "eu-west-1" }).limits,
+    ).toEqual({ limit: 1, windowSeconds: 1 });
+    expect(
+      new SesTransport({
+        from: "notifications@example.com",
+        region: "eu-west-1",
+        limits: { limit: 14, windowSeconds: 1 },
+      }).limits,
+    ).toEqual({ limit: 14, windowSeconds: 1 });
+  });
+
   it("builds its own client in the given region, with the SDK's retries turned off", async () => {
     const transport = new SesTransport({ from: "notifications@example.com", region: "eu-west-1" });
     const config = (transport as any).client.config;

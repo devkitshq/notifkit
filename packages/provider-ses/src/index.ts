@@ -26,15 +26,17 @@ export interface SesTransportOptions {
   configurationSetName?: string;
   logger?: Logger;
   /**
-   * No default: an SES account's sending rate depends on its quota. Set this
-   * to the account's maximum send rate, e.g. `{ limit: 14, windowSeconds: 1 }`.
+   * Send rate, by default 1 a second, the SES sandbox rate, so a burst waits
+   * its turn instead of being throttled and retried. Raise it to the
+   * account's maximum send rate, e.g. `{ limit: 14, windowSeconds: 1 }`.
    */
   limits?: { limit: number; windowSeconds: number };
 }
 
-// SES reports its daily quota and send rate as throttling, and some of these
-// come back as a 400. They clear on their own, so they're retried whatever
-// the status. The AWS SDK counts LimitExceededException as throttling too.
+// SES reports its send rate and daily quota as throttling, and some of these
+// come back as a 400. They're retried whatever the status: a retry gets past a
+// short spike over the send rate, though not the daily quota, which resets
+// over 24 hours. The AWS SDK counts LimitExceededException as throttling too.
 const THROTTLING_ERRORS = new Set([
   "Throttling",
   "ThrottlingException",
@@ -52,7 +54,14 @@ export class SesTransport implements Transport {
   private readonly configurationSetName?: string;
   private readonly logger?: Logger;
 
-  constructor({ from, region, client, configurationSetName, logger, limits }: SesTransportOptions) {
+  constructor({
+    from,
+    region,
+    client,
+    configurationSetName,
+    logger,
+    limits = { limit: 1, windowSeconds: 1 },
+  }: SesTransportOptions) {
     // notifkit already retries a failed send with backoff, so the SDK's own
     // three attempts would multiply that and outlast delivery's send timeout.
     this.client = client ?? new SESv2Client({ ...(region ? { region } : {}), maxAttempts: 1 });
