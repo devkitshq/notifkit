@@ -2619,3 +2619,285 @@ describe("SmtpTransport (SMTP Provider)", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 });
+
+import { Readable } from "node:stream";
+import { SESv2Client } from "@aws-sdk/client-sesv2";
+import { SesTransport } from "../packages/provider-ses/src/index.js";
+
+describe("SesTransport (AWS SES Provider)", () => {
+  const sesTask = (content: Record<string, unknown> = {}, overrides = {}): any => ({
+    taskId: "task-uuid-123",
+    destination: "recipient@example.com",
+    renderedContent: {
+      content: {
+        subject: "Welcome Alice",
+        body: "Hello Alice",
+        htmlBody: "<h1>Hello Alice</h1>",
+        ...content,
+      },
+    },
+    ...overrides,
+  });
+
+  interface Reply {
+    status: number;
+    type?: string;
+    body: unknown;
+  }
+
+  const limits = { limit: 14, windowSeconds: 1 };
+
+  // A real SESv2 client with its HTTP layer swapped out, so these tests read
+  // the exact signed request and the SDK parses SES's error replies the way it
+  // does in production. Nothing leaves the machine.
+  const sesWith = (
+    reply: (options: { abortSignal?: AbortSignal }) => Reply | Promise<Reply>,
+    options: Partial<ConstructorParameters<typeof SesTransport>[0]> = {},
+  ) => {
+    const handle = vi.fn(async (_request: any, handlerOptions: { abortSignal?: AbortSignal }) => {
+      const { status, type, body } = await reply(handlerOptions ?? {});
+      return {
+        response: {
+          statusCode: status,
+          headers: {
+            "content-type": "application/json",
+            ...(type ? { "x-amzn-errortype": type } : {}),
+          },
+          body: Readable.from([Buffer.from(JSON.stringify(body))]),
+        },
+      };
+    });
+    const client = new SESv2Client({
+      region: "eu-west-1",
+      credentials: { accessKeyId: "test", secretAccessKey: "test" },
+      maxAttempts: 1,
+      requestHandler: { handle } as any,
+    });
+    const transport = new SesTransport({
+      client,
+      from: "notifications@example.com",
+      limits,
+      ...options,
+    });
+    const request = () => handle.mock.calls[0]![0];
+    const sent = () => JSON.parse(new TextDecoder().decode(request().body));
+    return { transport, handle, request, sent };
+  };
+
+  const accepted = (): Reply => ({ status: 200, body: { MessageId: "ses-message-id-123" } });
+
+  it("sends the email and returns SES's MessageId as providerMessageId", async () => {
+    const { transport, request, sent } = sesWith(accepted);
+
+    const result = await transport.send(sesTask());
+
+    expect(result).toEqual({ success: true, providerMessageId: "ses-message-id-123" });
+    expect(request()).toMatchObject({
+      method: "POST",
+      hostname: "email.eu-west-1.amazonaws.com",
+      path: "/v2/email/outbound-emails",
+    });
+    expect(request().headers["content-type"]).toBe("application/json");
+    expect(request().headers["authorization"]).toMatch(/^AWS4-HMAC-SHA256 Credential=test\//);
+    expect(sent()).toEqual({
+      FromEmailAddress: "notifications@example.com",
+      Destination: { ToAddresses: ["recipient@example.com"] },
+      Content: {
+        Simple: {
+          Subject: { Data: "Welcome Alice", Charset: "UTF-8" },
+          Body: {
+            Text: { Data: "Hello Alice", Charset: "UTF-8" },
+            Html: { Data: "<h1>Hello Alice</h1>", Charset: "UTF-8" },
+          },
+        },
+      },
+    });
+  });
+
+  it("builds an escaped HTML part for a text-only template", async () => {
+    const { transport, sent } = sesWith(accepted);
+
+    await transport.send(sesTask({ htmlBody: undefined, body: "Hi <b>Alice</b>\nBye" }));
+
+    expect(sent().Content.Simple.Body.Html).toEqual({
+      Data: "<p>Hi &lt;b&gt;Alice&lt;/b&gt;<br>Bye</p>",
+      Charset: "UTF-8",
+    });
+  });
+
+  it("uses the template's from and replyTo, the unsubscribe headers and the configuration set", async () => {
+    const { transport, sent } = sesWith(accepted, { configurationSetName: "notifkit-events" });
+
+    await transport.send(
+      sesTask(
+        { from: "Acme Offers <marketing@example.com>", replyTo: "hello@example.com" },
+        {
+          deliveryOptions: {
+            headers: {
+              "List-Unsubscribe": "<https://x/u?t=1>",
+              "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+            },
+          },
+        },
+      ),
+    );
+
+    expect(sent()).toMatchObject({
+      FromEmailAddress: "Acme Offers <marketing@example.com>",
+      ReplyToAddresses: ["hello@example.com"],
+      ConfigurationSetName: "notifkit-events",
+      Content: {
+        Simple: {
+          Headers: [
+            { Name: "List-Unsubscribe", Value: "<https://x/u?t=1>" },
+            { Name: "List-Unsubscribe-Post", Value: "List-Unsubscribe=One-Click" },
+          ],
+        },
+      },
+    });
+  });
+
+  it("falls back to the constructor's from when the template's is not a string", async () => {
+    const { transport, sent } = sesWith(accepted);
+
+    await transport.send(sesTask({ from: 123 }));
+
+    expect(sent().FromEmailAddress).toBe("notifications@example.com");
+  });
+
+  it("fails without calling SES when the task has no destination", async () => {
+    const { transport, handle } = sesWith(accepted);
+
+    const result = await transport.send(sesTask({}, { destination: undefined }));
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No destination (recipient address) on task",
+    });
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [400, "MessageRejected", "Email address is not verified."],
+    [400, "MailFromDomainNotVerifiedException", "MAIL FROM domain is not verified."],
+    [400, "BadRequestException", "Missing final '@domain'"],
+    [400, "SendingPausedException", "Sending is paused for this account."],
+    [400, "AccountSuspendedException", "Sending is suspended for this account."],
+    [404, "NotFoundException", "Configuration set <notifkit-events> does not exist."],
+  ])("does not retry a %i %s", async (status, type, message) => {
+    const { transport } = sesWith(() => ({ status, type, body: { message } }));
+
+    const result = await transport.send(sesTask());
+
+    expect(result).toEqual({ success: false, retryable: false, error: `${type}: ${message}` });
+  });
+
+  it.each([
+    [429, "TooManyRequestsException", "Too many requests."],
+    // SES reports its send rate and daily quota as throttling, sent as a 400.
+    [400, "ThrottlingException", "Maximum sending rate exceeded."],
+    [400, "ThrottlingException", "Daily message quota exceeded."],
+    [400, "LimitExceededException", "There are too many instances of the specified resource type."],
+    [500, "InternalServiceErrorException", "Internal failure."],
+    [408, "RequestTimeoutException", "Request timed out."],
+  ])("retries a %i %s", async (status, type, message) => {
+    const { transport } = sesWith(() => ({ status, type, body: { message } }));
+
+    const result = await transport.send(sesTask());
+
+    expect(result).toEqual({ success: false, error: `${type}: ${message}` });
+  });
+
+  it("retries a 429 that has no SES error name", async () => {
+    const { transport } = sesWith(() => ({ status: 429, body: {} }));
+
+    const result = await transport.send(sesTask());
+
+    expect(result).toEqual({ success: false, error: "Unknown: UnknownError" });
+  });
+
+  it("retries when SES can't be reached", async () => {
+    const { transport } = sesWith(() => {
+      throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:443"), {
+        code: "ECONNREFUSED",
+      });
+    });
+
+    const result = await transport.send(sesTask());
+
+    expect(result).toEqual({ success: false, error: "Error: connect ECONNREFUSED 127.0.0.1:443" });
+  });
+
+  // A request that never gets an answer, until its abort signal fires.
+  const hang = ({ abortSignal }: { abortSignal?: AbortSignal }) =>
+    new Promise<Reply>((_, reject) =>
+      abortSignal?.addEventListener("abort", () =>
+        reject(Object.assign(new Error("Request aborted"), { name: "AbortError" })),
+      ),
+    );
+
+  it("cancels the request when delivery aborts the send", async () => {
+    const { transport, handle } = sesWith(hang);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error("Transport timeout after 50ms")), 50);
+
+    const result = await transport.send(sesTask({}, { signal: controller.signal }));
+
+    expect(handle.mock.calls[0]![1]?.abortSignal?.aborted).toBe(true);
+    expect(result).toEqual({ success: false, error: "AbortError: Request aborted" });
+  });
+
+  it("times out on its own after deliveryOptions.timeoutMs when called without a signal", async () => {
+    const { transport } = sesWith(hang);
+    const started = Date.now();
+
+    const result = await transport.send(sesTask({}, { deliveryOptions: { timeoutMs: 50 } }));
+
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result).toEqual({ success: false, error: "AbortError: Request aborted" });
+  });
+
+  it("requires limits, since send rates differ from one account to the next", () => {
+    const options = { from: "notifications@example.com", region: "eu-west-1" };
+
+    expect(() => new SesTransport(options as any)).toThrow("SesTransport: limits is required");
+    expect(() => new SesTransport({ ...options, limits: { limit: 0, windowSeconds: 1 } })).toThrow(
+      "SesTransport: limits is required",
+    );
+    expect(() => new SesTransport({ ...options, limits: { limit: 14 } as any })).toThrow(
+      "SesTransport: limits is required",
+    );
+    expect(new SesTransport({ ...options, limits }).limits).toEqual(limits);
+  });
+
+  it("builds its own client in the given region, with the SDK's retries turned off", async () => {
+    const transport = new SesTransport({
+      from: "notifications@example.com",
+      region: "eu-west-1",
+      limits,
+    });
+    const config = (transport as any).client.config;
+
+    expect(await config.region()).toBe("eu-west-1");
+    expect(await config.maxAttempts()).toBe(1);
+  });
+
+  it("close() destroys its own client but leaves a passed-in client open", () => {
+    const own = new SesTransport({
+      from: "notifications@example.com",
+      region: "eu-west-1",
+      limits,
+    });
+    const ownDestroy = vi.spyOn((own as any).client, "destroy");
+    const client = new SESv2Client({ region: "eu-west-1" });
+    const passedDestroy = vi.spyOn(client, "destroy");
+    const passed = new SesTransport({ from: "notifications@example.com", client, limits });
+
+    own.close();
+    passed.close();
+
+    expect(ownDestroy).toHaveBeenCalledOnce();
+    expect(passedDestroy).not.toHaveBeenCalled();
+  });
+});
