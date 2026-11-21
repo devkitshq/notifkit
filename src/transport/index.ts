@@ -14,6 +14,12 @@ export interface DeliveryResult {
    * up to the task's `maxAttempts`.
    */
   retryable?: boolean;
+  /**
+   * The provider is up but over its send rate (a 429, SES throttling).
+   * Delivery waits for capacity as it does at a local limit: the send is not a
+   * failed attempt and doesn't count toward the circuit breaker.
+   */
+  throttled?: boolean;
 }
 
 export interface WebhookEvent {

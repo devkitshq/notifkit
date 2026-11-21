@@ -97,6 +97,7 @@ export class ResendTransport implements Transport {
         return {
           success: false,
           ...(isPermanentStatus(error.statusCode) ? { retryable: false } : {}),
+          ...(error.statusCode === 429 ? { throttled: true } : {}),
           error: error.message,
         };
       }

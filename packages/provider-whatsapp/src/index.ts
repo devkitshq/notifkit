@@ -120,6 +120,9 @@ export class WhatsAppTransport implements Transport {
           // 4xx still makes it permanent, so an auth failure isn't retried.
           invalidToken: false,
           ...(permanent ? { retryable: false } : {}),
+          ...(res.status === 429 || RATE_LIMIT_GRAPH_CODES.has(errorCode)
+            ? { throttled: true }
+            : {}),
         };
       }
 
@@ -245,6 +248,9 @@ function normalizeToE164Digits(phone: string | undefined): string | undefined {
 const RETRYABLE_GRAPH_CODES = new Set([
   1, 2, 4, 17, 32, 613, 80007, 130429, 131000, 131016, 131048, 131056, 133004,
 ]);
+
+/** The retryable codes that are rate limits (app, user, page, account, throughput, spam, pair), not outages. */
+const RATE_LIMIT_GRAPH_CODES = new Set([4, 17, 32, 613, 80007, 130429, 131048, 131056]);
 
 /**
  * Whether a refusal with this HTTP status is final. A 4xx says the request

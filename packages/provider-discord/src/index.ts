@@ -134,6 +134,7 @@ export class DiscordTransport implements Transport {
           success: false,
           invalidToken,
           ...(isPermanentStatus(res.status) ? { retryable: false } : {}),
+          ...(res.status === 429 ? { throttled: true } : {}),
           error: `Discord webhook error ${res.status}: ${errorBody}`,
         };
       }

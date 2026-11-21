@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { randomUUID } from "node:crypto";
-import { DeliveryWorker, MAX_THROTTLE_DEFERRALS } from "@/services/delivery/main.js";
+import { DeliveryWorker, MAX_THROTTLE_WAIT_MS } from "@/services/delivery/main.js";
 import { StreamConsumer, PendingMessageScanner, StreamProducer } from "@/queue/index.js";
 import { IdempotencyGuard } from "@/idempotency/index.js";
 import { ContactRepository, TemplateRepository, UserRepository } from "@/repositories/index.js";
@@ -334,7 +334,7 @@ describe("DeliveryWorker", () => {
     expect(sends).toBe(1);
   });
 
-  it("defers sends over the provider's limit, and fails them once the deferrals run out", async () => {
+  it("defers sends over the provider's limit, and fails them once they have waited too long", async () => {
     const limited = new FakeProvider("sms", () => ({ success: true, providerMessageId: "x" }), {
       limit: 1,
       windowSeconds: 60,
@@ -354,7 +354,8 @@ describe("DeliveryWorker", () => {
     const exhausted = dispatched({
       channel: "sms",
       destination: "+4",
-      throttleAttemptCount: MAX_THROTTLE_DEFERRALS,
+      throttleAttemptCount: 3,
+      throttledSince: new Date(Date.now() - MAX_THROTTLE_WAIT_MS - 1).toISOString(),
     });
     for (const ev of [first, second, waitedLong, exhausted]) await publish(ev);
 

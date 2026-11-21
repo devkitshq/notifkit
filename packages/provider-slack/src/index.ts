@@ -21,9 +21,9 @@ const INVALID_DESTINATION_ERRORS = new Set([
 // answers nearly every error with HTTP 200 and a code, so the code, not the
 // status, says whether to try again; every other code (a bad token, a
 // malformed message, a dead channel) will be refused again.
+const RATE_LIMIT_ERRORS = new Set(["ratelimited", "rate_limited"]);
 const RETRYABLE_ERRORS = new Set([
-  "ratelimited",
-  "rate_limited",
+  ...RATE_LIMIT_ERRORS,
   "internal_error",
   "fatal_error",
   "service_unavailable",
@@ -196,6 +196,9 @@ export class SlackTransport implements Transport {
           success: false,
           invalidToken,
           ...(retryable ? {} : { retryable: false }),
+          ...(response.status === 429 || RATE_LIMIT_ERRORS.has(body.error ?? "")
+            ? { throttled: true }
+            : {}),
           error: body.error ?? "Slack API error",
         };
       }
@@ -238,6 +241,7 @@ export class SlackTransport implements Transport {
           success: false,
           invalidToken,
           ...(invalidToken || isPermanentStatus(response.status) ? { retryable: false } : {}),
+          ...(response.status === 429 ? { throttled: true } : {}),
           error: body || `HTTP ${response.status}`,
         };
       }

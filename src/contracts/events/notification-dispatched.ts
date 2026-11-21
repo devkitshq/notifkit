@@ -45,6 +45,8 @@ export const NotificationDispatchedPayloadSchema = z.object({
   deliveryOptions: DeliveryOptionsSchema,
   fallbackChain: z.array(NotificationChannelSchema).optional(),
   throttleAttemptCount: z.number().int().nonnegative().optional(),
+  /** When delivery first found no provider capacity. Waiting is capped by time, not rounds. */
+  throttledSince: z.string().datetime().optional(),
   /**
    * Provider attempts that already failed. Delivery re-queues a failed send
    * through the scheduler until this reaches `deliveryOptions.maxAttempts`.

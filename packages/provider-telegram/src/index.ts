@@ -112,6 +112,7 @@ export class TelegramTransport implements Transport {
           ...(invalidToken || isPermanentStatus(data.error_code ?? res.status)
             ? { retryable: false }
             : {}),
+          ...((data.error_code ?? res.status) === 429 ? { throttled: true } : {}),
           error: data.description ?? `Telegram API error ${data.error_code ?? "unknown"}`,
         };
       }

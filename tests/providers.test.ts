@@ -91,6 +91,22 @@ describe("ResendTransport (Email Provider)", () => {
     });
   });
 
+  it("flags a 429 as throttled, so delivery waits instead of counting a failure", async () => {
+    mockSendEmail.mockResolvedValueOnce({
+      data: null,
+      error: { message: "Too many requests", statusCode: 429, name: "rate_limit_exceeded" },
+    });
+    const transport = new ResendTransport({ apiKey: "k", from: "onboarding@resend.dev" });
+
+    const result = await transport.send({
+      taskId: "t",
+      destination: "r@example.com",
+      renderedContent: { content: { subject: "s", text: "b" } },
+    } as any);
+
+    expect(result).toEqual({ success: false, throttled: true, error: "Too many requests" });
+  });
+
   it("handles email sending failures from Resend SDK", async () => {
     mockSendEmail.mockResolvedValueOnce({
       data: null,
@@ -306,6 +322,20 @@ describe("FcmTransport (Push Provider)", () => {
     const result = await transport.send(fcmTask);
     expect(result.success).toBe(false);
     expect(result.retryable).not.toBe(false);
+  });
+
+  it.each([
+    ["messaging/quota-exceeded", true],
+    ["messaging/message-rate-exceeded", true],
+    ["messaging/device-message-rate-exceeded", true],
+    ["messaging/topics-message-rate-exceeded", true],
+    ["messaging/server-unavailable", undefined],
+  ])("reports %s as throttled=%s", async (code, throttled) => {
+    mockSendPush.mockRejectedValueOnce(fcmFailure(code));
+    const transport = new FcmTransport({
+      serviceAccountJson: JSON.stringify({ project_id: "test-project" }),
+    });
+    expect((await transport.send(fcmTask)).throttled).toBe(throttled);
   });
 
   it("tries again after an error that carries no FCM code", async () => {
@@ -725,6 +755,7 @@ describe("TwilioTransport (SMS Provider)", () => {
     await expect(twilioTransport().send(smsTask())).resolves.toEqual({
       success: false,
       invalidToken: false,
+      throttled: true,
       error: "Too Many Requests",
     });
   });
@@ -1245,6 +1276,7 @@ describe("TelegramTransport (Telegram Provider)", () => {
     expect(await telegramTransport().send(telegramTask())).toEqual({
       success: false,
       invalidToken: false,
+      throttled: true,
       error: "Telegram API error 429",
     });
 
@@ -1504,6 +1536,7 @@ describe("DiscordTransport (Discord Provider)", () => {
         success: false,
         invalidToken,
         ...(retryable === false ? { retryable } : {}),
+        ...(status === 429 ? { throttled: true } : {}),
         error: `Discord webhook error ${status}: rate limited or gone`,
       });
     },
@@ -1822,10 +1855,20 @@ describe("SlackTransport (Slack Provider)", () => {
           success: false,
           invalidToken,
           ...(retryable === false ? { retryable } : {}),
+          ...(error === "ratelimited" ? { throttled: true } : {}),
           error,
         });
       },
     );
+
+    it("flags a 429 from the API as throttled", async () => {
+      stubSlackApi({ ok: false, error: "rate_limited" }, 429);
+
+      const result = await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(slackTask());
+
+      expect(result).toMatchObject({ success: false, throttled: true });
+      expect(result.retryable).not.toBe(false);
+    });
 
     it("falls back to a generic message when the API names no error", async () => {
       stubSlackApi({ ok: false });
@@ -1928,6 +1971,19 @@ describe("SlackTransport (Slack Provider)", () => {
 
       // Sent with a 400: whatever the body says, Slack refused the request.
       expect(result).toEqual({ success: false, invalidToken, retryable: false, error: body });
+    });
+
+    it("flags a 429 from an incoming webhook as throttled", async () => {
+      stubSlackHook("rate_limited", 429);
+
+      const result = await new SlackTransport().send(hookTask());
+
+      expect(result).toEqual({
+        success: false,
+        invalidToken: false,
+        throttled: true,
+        error: "rate_limited",
+      });
     });
 
     it("falls back to the status code when the body is empty", async () => {
@@ -2091,6 +2147,28 @@ describe("WhatsAppTransport (WhatsApp Provider)", () => {
       invalidToken: false,
       retryable: false,
     });
+  });
+
+  it.each([
+    [400, 130429, true],
+    [400, 131056, true],
+    [400, 80007, true],
+    [429, undefined, true],
+    [500, 131000, undefined],
+  ])("reports a %i with code %s as throttled=%s", async (status, code, throttled) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status,
+        json: async () => ({ error: { message: "slow down", code } }),
+      }),
+    );
+
+    const result = await whatsappTransport().send(whatsappTask());
+
+    expect(result.throttled).toBe(throttled);
+    expect(result.retryable).not.toBe(false);
   });
 
   it("handles fetch exception gracefully", async () => {
@@ -2794,19 +2872,29 @@ describe("SesTransport (AWS SES Provider)", () => {
   });
 
   it.each([
-    [429, "TooManyRequestsException", "Too many requests."],
+    [429, "TooManyRequestsException", "Too many requests.", true],
     // SES reports its send rate and daily quota as throttling, sent as a 400.
-    [400, "ThrottlingException", "Maximum sending rate exceeded."],
-    [400, "ThrottlingException", "Daily message quota exceeded."],
-    [400, "LimitExceededException", "There are too many instances of the specified resource type."],
-    [500, "InternalServiceErrorException", "Internal failure."],
-    [408, "RequestTimeoutException", "Request timed out."],
-  ])("retries a %i %s", async (status, type, message) => {
+    [400, "ThrottlingException", "Maximum sending rate exceeded.", true],
+    // Resets over 24 hours: waiting can't help, so it takes the ordinary retries.
+    [400, "ThrottlingException", "Daily message quota exceeded.", false],
+    [
+      400,
+      "LimitExceededException",
+      "There are too many instances of the specified resource type.",
+      true,
+    ],
+    [500, "InternalServiceErrorException", "Internal failure.", false],
+    [408, "RequestTimeoutException", "Request timed out.", false],
+  ])("retries a %i %s", async (status, type, message, throttled) => {
     const { transport } = sesWith(() => ({ status, type, body: { message } }));
 
     const result = await transport.send(sesTask());
 
-    expect(result).toEqual({ success: false, error: `${type}: ${message}` });
+    expect(result).toEqual({
+      success: false,
+      ...(throttled ? { throttled } : {}),
+      error: `${type}: ${message}`,
+    });
   });
 
   it("retries a 429 that has no SES error name", async () => {
@@ -2814,7 +2902,7 @@ describe("SesTransport (AWS SES Provider)", () => {
 
     const result = await transport.send(sesTask());
 
-    expect(result).toEqual({ success: false, error: "Unknown: UnknownError" });
+    expect(result).toEqual({ success: false, throttled: true, error: "Unknown: UnknownError" });
   });
 
   it("retries when SES can't be reached", async () => {

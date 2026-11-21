@@ -72,10 +72,11 @@ The transport decides from the error SES returns:
   covers a rejected message, an unverified sender or MAIL FROM domain, a bad
   address, a paused or suspended account, and a configuration set that doesn't
   exist.
-- Throttling is retried, which covers short spikes over the send rate. It
-  can't wait out the daily quota, which resets over 24 hours, so keep your
-  quota above your daily volume. 5xx errors, timeouts and network errors are
-  retried too.
+- Throttling waits for capacity the way `limits` does, and doesn't count as
+  a failed attempt, which covers spikes over the send rate. A task gives up
+  after waiting 15 minutes. The daily quota, which resets over 24 hours, is
+  retried like a 5xx instead, so keep your quota above your daily volume. 5xx
+  errors, timeouts and network errors are retried.
 
 The client the transport builds has the SDK's own retries turned off, because
 notifkit already retries with backoff. Each send is cancelled when it reaches

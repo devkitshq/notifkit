@@ -53,16 +53,20 @@ const zsetKey = (shard: number): string => `notif:scheduled:zset:${shard}`;
 export interface SchedulerWorkerOptions extends WorkerOptions {
   registry: EventRegistry;
   redis: Redis;
+  /** Called with a task's due time once it is in the ZSET. */
+  onParked?: (dueAt: number) => void;
 }
 
 export class SchedulerWorker extends BaseWorker {
   private readonly registry: EventRegistry;
   private readonly redisCli: Redis;
+  private readonly onParked?: (dueAt: number) => void;
 
   constructor(options: SchedulerWorkerOptions) {
     super(options);
     this.registry = options.registry;
     this.redisCli = options.redis;
+    this.onParked = options.onParked;
   }
   async process(message: StreamMessage): Promise<void> {
     const { event } = message;
@@ -87,11 +91,24 @@ export class SchedulerWorker extends BaseWorker {
 
     const shard = shardOf(scheduled.taskId);
     await this.redisCli.zadd(zsetKey(shard), scheduledAt, taskData);
+    this.onParked?.(scheduledAt);
     this.logger.debug(
       { taskId: scheduled.taskId, scheduledAt: scheduled.scheduledAt, shard },
       "scheduled task queued in ZSET",
     );
   }
+}
+
+/** Time until the earliest parked task is due, at most `maxMs`. */
+export async function msUntilNextDue(redis: Redis, maxMs: number): Promise<number> {
+  const pipeline = redis.pipeline();
+  for (let i = 0; i < 16; i++) pipeline.zrange(zsetKey(i), "0", "0", "WITHSCORES");
+  let earliest = Infinity;
+  for (const [err, res] of (await pipeline.exec()) ?? []) {
+    const score = Number((res as string[] | undefined)?.[1]);
+    if (!err && Number.isFinite(score)) earliest = Math.min(earliest, score);
+  }
+  return Math.max(0, Math.min(maxMs, earliest - Date.now()));
 }
 
 export async function executeSchedulerPoll(
@@ -324,6 +341,22 @@ export async function startSchedulerWorker() {
 
   const outboundProducers = createPriorityProducers(redis.native, logger, "OUTBOUND");
 
+  // A task parked while the poll sleeps (delivery deferring a burst) is due
+  // sooner than the sleep ends, so it brings the next poll forward.
+  let nextPollAt = Infinity;
+  let parkedDuringPoll = Infinity;
+  const schedulePoll = (delayMs: number) => {
+    if (pollTimeout) clearTimeout(pollTimeout);
+    nextPollAt = Date.now() + delayMs;
+    pollTimeout = setTimeout(() => void pollLoop(), delayMs);
+  };
+  const onParked = (dueAt: number) => {
+    if (!isPolling) return;
+    // Mid-poll: the poll picks its own wake time when it finishes.
+    if (!pollTimeout) parkedDuringPoll = Math.min(parkedDuringPoll, dueAt);
+    else if (dueAt < nextPollAt) schedulePoll(Math.max(0, dueAt - Date.now()));
+  };
+
   worker = new SchedulerWorker({
     consumer,
     pendingScanner,
@@ -331,10 +364,13 @@ export async function startSchedulerWorker() {
     concurrency: config.WORKER_CONCURRENCY,
     registry,
     redis: redis.native,
+    onParked,
   });
 
   isPolling = true;
   const pollLoop = async (): Promise<void> => {
+    pollTimeout = null;
+    parkedDuringPoll = Infinity;
     if (!isPolling) return;
     try {
       if (!(await redis.native.exists(SCHEDULER_SENTINEL_KEY))) {
@@ -345,13 +381,18 @@ export async function startSchedulerWorker() {
       }
       const hasMore = await executeSchedulerPoll(redis.native, outboundProducers, logger, db);
       if (isPolling) {
-        pollTimeout = setTimeout(() => void pollLoop(), hasMore ? 0 : 5000);
+        // Wake for the next due task, so a task deferred for a second isn't held
+        // for a full poll. The floor stops a scheduler that lost the poll lock
+        // from spinning on tasks the lock holder is releasing.
+        const untilDue = Math.min(
+          await msUntilNextDue(redis.native, 5000),
+          parkedDuringPoll - Date.now(),
+        );
+        schedulePoll(hasMore ? 0 : Math.max(100, untilDue));
       }
     } catch (err) {
       logger.error({ err }, "scheduler poll loop error");
-      if (isPolling) {
-        pollTimeout = setTimeout(() => void pollLoop(), 5000);
-      }
+      if (isPolling) schedulePoll(5000);
     }
   };
   void pollLoop();

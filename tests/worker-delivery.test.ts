@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { DeliveryWorker, MAX_THROTTLE_DEFERRALS, retryDelayMs } from "@/services/delivery/main.js";
+import { DeliveryWorker, MAX_THROTTLE_WAIT_MS, retryDelayMs } from "@/services/delivery/main.js";
 import { NonRetryableError } from "@/workers/index.js";
 import { registry } from "@/index.js";
 
@@ -558,14 +558,55 @@ describe("DeliveryWorker", () => {
       expect(parkedPayload().throttleAttemptCount).toBe(4);
     });
 
-    it("gives up once the deferrals run out", async () => {
+    it("stamps when the waiting began, so the cap counts time rather than rounds", async () => {
+      mockTransportRegistry.getAll.mockReturnValue([limitedTransport(vi.fn())]);
+      mockRedis.leaseApiRateLimit = vi.fn().mockResolvedValue(0);
+      const before = Date.now();
+
+      await worker.process(dispatched() as any);
+
+      expect(new Date(parkedPayload().throttledSince).getTime()).toBeGreaterThanOrEqual(before);
+    });
+
+    it("keeps the first stamp across deferrals", async () => {
+      mockTransportRegistry.getAll.mockReturnValue([limitedTransport(vi.fn())]);
+      mockRedis.leaseApiRateLimit = vi.fn().mockResolvedValue(0);
+      const since = new Date(Date.now() - 60_000).toISOString();
+
+      await worker.process(dispatched({ throttleAttemptCount: 3, throttledSince: since }) as any);
+
+      expect(parkedPayload().throttledSince).toBe(since);
+    });
+
+    it("keeps waiting after many deferrals while the wait is under the cap", async () => {
+      // The scheduler's pace sets how many rounds a wait takes, so a round count
+      // would fail a burst whose limit is set correctly.
+      mockTransportRegistry.getAll.mockReturnValue([limitedTransport(vi.fn())]);
+      mockRedis.leaseApiRateLimit = vi.fn().mockResolvedValue(0);
+
+      await worker.process(
+        dispatched({ throttleAttemptCount: 500, throttledSince: new Date().toISOString() }) as any,
+      );
+
+      expect(mockScheduledProducer.publish).toHaveBeenCalledTimes(1);
+      expect(mockGlobalEmitter.emit).not.toHaveBeenCalledWith(
+        "delivery:failed",
+        expect.anything(),
+        "provider throttle exceeded",
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it("gives up once the task has waited past the cap", async () => {
       const send = vi.fn();
       mockTransportRegistry.getAll.mockReturnValue([limitedTransport(send)]);
       mockRedis.leaseApiRateLimit = vi.fn().mockResolvedValue(0);
 
       await worker.process(
         dispatched({
-          throttleAttemptCount: MAX_THROTTLE_DEFERRALS,
+          throttleAttemptCount: 3,
+          throttledSince: new Date(Date.now() - MAX_THROTTLE_WAIT_MS - 1).toISOString(),
           deliveryOptions: { maxAttempts: 3 },
         }) as any,
       );
@@ -587,7 +628,8 @@ describe("DeliveryWorker", () => {
 
       await worker.process(
         dispatched({
-          throttleAttemptCount: MAX_THROTTLE_DEFERRALS,
+          throttleAttemptCount: 3,
+          throttledSince: new Date(Date.now() - MAX_THROTTLE_WAIT_MS - 1).toISOString(),
           deliveryOptions: { maxAttempts: 3 },
           fallbackChain: ["sms"],
           recipient,
@@ -607,6 +649,116 @@ describe("DeliveryWorker", () => {
 
       expect(send).toHaveBeenCalledTimes(1);
       expect(mockScheduledProducer.publish).not.toHaveBeenCalled();
+    });
+
+    describe("a provider that says it is throttling", () => {
+      const throttled = {
+        success: false,
+        throttled: true,
+        error: "ThrottlingException: slow down",
+      };
+
+      it("parks the task like a local limit hit, even on its last attempt", async () => {
+        const send = vi.fn().mockResolvedValue(throttled);
+        mockTransportRegistry.getAll.mockReturnValue([{ send }]);
+
+        const err = await worker
+          .process(dispatched({ deliveryOptions: { maxAttempts: 1 } }) as any)
+          .catch((e) => e);
+
+        expect(err).toBeUndefined();
+        expect(mockScheduledProducer.publish).toHaveBeenCalledTimes(1);
+        expect(parkedPayload().throttleAttemptCount).toBe(1);
+        // Not a failed attempt: maxAttempts is for a provider that is down.
+        expect(parkedPayload().deliveryAttemptCount).toBeUndefined();
+        expect(mockGlobalEmitter.emit).not.toHaveBeenCalledWith(
+          "delivery:failed",
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+          expect.anything(),
+        );
+      });
+
+      it("never trips the circuit breaker: the provider is up, just busy", async () => {
+        class BusyTransport {
+          send = vi.fn().mockResolvedValue(throttled);
+        }
+        const busy = new BusyTransport();
+        mockTransportRegistry.getAll.mockReturnValue([busy]);
+
+        for (let i = 0; i < 6; i++) await worker.process(dispatched() as any);
+
+        expect(busy.send).toHaveBeenCalledTimes(6);
+      });
+
+      it("tries the next provider first", async () => {
+        const next = vi.fn().mockResolvedValue({ success: true, providerMessageId: "p-2" });
+        mockTransportRegistry.getAll.mockReturnValue([
+          { send: vi.fn().mockResolvedValue(throttled) },
+          { send: next },
+        ]);
+
+        await worker.process(dispatched() as any);
+
+        expect(next).toHaveBeenCalledTimes(1);
+        expect(mockScheduledProducer.publish).not.toHaveBeenCalled();
+      });
+
+      it("waits at least the provider's window before coming back", async () => {
+        mockTransportRegistry.getAll.mockReturnValue([
+          { send: vi.fn().mockResolvedValue(throttled), limits: { limit: 5, windowSeconds: 2 } },
+        ]);
+        mockRedis.leaseApiRateLimit = vi.fn().mockResolvedValue(1);
+        const before = Date.now();
+
+        await worker.process(dispatched() as any);
+
+        const at = new Date(mockScheduledProducer.publish.mock.calls[0]![0].payload.scheduledAt);
+        expect(at.getTime()).toBeGreaterThanOrEqual(before + 2_000);
+      });
+
+      describe("backing off while the throttling lasts", () => {
+        afterEach(() => vi.restoreAllMocks());
+        const parkedFor = async (throttleAttemptCount: number) => {
+          mockTransportRegistry.getAll.mockReturnValue([
+            { send: vi.fn().mockResolvedValue(throttled) },
+          ]);
+          mockScheduledProducer.publish.mockClear();
+          vi.spyOn(Math, "random").mockReturnValue(0.999);
+          const before = Date.now();
+          await worker.process(
+            dispatched({ throttleAttemptCount, throttledSince: new Date().toISOString() }) as any,
+          );
+          const at = mockScheduledProducer.publish.mock.calls[0]![0].payload.scheduledAt;
+          return new Date(at).getTime() - before;
+        };
+
+        // A quota that lasts would otherwise bring every message back every few
+        // seconds for the whole wait: ~150 sends and parks each.
+        it("doubles the spread each round", async () => {
+          expect(await parkedFor(5)).toBeGreaterThan(1_000 + 0.99 * 32_000);
+        });
+
+        it("caps it at a minute's worth of windows", async () => {
+          expect(await parkedFor(30)).toBeLessThanOrEqual(1_000 + 60_000 + 100);
+        });
+      });
+    });
+
+    it("restarts the wait clock after a real send attempt fails", async () => {
+      // A task that waited 14 minutes, then hit a 5xx, would otherwise give up
+      // the moment its retry was throttled.
+      mockTransportRegistry.getAll.mockReturnValue([
+        { send: vi.fn().mockResolvedValue({ success: false, error: "503" }) },
+      ]);
+
+      await worker.process(
+        dispatched({ throttleAttemptCount: 40, throttledSince: new Date(0).toISOString() }) as any,
+      );
+
+      expect(parkedPayload().deliveryAttemptCount).toBe(1);
+      expect(parkedPayload().throttledSince).toBeUndefined();
     });
   });
 
@@ -850,14 +1002,19 @@ describe("DeliveryWorker", () => {
       });
     });
 
-    it("running out of throttle deferrals fails with recipientId and no dispatched entry", async () => {
+    it("waiting past the throttle cap fails with recipientId and no dispatched entry", async () => {
       mockTransportRegistry.getAll.mockReturnValue([
         { send: vi.fn(), limits: { limit: 5, windowSeconds: 60 } },
       ]);
       mockRedis.leaseApiRateLimit = vi.fn().mockResolvedValue(0);
       const spy = vi.spyOn(worker["eventProcessor"], "add");
 
-      await worker.process(task({ throttleAttemptCount: MAX_THROTTLE_DEFERRALS }) as any);
+      await worker.process(
+        task({
+          throttleAttemptCount: 3,
+          throttledSince: new Date(Date.now() - MAX_THROTTLE_WAIT_MS - 1).toISOString(),
+        }) as any,
+      );
 
       expect(added(spy).event.payload).toStrictEqual({
         ...ids,

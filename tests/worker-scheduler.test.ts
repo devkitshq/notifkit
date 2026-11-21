@@ -45,6 +45,40 @@ describe("SchedulerWorker", () => {
     expect(redis.zadd).toHaveBeenCalledTimes(1);
     expect(redis.zadd.mock.calls[0][0]).toBe("notif:scheduled:zset:3");
   });
+
+  it("reports each parked task's due time once it is in the ZSET, so the poll can wake for it", async () => {
+    const order: string[] = [];
+    const redis: any = { zadd: vi.fn(async () => void order.push("zadd")) };
+    const onParked = vi.fn(() => void order.push("parked"));
+    const dueAt = Date.now() + 1_000;
+    const worker = new SchedulerWorker({
+      consumer: { ack: vi.fn(), nack: vi.fn() } as any,
+      pendingScanner: {} as any,
+      logger,
+      registry,
+      redis,
+      onParked,
+    });
+
+    await worker.process({
+      id: "m1",
+      event: {
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        type: "notification.scheduled",
+        timestamp: new Date().toISOString(),
+        metadata: { traceId: "t", source: "test", retryCount: 0 },
+        payload: {
+          projectId: "11111111-1111-4111-8111-111111111111",
+          enrichedEventId: "22222222-2222-4222-8222-222222222222",
+          taskId: "33333333-3333-4333-8333-333333333333",
+          scheduledAt: new Date(dueAt).toISOString(),
+        },
+      },
+    } as any);
+
+    expect(onParked).toHaveBeenCalledWith(dueAt);
+    expect(order).toEqual(["zadd", "parked"]);
+  });
 });
 
 describe("engine → scheduler handoff", () => {
