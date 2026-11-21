@@ -1087,6 +1087,395 @@ describe("TwilioTransport (Client and logging)", () => {
   });
 });
 
+// ─── Telnyx ──────────────────────────────────────────────────────────────────
+
+import { TelnyxTransport } from "../packages/provider-telnyx/src/index.js";
+import { generateKeyPairSync, sign as signPayload } from "node:crypto";
+
+const TELNYX_API_KEY = "KEYtest00000000000000000000000000";
+const TELNYX_FROM = "+15550000001";
+const TELNYX_PROFILE_ID = "12345678-90ab-cdef-1234-567890abcdef";
+const TELNYX_WEBHOOK_URL = "https://api.example.com/webhooks/telnyx";
+
+/**
+ * One Ed25519 keypair for the webhook tests, generated in-test so no real
+ * key ever appears here. The public key is exported the way the Telnyx portal
+ * shows it — standard base64 over the raw 32 bytes — and the private half
+ * signs exactly what Telnyx signs, `${timestamp}|${rawBody}`.
+ */
+const telnyxKeyPair = generateKeyPairSync("ed25519");
+const TELNYX_PUBLIC_KEY = Buffer.from(
+  (telnyxKeyPair.publicKey.export({ format: "jwk" }).x as string) ?? "",
+  "base64url",
+).toString("base64");
+
+function telnyxTransport(overrides: Record<string, unknown> = {}) {
+  return new TelnyxTransport({
+    apiKey: TELNYX_API_KEY,
+    from: TELNYX_FROM,
+    webhookUrl: TELNYX_WEBHOOK_URL,
+    webhookPublicKey: TELNYX_PUBLIC_KEY,
+    ...overrides,
+  } as any);
+}
+
+function telnyxTask(overrides: Record<string, unknown> = {}): any {
+  return {
+    taskId: "task-uuid-telnyx-1",
+    destination: "+15550000002",
+    renderedContent: { content: { body: "Your code is 123456" } },
+    ...overrides,
+  };
+}
+
+/**
+ * Stubs `fetch` with a Telnyx API double. Telnyx signals failure with the
+ * HTTP status, and the transport reads the body as text on that path and as
+ * JSON on the success path — so both readers are stubbed here.
+ */
+function stubTelnyx(body: unknown, status = 200) {
+  const fn = vi.fn().mockResolvedValue({
+    status,
+    ok: status >= 200 && status < 300,
+    json: async () => body,
+    text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+  });
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+/** The JSON payload posted to Telnyx on the Nth call. */
+function telnyxBody(fn: ReturnType<typeof stubTelnyx>, n = 0) {
+  return JSON.parse((fn.mock.calls[n]![1] as RequestInit).body as string);
+}
+
+function signTelnyx(rawBody: string, timestamp: string): string {
+  return signPayload(
+    null,
+    Buffer.from(`${timestamp}|${rawBody}`, "utf8"),
+    telnyxKeyPair.privateKey,
+  ).toString("base64");
+}
+
+/** A signed header pair for `rawBody`, at the current time. */
+function telnyxSignedHeaders(rawBody: string) {
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  return {
+    "telnyx-signature-ed25519": signTelnyx(rawBody, timestamp),
+    "telnyx-timestamp": timestamp,
+  };
+}
+
+function telnyxFinalizedEvent(overrides: Record<string, unknown> = {}): any {
+  return {
+    data: {
+      id: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      event_type: "message.finalized",
+      occurred_at: "2026-11-20T12:00:00.000Z",
+      payload: {
+        to: [{ to: "+15550000002", status: "delivery_failed" }],
+      },
+    },
+    ...overrides,
+  };
+}
+
+describe("TelnyxTransport (SMS Provider)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("registers against the sms channel", () => {
+    expect(telnyxTransport().channel).toBe("sms");
+  });
+
+  it("requires a sender number or a messaging profile", () => {
+    expect(() => new TelnyxTransport({ apiKey: TELNYX_API_KEY } as any)).toThrow(
+      /one of `from` or `messagingProfileId` is required/,
+    );
+  });
+
+  it("derives the webhook path from the webhook URL", () => {
+    expect(telnyxTransport().webhookPath).toBe("/webhooks/telnyx");
+    expect(telnyxTransport({ webhookUrl: undefined }).webhookPath).toBeUndefined();
+  });
+
+  it("posts the exact send request and returns data.id", async () => {
+    const fetchMock = stubTelnyx({ data: { id: "3fa85f64-5717-4562-b3fc-2c963f66afa6" } });
+
+    const result = await telnyxTransport().send(telnyxTask());
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe("https://api.telnyx.com/v2/messages");
+    expect(fetchMock.mock.calls[0]![1]).toMatchObject({
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${TELNYX_API_KEY}`,
+      },
+    });
+    expect(telnyxBody(fetchMock)).toEqual({
+      from: "+15550000001",
+      to: "+15550000002",
+      text: "Your code is 123456",
+      webhook_url: TELNYX_WEBHOOK_URL,
+    });
+    expect(result).toEqual({
+      success: true,
+      providerMessageId: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    });
+  });
+
+  it("sends with a messaging profile when no sender number is configured", async () => {
+    const fetchMock = stubTelnyx({ data: { id: "msg-2" } });
+
+    await telnyxTransport({ from: undefined, messagingProfileId: TELNYX_PROFILE_ID }).send(
+      telnyxTask(),
+    );
+
+    expect(telnyxBody(fetchMock)).toEqual({
+      messaging_profile_id: TELNYX_PROFILE_ID,
+      to: "+15550000002",
+      text: "Your code is 123456",
+      webhook_url: TELNYX_WEBHOOK_URL,
+    });
+  });
+
+  it("lets a template pin its own sender, ignoring a non-string one", async () => {
+    const fetchMock = stubTelnyx({ data: { id: "msg-3" } });
+
+    await telnyxTransport().send(
+      telnyxTask({ renderedContent: { content: { body: "hi", from: "+15559999999" } } }),
+    );
+    expect(telnyxBody(fetchMock, 0).from).toBe("+15559999999");
+
+    await telnyxTransport().send(
+      telnyxTask({ renderedContent: { content: { body: "hi", from: 123 } } }),
+    );
+    expect(telnyxBody(fetchMock, 1).from).toBe("+15550000001");
+  });
+
+  it("fails without reaching Telnyx when the task carries no destination", async () => {
+    const fetchMock = stubTelnyx({ data: { id: "msg-4" } });
+
+    const result = await telnyxTransport().send(telnyxTask({ destination: undefined }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No destination (recipient phone number) on task",
+    });
+  });
+
+  it("fails without reaching Telnyx when the task carries no body", async () => {
+    const fetchMock = stubTelnyx({ data: { id: "msg-5" } });
+
+    const result = await telnyxTransport().send(
+      telnyxTask({ renderedContent: { content: { subject: "no body here" } } }),
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: false, retryable: false, error: "No message body on task" });
+  });
+
+  it("flags a dead destination (422 on `to`) as an invalid token", async () => {
+    stubTelnyx(
+      {
+        errors: [
+          {
+            code: "422",
+            title: "Unprocessable Entity",
+            detail: "The 'to' number is not a valid mobile number.",
+            source: { parameter: "to" },
+          },
+        ],
+      },
+      422,
+    );
+
+    await expect(telnyxTransport().send(telnyxTask())).resolves.toEqual({
+      success: false,
+      invalidToken: true,
+      retryable: false,
+      error: "Telnyx error 422: The 'to' number is not a valid mobile number.",
+    });
+  });
+
+  it("gives up on any other request Telnyx refused", async () => {
+    stubTelnyx(
+      {
+        errors: [
+          {
+            code: "400",
+            title: "Bad Request",
+            detail: "The 'from' number is not owned by this account.",
+            source: { parameter: "from" },
+          },
+        ],
+      },
+      400,
+    );
+
+    await expect(telnyxTransport().send(telnyxTask())).resolves.toEqual({
+      success: false,
+      invalidToken: false,
+      retryable: false,
+      error: "Telnyx error 400: The 'from' number is not owned by this account.",
+    });
+  });
+
+  it("tries again after a server error on Telnyx's side", async () => {
+    stubTelnyx("Internal Server Error", 500);
+
+    const result = await telnyxTransport().send(telnyxTask());
+    expect(result).toMatchObject({ success: false, invalidToken: false });
+    expect(result.retryable).not.toBe(false);
+  });
+
+  it("tries again after a rate limit", async () => {
+    stubTelnyx("Too Many Requests", 429);
+
+    const result = await telnyxTransport().send(telnyxTask());
+    expect(result).toMatchObject({ success: false, invalidToken: false });
+    expect(result.retryable).not.toBe(false);
+  });
+
+  it("survives a network error without reaching Telnyx", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("socket hang up")));
+
+    await expect(telnyxTransport().send(telnyxTask())).resolves.toEqual({
+      success: false,
+      error: "socket hang up",
+    });
+  });
+});
+
+describe("TelnyxTransport (Webhooks)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("accepts a valid Ed25519 signature", async () => {
+    const rawBody = JSON.stringify(telnyxFinalizedEvent());
+
+    await expect(
+      telnyxTransport().verifyWebhook(rawBody, telnyxSignedHeaders(rawBody)),
+    ).resolves.toBe(true);
+  });
+
+  it("rejects a signature over different bytes", async () => {
+    const rawBody = JSON.stringify(telnyxFinalizedEvent());
+    const headers = telnyxSignedHeaders(JSON.stringify(telnyxFinalizedEvent({ data: { id: "other" } })));
+
+    await expect(telnyxTransport().verifyWebhook(rawBody, headers)).resolves.toBe(false);
+  });
+
+  it("rejects a missing signature header", async () => {
+    const rawBody = JSON.stringify(telnyxFinalizedEvent());
+    const headers = telnyxSignedHeaders(rawBody);
+    delete (headers as any)["telnyx-signature-ed25519"];
+
+    await expect(telnyxTransport().verifyWebhook(rawBody, headers)).resolves.toBe(false);
+  });
+
+  it("rejects a stale timestamp", async () => {
+    const rawBody = JSON.stringify(telnyxFinalizedEvent());
+    const stale = String(Math.floor(Date.now() / 1000) - 3600);
+    const headers = {
+      "telnyx-signature-ed25519": signTelnyx(rawBody, stale),
+      "telnyx-timestamp": stale,
+    };
+
+    await expect(telnyxTransport().verifyWebhook(rawBody, headers)).resolves.toBe(false);
+  });
+
+  it("rejects when no public key is configured", async () => {
+    const rawBody = JSON.stringify(telnyxFinalizedEvent());
+
+    await expect(
+      telnyxTransport({ webhookPublicKey: undefined }).verifyWebhook(
+        rawBody,
+        telnyxSignedHeaders(rawBody),
+      ),
+    ).resolves.toBe(false);
+  });
+
+  it("maps delivery_failed to bounced", async () => {
+    const body = telnyxFinalizedEvent();
+    const rawBody = JSON.stringify(body);
+
+    const events = await telnyxTransport().parseWebhook(
+      body,
+      rawBody,
+      telnyxSignedHeaders(rawBody),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      providerMessageId: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      status: "bounced",
+      recipient: "+15550000002",
+    });
+    expect(events[0]!.timestamp).toEqual(new Date("2026-11-20T12:00:00.000Z"));
+  });
+
+  it("maps sending_failed to bounced", async () => {
+    const body = telnyxFinalizedEvent();
+    (body.data.payload.to[0] as any).status = "sending_failed";
+    const rawBody = JSON.stringify(body);
+
+    const events = await telnyxTransport().parseWebhook(
+      body,
+      rawBody,
+      telnyxSignedHeaders(rawBody),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ status: "bounced" });
+  });
+
+  it("ignores a delivered final state", async () => {
+    const body = telnyxFinalizedEvent();
+    (body.data.payload.to[0] as any).status = "delivered";
+    const rawBody = JSON.stringify(body);
+
+    await expect(
+      telnyxTransport().parseWebhook(body, rawBody, telnyxSignedHeaders(rawBody)),
+    ).resolves.toEqual([]);
+  });
+
+  it("ignores an event that is not message.finalized", async () => {
+    const body = telnyxFinalizedEvent();
+    (body.data as any).event_type = "message.sent";
+    const rawBody = JSON.stringify(body);
+
+    await expect(
+      telnyxTransport().parseWebhook(body, rawBody, telnyxSignedHeaders(rawBody)),
+    ).resolves.toEqual([]);
+  });
+
+  it("returns nothing for an unverified callback", async () => {
+    const body = telnyxFinalizedEvent();
+    const rawBody = JSON.stringify(body);
+    const headers = telnyxSignedHeaders(JSON.stringify(telnyxFinalizedEvent({ data: { id: "other" } })));
+
+    await expect(telnyxTransport().parseWebhook(body, rawBody, headers)).resolves.toEqual([]);
+  });
+
+  it("returns nothing when no public key is configured", async () => {
+    const body = telnyxFinalizedEvent();
+    const rawBody = JSON.stringify(body);
+
+    await expect(
+      telnyxTransport({ webhookPublicKey: undefined }).parseWebhook(
+        body,
+        rawBody,
+        telnyxSignedHeaders(rawBody),
+      ),
+    ).resolves.toEqual([]);
+  });
+});
+
 // ─── Telegram ────────────────────────────────────────────────────────────────
 
 import { TelegramTransport } from "../packages/provider-telegram/src/index.js";
