@@ -3116,13 +3116,25 @@ describe("SesTransport (SNS webhooks)", () => {
     expect(fetchMock).toHaveBeenCalledWith(certUrl, expect.objectContaining({ redirect: "error" }));
   });
 
-  it("rejects a message when the certificate can't be fetched, and tries again next time", async () => {
+  // SNS counts any 4xx as delivered, so a 401 here would lose the bounce. A
+  // throw makes the route answer 500, and SNS sends the message again.
+  it("throws when the certificate can't be fetched, and tries again next time", async () => {
     const ses = transport();
-    fetchMock.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+    const rawBody = snsBody({ Message: bounce("Permanent") });
+    fetchMock
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+      .mockRejectedValueOnce(new TypeError("fetch failed"));
 
-    expect(await ses.verifyWebhook(snsBody({ Message: bounce("Permanent") }))).toBe(false);
-    expect(await ses.verifyWebhook(snsBody({ Message: bounce("Permanent") }))).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(ses.verifyWebhook(rawBody)).rejects.toThrow("HTTP 503");
+    await expect(ses.parseWebhook(JSON.parse(rawBody), rawBody)).rejects.toThrow("fetch failed");
+    expect(await ses.verifyWebhook(rawBody)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects a message when the fetched certificate isn't one", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("not a certificate"));
+
+    expect(await transport().verifyWebhook(snsBody({ Message: bounce("Permanent") }))).toBe(false);
   });
 
   it("maps a permanent bounce to a hard bounce for each recipient", async () => {

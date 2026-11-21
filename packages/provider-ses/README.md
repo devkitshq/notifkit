@@ -124,7 +124,8 @@ A valid SNS signature only proves that SNS sent the message, not whose topic
 it came from. Anyone can create a topic and subscribe your endpoint to it, so
 a message from a topic that isn't in `snsTopicArns` is rejected, along with
 its subscription confirmation. The signing certificate is fetched only from
-SNS's own HTTPS endpoints, and kept for later messages.
+SNS's own HTTPS endpoints, and kept for later messages. If it can't be
+fetched, the webhook answers 500, so SNS sends the message again.
 
 The SES account-level suppression list is still worth turning on as a
 backstop. SES then drops mail to those addresses itself, even if a

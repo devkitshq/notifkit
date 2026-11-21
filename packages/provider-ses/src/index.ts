@@ -208,7 +208,8 @@ export class SesTransport implements Transport {
 
   /**
    * Signature gate for the route the API mounts at `webhookPath`. SES reports
-   * bounces and complaints through SNS, which signs each message.
+   * bounces and complaints through SNS, which signs each message. Throws when
+   * the signing certificate can't be fetched, so SNS sends the message again.
    */
   async verifyWebhook(rawBody: string): Promise<boolean> {
     return (await this.verifiedMessage(rawBody)) !== null;
@@ -236,7 +237,8 @@ export class SesTransport implements Transport {
    * Check an SNS message the way AWS documents it and return it, or null.
    *
    * Fail closed: a forged bounce or complaint suppresses a real address, so
-   * anything that can't be verified is dropped, never trusted.
+   * anything that fails the check is dropped, never trusted. Only a signing
+   * certificate that can't be fetched throws, since a retry can fix that.
    */
   private async verifiedMessage(rawBody: string | undefined): Promise<SnsMessage | null> {
     if (this.snsTopicArns.size === 0) {
@@ -277,8 +279,11 @@ export class SesTransport implements Transport {
       return null;
     }
 
+    // A certificate that can't be fetched (a timeout, a network error, SNS
+    // failing) throws, so the route answers 500 and SNS sends the message
+    // again. SNS counts any 4xx as delivered, so a 401 would lose the bounce.
+    const certificate = await this.certificate(certUrl.href);
     try {
-      const certificate = await this.certificate(certUrl.href);
       const valid = verify(
         algorithm,
         Buffer.from(stringToSign(message), "utf8"),
