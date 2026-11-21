@@ -104,6 +104,7 @@ Bring your own provider accounts. First-party packages:
 - [`@notifkit/provider-telegram`](./packages/provider-telegram): messages via a Telegram bot
 - [`@notifkit/provider-discord`](./packages/provider-discord): messages via a Discord webhook
 - [`@notifkit/provider-whatsapp`](./packages/provider-whatsapp): messages via Meta's WhatsApp Cloud API
+- [`@notifkit/provider-mailgun`](./packages/provider-mailgun): transactional email via Mailgun, with HMAC-verified event webhooks
 - [`@notifkit/provider-console`](./packages/provider-console): prints instead of sending, for development and tests
 
 For anything else, implement a `Transport`:
