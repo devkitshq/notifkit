@@ -2901,3 +2901,399 @@ describe("SesTransport (AWS SES Provider)", () => {
     expect(passedDestroy).not.toHaveBeenCalled();
   });
 });
+
+import { generateKeyPairSync, sign as signWithKey } from "node:crypto";
+import type { MockInstance } from "vitest";
+
+describe("SesTransport (SNS webhooks)", () => {
+  const topicArn = "arn:aws:sns:eu-west-1:123456789012:ses-feedback";
+  const certUrl = "https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-test.pem";
+  const subscribeUrl =
+    "https://sns.eu-west-1.amazonaws.com/?Action=ConfirmSubscription&TopicArn=x&Token=t";
+  // A key made for the test run. SNS signs with its own key and publishes the
+  // certificate at SigningCertURL; fetch is stubbed to serve this public half.
+  const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const publicPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+
+  let fetchMock: MockInstance<typeof fetch>;
+  beforeEach(() => {
+    fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = input instanceof URL ? input.href : String(input);
+      if (url === certUrl) return new Response(publicPem);
+      if (url === subscribeUrl) return new Response("<ConfirmSubscriptionResponse/>");
+      return new Response("not found", { status: 404 });
+    });
+  });
+  afterEach(() => {
+    fetchMock.mockRestore();
+  });
+
+  const limits = { limit: 14, windowSeconds: 1 };
+  const transport = (snsTopicArns: string[] = [topicArn]) =>
+    new SesTransport({
+      from: "notifications@example.com",
+      region: "eu-west-1",
+      limits,
+      snsTopicArns,
+    });
+
+  // SNS signs these fields in this order, each as `Name\nvalue\n`, with Subject
+  // only when the message has one.
+  function stringToSign(m: Record<string, string>) {
+    const fields =
+      m.Type === "Notification"
+        ? ["Message", "MessageId", "Subject", "Timestamp", "TopicArn", "Type"]
+        : ["Message", "MessageId", "SubscribeURL", "Timestamp", "Token", "TopicArn", "Type"];
+    return fields
+      .filter((f) => m[f] !== undefined)
+      .map((f) => `${f}\n${m[f]}\n`)
+      .join("");
+  }
+
+  function snsBody(fields: Record<string, string>, version: "1" | "2" = "2") {
+    const m: Record<string, string> = {
+      Type: "Notification",
+      MessageId: "22b80b92-fdea-4c2c-8f9d-bdfb0c7bf324",
+      TopicArn: topicArn,
+      Timestamp: "2026-11-19T08:00:00.000Z",
+      SignatureVersion: version,
+      SigningCertURL: certUrl,
+      ...fields,
+    };
+    const data = Buffer.from(stringToSign(m), "utf8");
+    m.Signature = signWithKey(version === "1" ? "sha1" : "sha256", data, privateKey).toString(
+      "base64",
+    );
+    return JSON.stringify(m);
+  }
+
+  const mail = { messageId: "ses-message-id-123", destination: ["alice@example.com"] };
+  const bounce = (bounceType: string, recipients = ["alice@example.com"]) =>
+    JSON.stringify({
+      notificationType: "Bounce",
+      mail,
+      bounce: {
+        bounceType,
+        bounceSubType: "General",
+        bouncedRecipients: recipients.map((emailAddress) => ({
+          emailAddress,
+          action: "failed",
+          status: "5.1.1",
+          diagnosticCode: "smtp; 550 5.1.1 user unknown",
+        })),
+        timestamp: "2026-11-19T08:00:01.000Z",
+        feedbackId: "0102018f-feedback",
+      },
+    });
+  const complaint = (complaintFeedbackType = "abuse") =>
+    JSON.stringify({
+      notificationType: "Complaint",
+      mail,
+      complaint: {
+        complainedRecipients: [{ emailAddress: "alice@example.com" }],
+        complaintFeedbackType,
+        timestamp: "2026-11-19T08:00:02.000Z",
+        feedbackId: "0102018f-feedback",
+      },
+    });
+
+  it("exposes the webhook route, the signature gate and the parser", () => {
+    const ses = transport();
+    expect(ses.webhookPath).toBe("/webhooks/ses");
+    expect(typeof ses.verifyWebhook).toBe("function");
+    expect(typeof ses.parseWebhook).toBe("function");
+  });
+
+  it("accepts a message signed over the string AWS documents", async () => {
+    // Written out by hand from the AWS docs, not built by the code under test.
+    const signed =
+      "Message\nMy Test Message\nMessageId\n4d4dc071-ddbf-465d-bba8-08f81c89da64\n" +
+      "Subject\nMy subject\nTimestamp\n2019-01-31T04:37:04.321Z\n" +
+      `TopicArn\n${topicArn}\nType\nNotification\n`;
+    const rawBody = JSON.stringify({
+      Type: "Notification",
+      MessageId: "4d4dc071-ddbf-465d-bba8-08f81c89da64",
+      TopicArn: topicArn,
+      Subject: "My subject",
+      Message: "My Test Message",
+      Timestamp: "2019-01-31T04:37:04.321Z",
+      SignatureVersion: "2",
+      Signature: signWithKey("sha256", Buffer.from(signed), privateKey).toString("base64"),
+      SigningCertURL: certUrl,
+    });
+
+    expect(await transport().verifyWebhook(rawBody)).toBe(true);
+  });
+
+  it("accepts SignatureVersion 1 (SHA1) and a notification without a Subject", async () => {
+    expect(await transport().verifyWebhook(snsBody({ Message: bounce("Permanent") }, "1"))).toBe(
+      true,
+    );
+  });
+
+  it("rejects a message whose content was changed after signing", async () => {
+    const signed = JSON.parse(snsBody({ Message: bounce("Permanent") }));
+    signed.Message = bounce("Permanent", ["someone-else@example.com"]);
+
+    expect(await transport().verifyWebhook(JSON.stringify(signed))).toBe(false);
+  });
+
+  it("rejects a correctly signed message from a topic it wasn't given", async () => {
+    // Anyone can create an SNS topic, subscribe this endpoint and publish to it.
+    const rawBody = snsBody({
+      Message: bounce("Permanent"),
+      TopicArn: "arn:aws:sns:eu-west-1:999999999999:not-yours",
+    });
+
+    expect(await transport().verifyWebhook(rawBody)).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects everything when no snsTopicArns are configured", async () => {
+    const rawBody = snsBody({ Message: bounce("Permanent") });
+
+    const logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as any;
+    const unconfigured = new SesTransport({
+      from: "notifications@example.com",
+      region: "eu-west-1",
+      limits,
+      logger,
+    });
+    expect(await unconfigured.verifyWebhook(rawBody)).toBe(false);
+    expect(await transport([]).verifyWebhook(rawBody)).toBe(false);
+    // Says what's missing, rather than only that the topic is unexpected.
+    expect(logger.error).toHaveBeenCalledWith(
+      "SES webhook rejected: snsTopicArns is not configured",
+    );
+  });
+
+  it.each([
+    ["plain HTTP", "http://sns.eu-west-1.amazonaws.com/SimpleNotificationService-test.pem"],
+    ["a look-alike host", "https://sns.eu-west-1.amazonaws.com.evil.example/cert.pem"],
+    ["another host", "https://evil.example/sns.eu-west-1.amazonaws.com.pem"],
+    ["a port", "https://sns.eu-west-1.amazonaws.com:8443/SimpleNotificationService-test.pem"],
+    ["credentials", "https://user@sns.eu-west-1.amazonaws.com/SimpleNotificationService-test.pem"],
+    ["a path that isn't a .pem", "https://sns.eu-west-1.amazonaws.com/cert.txt"],
+    ["not a URL", "sns.eu-west-1.amazonaws.com/SimpleNotificationService-test.pem"],
+  ])("never fetches a signing certificate URL with %s", async (_name, url) => {
+    const rawBody = snsBody({ Message: bounce("Permanent"), SigningCertURL: url });
+
+    expect(await transport().verifyWebhook(rawBody)).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown SignatureVersion", async () => {
+    const signed = JSON.parse(snsBody({ Message: bounce("Permanent") }));
+    signed.SignatureVersion = "3";
+
+    expect(await transport().verifyWebhook(JSON.stringify(signed))).toBe(false);
+  });
+
+  it.each([
+    ["a body that isn't JSON", "not json"],
+    ["an empty body", ""],
+    // What SNS sends when raw message delivery is on: no envelope, no signature.
+    ["the bare SES payload", bounce("Permanent")],
+    [
+      "an envelope without a Signature",
+      JSON.stringify({ ...JSON.parse(snsBody({ Message: "x" })), Signature: undefined }),
+    ],
+    [
+      "a confirmation without a Token",
+      snsBody({ Type: "SubscriptionConfirmation", Message: "x", SubscribeURL: subscribeUrl }),
+    ],
+  ])("rejects %s", async (_name, rawBody) => {
+    expect(await transport().verifyWebhook(rawBody)).toBe(false);
+  });
+
+  it("fetches each signing certificate once", async () => {
+    const ses = transport();
+    await ses.verifyWebhook(snsBody({ Message: bounce("Permanent") }));
+    await ses.verifyWebhook(snsBody({ Message: complaint() }));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // A redirect could hand the request to a host outside SNS.
+    expect(fetchMock).toHaveBeenCalledWith(certUrl, expect.objectContaining({ redirect: "error" }));
+  });
+
+  // SNS counts any 4xx as delivered, so a 401 here would lose the bounce. A
+  // throw makes the route answer 500, and SNS sends the message again.
+  it("throws when the certificate can't be fetched, and tries again next time", async () => {
+    const ses = transport();
+    const rawBody = snsBody({ Message: bounce("Permanent") });
+    fetchMock
+      .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))
+      .mockRejectedValueOnce(new TypeError("fetch failed"));
+
+    await expect(ses.verifyWebhook(rawBody)).rejects.toThrow("HTTP 503");
+    await expect(ses.parseWebhook(JSON.parse(rawBody), rawBody)).rejects.toThrow("fetch failed");
+    expect(await ses.verifyWebhook(rawBody)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects a message when the fetched certificate isn't one", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("not a certificate"));
+
+    expect(await transport().verifyWebhook(snsBody({ Message: bounce("Permanent") }))).toBe(false);
+  });
+
+  it("maps a permanent bounce to a hard bounce for each recipient", async () => {
+    const rawBody = snsBody({
+      Message: bounce("Permanent", ["alice@example.com", "bob@example.com"]),
+    });
+
+    const events = await transport().parseWebhook(JSON.parse(rawBody), rawBody);
+
+    expect(events).toEqual(
+      ["alice@example.com", "bob@example.com"].map((recipient) => ({
+        providerMessageId: "ses-message-id-123",
+        status: "bounced",
+        timestamp: new Date("2026-11-19T08:00:01.000Z"),
+        recipient,
+        bounceType: "hard",
+        metadata: {
+          bounceType: "Permanent",
+          bounceSubType: "General",
+          diagnosticCode: "smtp; 550 5.1.1 user unknown",
+        },
+      })),
+    );
+  });
+
+  it.each(["Transient", "Undetermined"])("maps a %s bounce to a soft bounce", async (type) => {
+    const rawBody = snsBody({ Message: bounce(type) });
+
+    const [event] = await transport().parseWebhook(JSON.parse(rawBody), rawBody);
+
+    expect(event).toMatchObject({ status: "bounced", bounceType: "soft" });
+  });
+
+  it("maps a complaint to complained for each recipient", async () => {
+    const rawBody = snsBody({ Message: complaint() });
+
+    const events = await transport().parseWebhook(JSON.parse(rawBody), rawBody);
+
+    expect(events).toEqual([
+      {
+        providerMessageId: "ses-message-id-123",
+        status: "complained",
+        timestamp: new Date("2026-11-19T08:00:02.000Z"),
+        recipient: "alice@example.com",
+        metadata: { complaintFeedbackType: "abuse" },
+      },
+    ]);
+  });
+
+  it("ignores a not-spam report, which says the mail was wanted", async () => {
+    const rawBody = snsBody({ Message: complaint("not-spam") });
+
+    expect(await transport().parseWebhook(JSON.parse(rawBody), rawBody)).toEqual([]);
+  });
+
+  it("reads configuration-set event publishing, which names the field eventType", async () => {
+    const event = JSON.parse(bounce("Permanent"));
+    event.eventType = event.notificationType;
+    delete event.notificationType;
+    const rawBody = snsBody({ Message: JSON.stringify(event) });
+
+    const [mapped] = await transport().parseWebhook(JSON.parse(rawBody), rawBody);
+
+    expect(mapped).toMatchObject({ status: "bounced", bounceType: "hard" });
+  });
+
+  it("ignores delivery notifications", async () => {
+    const rawBody = snsBody({
+      Message: JSON.stringify({ notificationType: "Delivery", mail, delivery: {} }),
+    });
+
+    expect(await transport().parseWebhook(JSON.parse(rawBody), rawBody)).toEqual([]);
+  });
+
+  it("does not trust parseWebhook's input without checking the signature again", async () => {
+    const signed = JSON.parse(snsBody({ Message: bounce("Permanent") }));
+    signed.Message = bounce("Permanent", ["someone-else@example.com"]);
+    const forged = JSON.stringify(signed);
+
+    expect(await transport().parseWebhook(signed, forged)).toEqual([]);
+  });
+
+  const confirmation = (fields: Record<string, string> = {}) =>
+    snsBody({
+      Type: "SubscriptionConfirmation",
+      Message: `You have chosen to subscribe to the topic ${topicArn}.`,
+      SubscribeURL: subscribeUrl,
+      Token: "t",
+      ...fields,
+    });
+
+  it("confirms a subscription by visiting SubscribeURL, once the message checks out", async () => {
+    const rawBody = confirmation();
+
+    expect(await transport().parseWebhook(JSON.parse(rawBody), rawBody)).toEqual([]);
+    const visited = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(visited).toEqual([certUrl, subscribeUrl]);
+    expect(fetchMock.mock.calls[1]![1]).toMatchObject({ redirect: "error" });
+  });
+
+  it("never confirms a subscription to a topic it wasn't given", async () => {
+    const rawBody = confirmation({ TopicArn: "arn:aws:sns:eu-west-1:999999999999:not-yours" });
+
+    expect(await transport().parseWebhook(JSON.parse(rawBody), rawBody)).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not visit a SubscribeURL outside SNS", async () => {
+    const rawBody = confirmation({
+      SubscribeURL: "https://evil.example/?Action=ConfirmSubscription",
+    });
+
+    expect(await transport().parseWebhook(JSON.parse(rawBody), rawBody)).toEqual([]);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([certUrl]);
+  });
+
+  it("acknowledges an unsubscribe confirmation without visiting anything", async () => {
+    const rawBody = confirmation({ Type: "UnsubscribeConfirmation" });
+
+    expect(await transport().parseWebhook(JSON.parse(rawBody), rawBody)).toEqual([]);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([certUrl]);
+  });
+
+  it("rejects a message type SNS doesn't send", async () => {
+    expect(await transport().verifyWebhook(snsBody({ Type: "Something", Message: "x" }))).toBe(
+      false,
+    );
+  });
+
+  it("ignores an SNS message that isn't SES JSON", async () => {
+    const rawBody = snsBody({ Message: "hello" });
+
+    expect(await transport().verifyWebhook(rawBody)).toBe(true);
+    expect(await transport().parseWebhook(JSON.parse(rawBody), rawBody)).toEqual([]);
+  });
+
+  it("keeps at most ten certificates, dropping the oldest", async () => {
+    fetchMock.mockImplementation(async () => new Response(publicPem));
+    const ses = transport();
+    const urls = Array.from(
+      { length: 11 },
+      (_, i) => `https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-${i}.pem`,
+    );
+    for (const url of urls) {
+      await ses.verifyWebhook(snsBody({ Message: "x", SigningCertURL: url }));
+    }
+    await ses.verifyWebhook(snsBody({ Message: "x", SigningCertURL: urls[10]! }));
+    expect(fetchMock).toHaveBeenCalledTimes(11);
+
+    await ses.verifyWebhook(snsBody({ Message: "x", SigningCertURL: urls[0]! }));
+    expect(fetchMock).toHaveBeenCalledTimes(12);
+  });
+
+  it("throws when the confirmation fails, so the route answers 500 and SNS sends it again", async () => {
+    const rawBody = confirmation();
+    const ses = transport();
+    await ses.verifyWebhook(rawBody); // the certificate is cached now
+    fetchMock.mockResolvedValueOnce(new Response("error", { status: 500 }));
+
+    await expect(ses.parseWebhook(JSON.parse(rawBody), rawBody)).rejects.toThrow(/HTTP 500/);
+  });
+});
