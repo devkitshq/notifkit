@@ -29,7 +29,7 @@ With the default `console` provider the notification is printed in the server te
 ```
 create-notifkit [name] [options]
 
-  -p, --provider <id>  console (default), resend, smtp, twilio, fcm, slack, discord, telegram, whatsapp.
+  -p, --provider <id>  console (default), resend, smtp, ses, twilio, fcm, slack, discord, telegram, whatsapp.
                        Comma-separate or repeat it for several, e.g. -p resend,twilio
       --no-install     Skip installing dependencies
       --force          Write into a non-empty directory

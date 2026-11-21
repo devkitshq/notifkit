@@ -9,7 +9,16 @@
 export const NOTIFKIT_VERSION = "0.1.15";
 
 export type ProviderId =
-  "console" | "resend" | "smtp" | "twilio" | "fcm" | "slack" | "discord" | "telegram" | "whatsapp";
+  | "console"
+  | "resend"
+  | "smtp"
+  | "ses"
+  | "twilio"
+  | "fcm"
+  | "slack"
+  | "discord"
+  | "telegram"
+  | "whatsapp";
 
 export interface EnvVar {
   name: string;
@@ -86,6 +95,41 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
         comment: "Your server as a URL, e.g. smtps://user:pass@smtp.example.com",
       },
       { name: "SMTP_FROM", comment: "Sender address your server may send as" },
+    ],
+    target: { env: "TO_EMAIL", comment: "Where `send` delivers the test email" },
+    content: `{ subject: "Welcome, {{name}}!", text: "Your notifkit app is working." }`,
+  },
+  ses: {
+    id: "ses",
+    label: "Amazon SES (email)",
+    packageName: "@notifkit/provider-ses",
+    version: "0.1.1",
+    className: "SesTransport",
+    channel: "email",
+    // The AWS SDK reads AWS_REGION and the access key from the environment itself.
+    options: `{
+      from: process.env.SES_FROM!,
+      limits: { limit: Number(process.env.SES_MAX_SEND_RATE || 1), windowSeconds: 1 },
+      snsTopicArns: process.env.SES_SNS_TOPIC_ARN ? [process.env.SES_SNS_TOPIC_ARN] : [],
+    }`,
+    env: [
+      { name: "AWS_REGION", comment: "Region of your SES account, e.g. eu-west-1" },
+      {
+        name: "AWS_ACCESS_KEY_ID",
+        comment: "Access key allowed ses:SendEmail. Leave both blank to use your AWS profile",
+      },
+      { name: "AWS_SECRET_ACCESS_KEY", comment: "Secret of that access key" },
+      { name: "SES_FROM", comment: "Sender address on an identity verified in SES" },
+      {
+        name: "SES_MAX_SEND_RATE",
+        comment:
+          "Your account's maximum send rate per second, from the SES console (1 in the sandbox)",
+      },
+      {
+        name: "SES_SNS_TOPIC_ARN",
+        comment:
+          "Optional: SNS topic for bounces and complaints, see the @notifkit/provider-ses README",
+      },
     ],
     target: { env: "TO_EMAIL", comment: "Where `send` delivers the test email" },
     content: `{ subject: "Welcome, {{name}}!", text: "Your notifkit app is working." }`,
