@@ -3,17 +3,6 @@
 AWS SES email transport for [notifkit](https://github.com/devkitshq/notifkit),
 built on the AWS SDK's SESv2 client.
 
-> **Sending only, for now.** This package doesn't read SES bounce and
-> complaint notifications yet, so notifkit doesn't suppress an address that
-> bounced and will keep mailing it. SES reviews, and can pause, an account
-> whose bounce or complaint rate climbs. Until bounce handling lands, keep the
-> SES account-level suppression list on for bounces and complaints, so SES
-> drops mail to those addresses itself:
->
-> ```bash
-> aws sesv2 put-account-suppression-attributes --suppressed-reasons BOUNCE COMPLAINT
-> ```
-
 ```bash
 npm install @notifkit/provider-ses
 ```
@@ -65,6 +54,7 @@ await notifkit.addContact("usr_123", { channel: "email", target: "alice@example.
 | `configurationSetName` | SES configuration set to send with, such as one that publishes events.                                                                                               |
 | `logger`               | Optional notifkit logger.                                                                                                                                            |
 | `limits`               | Required. Send rate, `{ limit, windowSeconds }`, set to your account's maximum send rate, e.g. `{ limit: 14, windowSeconds: 1 }`. See above for where to find it.    |
+| `snsTopicArns`         | The SNS topics bounces and complaints may come from. Without it, the webhook rejects everything. See [Bounces and complaints](#bounces-and-complaints).              |
 
 ## Templates
 
@@ -94,8 +84,55 @@ notifkit's send timeout, 10 seconds by default.
 SES has no idempotency key. If SES accepts a message but its reply is lost,
 for example to a timeout, the retry sends the message a second time.
 
-This package doesn't read SES bounce and complaint notifications yet. See the
-note at the top.
+## Bounces and complaints
+
+SES reports bounces and complaints through Amazon SNS. The transport mounts
+`POST /webhooks/ses`, checks the SNS signature on each message, and turns hard
+bounces and complaints into suppressions.
+
+1. Create an SNS topic.
+2. Pass its ARN in `snsTopicArns` and start notifkit:
+
+   ```ts
+   const ses = new SesTransport({
+     region: "eu-west-1",
+     from: "Acme <notifications@example.com>",
+     limits: { limit: 14, windowSeconds: 1 },
+     snsTopicArns: ["arn:aws:sns:eu-west-1:123456789012:ses-feedback"],
+   });
+   ```
+
+3. Subscribe your notifkit API to the topic over HTTPS, at
+   `https://notifkit.example.com/webhooks/ses`. SNS sends a subscription
+   confirmation, and the transport confirms it. Leave raw message delivery
+   off. A raw message has no signature, so it's rejected.
+4. Send SES feedback to the topic. Either set it as the bounce and complaint
+   notification topic of your sending identity, or add an SNS event
+   destination to a configuration set and send with `configurationSetName`.
+
+How SES feedback maps to notifkit:
+
+| SES                                  | notifkit                                            |
+| ------------------------------------ | --------------------------------------------------- |
+| `Permanent` bounce                   | `bounced`, hard, and the address is suppressed      |
+| `Transient` or `Undetermined` bounce | `bounced`, soft, and the address keeps getting mail |
+| Complaint                            | `complained`, and the address is suppressed         |
+| Complaint with feedback `not-spam`   | ignored, since the report says the mail was wanted  |
+| Delivery, and anything else          | ignored                                             |
+
+A valid SNS signature only proves that SNS sent the message, not whose topic
+it came from. Anyone can create a topic and subscribe your endpoint to it, so
+a message from a topic that isn't in `snsTopicArns` is rejected, along with
+its subscription confirmation. The signing certificate is fetched only from
+SNS's own HTTPS endpoints, and kept for later messages.
+
+The SES account-level suppression list is still worth turning on as a
+backstop. SES then drops mail to those addresses itself, even if a
+notification never reaches notifkit:
+
+```bash
+aws sesv2 put-account-suppression-attributes --suppressed-reasons BOUNCE COMPLAINT
+```
 
 ## Shutting down
 
