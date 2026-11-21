@@ -71,6 +71,13 @@
       "when": 1790900000000,
       "tag": "0009_retention_time_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795204170291,
+      "tag": "0010_tranquil_wind_dancer",
+      "breakpoints": true
     }
   ]
 }

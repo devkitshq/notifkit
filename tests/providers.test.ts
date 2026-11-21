@@ -1597,6 +1597,257 @@ describe("DiscordTransport (Discord Provider)", () => {
   });
 });
 
+// ─── Teams ───────────────────────────────────────────────────────────────────
+
+import { TeamsTransport } from "../packages/provider-teams/src/index.js";
+
+const TEAMS_WEBHOOK_URL =
+  "https://prod-12.westus.logic.azure.com/workflows/abc/triggers/manual/paths/invoke?api-version=1&sig=xyz";
+const TEAMS_POWERPLATFORM_URL =
+  "https://default123.34.environment.api.powerplatform.com/powerautomate/automations/direct/workflows/abc/triggers/manual/paths/invoke?api-version=1";
+
+/**
+ * Stubs `fetch` with a webhook Response double. Workflows answers success
+ * with 202 and no body, and failure with the HTTP status, so both readers
+ * are stubbed here.
+ */
+function stubTeams(body: unknown, status = 202) {
+  const fn = vi.fn().mockResolvedValue({
+    status,
+    ok: status >= 200 && status < 300,
+    json: async () => body,
+    text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+  });
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+/** The JSON payload posted to the webhook on the Nth call. */
+function teamsBody(fn: ReturnType<typeof stubTeams>, n = 0) {
+  return JSON.parse((fn.mock.calls[n]![1] as RequestInit).body as string);
+}
+
+function teamsTask(overrides: Record<string, unknown> = {}): any {
+  return {
+    taskId: "task-uuid-teams-1",
+    destination: TEAMS_WEBHOOK_URL,
+    renderedContent: { content: { body: "Build finished" } },
+    ...overrides,
+  };
+}
+
+describe("TeamsTransport (Teams Provider)", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as any;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("registers against the teams channel", () => {
+    expect(new TeamsTransport().channel).toBe("teams");
+  });
+
+  it("posts an Adaptive Card with subject and body blocks and returns no message id", async () => {
+    const fetchMock = stubTeams("");
+
+    const result = await new TeamsTransport().send(
+      teamsTask({ renderedContent: { content: { subject: "Deploy", body: "shipped" } } }),
+    );
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(TEAMS_WEBHOOK_URL);
+    expect(teamsBody(fetchMock)).toEqual({
+      type: "message",
+      attachments: [
+        {
+          contentType: "application/vnd.microsoft.card.adaptive",
+          content: {
+            type: "AdaptiveCard",
+            version: "1.4",
+            body: [
+              { type: "TextBlock", text: "Deploy", weight: "Bolder", wrap: true },
+              { type: "TextBlock", text: "shipped", wrap: true },
+            ],
+          },
+        },
+      ],
+    });
+    // Workflows answers 202 with no message id.
+    expect(result).toEqual({ success: true, providerMessageId: "" });
+  });
+
+  it("accepts the Power Platform host family too", async () => {
+    const fetchMock = stubTeams("");
+
+    const result = await new TeamsTransport().send(
+      teamsTask({ destination: TEAMS_POWERPLATFORM_URL }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(TEAMS_POWERPLATFORM_URL);
+    expect(result).toEqual({ success: true, providerMessageId: "" });
+  });
+
+  it("omits the subject block when the template has no subject", async () => {
+    const fetchMock = stubTeams("");
+
+    await new TeamsTransport().send(teamsTask());
+
+    expect(teamsBody(fetchMock).attachments[0].content.body).toEqual([
+      { type: "TextBlock", text: "Build finished", wrap: true },
+    ]);
+  });
+
+  it("prefers content.text over content.body", async () => {
+    const fetchMock = stubTeams("");
+
+    await new TeamsTransport().send(
+      teamsTask({ renderedContent: { content: { text: "from text", body: "from body" } } }),
+    );
+
+    expect(teamsBody(fetchMock).attachments[0].content.body).toEqual([
+      { type: "TextBlock", text: "from text", wrap: true },
+    ]);
+  });
+
+  it("sends a template's own card instead of the default subject/body card", async () => {
+    const fetchMock = stubTeams("");
+    const card = {
+      type: "AdaptiveCard",
+      version: "1.4",
+      body: [{ type: "TextBlock", text: "Custom card", wrap: true }],
+    };
+
+    await new TeamsTransport().send(
+      teamsTask({ renderedContent: { content: { subject: "Deploy", body: "shipped", card } } }),
+    );
+
+    expect(teamsBody(fetchMock).attachments[0].content).toEqual(card);
+  });
+
+  it("falls back to the default card when the card override is not an object", async () => {
+    const fetchMock = stubTeams("");
+
+    await new TeamsTransport().send(
+      teamsTask({ renderedContent: { content: { body: "hi", card: "nope" } } }),
+    );
+
+    expect(teamsBody(fetchMock).attachments[0].content).toEqual({
+      type: "AdaptiveCard",
+      version: "1.4",
+      body: [{ type: "TextBlock", text: "hi", wrap: true }],
+    });
+  });
+
+  it("fails without reaching Teams when the task carries no destination", async () => {
+    const fetchMock = stubTeams("");
+
+    const result = await new TeamsTransport().send(teamsTask({ destination: undefined }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No destination (Teams webhook URL) on task",
+    });
+  });
+
+  it.each([
+    ["http://169.254.169.254/latest/meta-data"],
+    ["http://localhost:6379/"],
+    ["https://attacker.example.com/workflows/abc"],
+    ["https://logic.azure.com/workflows/abc"],
+    ["https://webhook.office.com/webhookb2/abc"],
+  ])(
+    "rejects invalid webhook URL %s without dispatching fetch (SSRF protection)",
+    async (badUrl) => {
+      const fetchMock = stubTeams("");
+
+      const result = await new TeamsTransport().send(teamsTask({ destination: badUrl }));
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result.success).toBe(false);
+      expect(result.invalidToken).toBe(true);
+      expect(result.error).toContain("Invalid Teams webhook URL");
+    },
+  );
+
+  it.each([
+    [404, true, false],
+    [400, false, false],
+    [403, false, false],
+    [500, false, undefined],
+    [429, false, undefined],
+  ])(
+    "classifies a %i response as dead=%s, retryable=%s",
+    async (status, invalidToken, retryable) => {
+      stubTeams("gone or busy", status);
+
+      const result = await new TeamsTransport().send(teamsTask());
+
+      expect(result).toEqual({
+        success: false,
+        invalidToken,
+        ...(retryable === false ? { retryable } : {}),
+        error: `Teams webhook error ${status}: gone or busy`,
+      });
+    },
+  );
+
+  it("logs a rejected send", async () => {
+    const log = logger();
+    stubTeams("missing permissions", 403);
+
+    await new TeamsTransport({ logger: log }).send(teamsTask());
+
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-teams-1", status: 403, errorBody: "missing permissions" },
+      "Teams send failed",
+    );
+  });
+
+  it("reports a malformed webhook URL without marking the target dead", async () => {
+    const log = logger();
+    const fetchMock = stubTeams("");
+
+    const result = await new TeamsTransport({ logger: log }).send(
+      teamsTask({ destination: "not-a-url" }),
+    );
+
+    // `new URL()` throws before any request is attempted.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: "task-uuid-teams-1" }),
+      "Teams unexpected error",
+    );
+  });
+
+  it("reports a transport-level failure", async () => {
+    const log = logger();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("socket hang up")));
+
+    const result = await new TeamsTransport({ logger: log }).send(teamsTask());
+
+    expect(result).toEqual({ success: false, error: "socket hang up" });
+    expect(log.error).toHaveBeenCalledWith(
+      { taskId: "task-uuid-teams-1", error: "socket hang up" },
+      "Teams unexpected error",
+    );
+  });
+
+  it("logs an accepted send", async () => {
+    const log = logger();
+    stubTeams("");
+
+    await new TeamsTransport({ logger: log }).send(teamsTask());
+
+    expect(log.debug).toHaveBeenCalledWith(
+      { taskId: "task-uuid-teams-1", providerMessageId: "" },
+      "Teams message sent",
+    );
+  });
+});
+
 // ─── Slack ───────────────────────────────────────────────────────────────────
 
 import { SlackTransport } from "../packages/provider-slack/src/index.js";
