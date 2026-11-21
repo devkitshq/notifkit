@@ -1,0 +1,40 @@
+{
+  "author": "devkitshq",
+  "bugs": {
+    "url": "https://github.com/devkitshq/notifkit/issues"
+  },
+  "description": "Postmark email transport for notifkit, with basic-auth-verified bounce webhooks.",
+  "devDependencies": {
+    "notifkit": "file:../../",
+    "typescript": "^5.8.3"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "homepage": "https://notifkit.dev",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "name": "@notifkit/provider-postmark",
+  "peerDependencies": {
+    "notifkit": "^0.1.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "directory": "packages/provider-postmark",
+    "type": "git",
+    "url": "git+https://github.com/devkitshq/notifkit.git"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "module",
+  "types": "dist/index.d.ts",
+  "version": "0.1.6"
+}

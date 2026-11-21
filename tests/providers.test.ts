@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
 import { ResendTransport } from "../packages/provider-resend/src/index.js";
+import { PostmarkTransport } from "../packages/provider-postmark/src/index.js";
 import { FcmTransport } from "../packages/provider-fcm/src/index.js";
 import { ConsoleTransport } from "../packages/provider-console/src/index.js";
 import type * as ResendModule from "resend";
@@ -2899,5 +2900,339 @@ describe("SesTransport (AWS SES Provider)", () => {
 
     expect(ownDestroy).toHaveBeenCalledOnce();
     expect(passedDestroy).not.toHaveBeenCalled();
+  });
+});
+
+describe("PostmarkTransport (Email Provider)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** Stubs `fetch` with a real Response carrying the given status and body. */
+  function stubPostmark(status: number, body = "", headers: Record<string, string> = {}) {
+    const fn = vi.fn().mockResolvedValue(new Response(body, { status, headers }));
+    vi.stubGlobal("fetch", fn);
+    return fn;
+  }
+
+  function postmarkTask(overrides: Record<string, unknown> = {}): any {
+    return {
+      taskId: "task-uuid-pm-1",
+      destination: "recipient@example.com",
+      renderedContent: {
+        content: {
+          subject: "Welcome Alice",
+          body: "Hello Alice",
+          htmlBody: "<h1>Hello Alice</h1>",
+        },
+      },
+      ...overrides,
+    };
+  }
+
+  const transport = (overrides: Record<string, unknown> = {}) =>
+    new PostmarkTransport({
+      serverToken: "test-server-token",
+      from: "onboarding@corp.com",
+      webhookUsername: "hook-user",
+      webhookPassword: "hook-pass",
+      ...overrides,
+    });
+
+  /** Basic-auth header for the configured webhook credentials. */
+  function basicAuthHeader(username = "hook-user", password = "hook-pass") {
+    return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
+  }
+
+  function webhookHeaders(auth = basicAuthHeader()): Record<string, string> {
+    return { Authorization: auth };
+  }
+
+  it("registers against the email channel with a webhook path", () => {
+    const t = transport();
+    expect(t.channel).toBe("email");
+    expect(t.webhookPath).toBe("/webhooks/postmark");
+    expect(typeof t.verifyWebhook).toBe("function");
+    expect(typeof t.parseWebhook).toBe("function");
+  });
+
+  it("sends an email successfully via the Email API", async () => {
+    const fetchMock = stubPostmark(
+      200,
+      JSON.stringify({
+        To: "recipient@example.com",
+        SubmittedAt: "2026-11-20T00:00:00.0000000-05:00",
+        MessageID: "pm-msg-123",
+        ErrorCode: 0,
+        Message: "OK",
+      }),
+    );
+
+    const result = await transport().send(postmarkTask());
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe("https://api.postmarkapp.com/email");
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-Postmark-Server-Token": "test-server-token",
+    });
+    expect(JSON.parse(init.body as string)).toEqual({
+      From: "onboarding@corp.com",
+      To: "recipient@example.com",
+      Subject: "Welcome Alice",
+      TextBody: "Hello Alice",
+      HtmlBody: "<h1>Hello Alice</h1>",
+    });
+    expect(result).toEqual({ success: true, providerMessageId: "pm-msg-123" });
+  });
+
+  it("builds an HTML part from the text when the template has no html", async () => {
+    const fetchMock = stubPostmark(
+      200,
+      JSON.stringify({ MessageID: "pm-msg-124", ErrorCode: 0, Message: "OK" }),
+    );
+
+    await transport().send(
+      postmarkTask({ renderedContent: { content: { subject: "Hi", body: "a <b> test" } } }),
+    );
+
+    const sent = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    expect(sent.TextBody).toBe("a <b> test");
+    expect(sent.HtmlBody).toBe("<p>a &lt;b&gt; test</p>");
+  });
+
+  it("prefers a from and replyTo named by the template", async () => {
+    const fetchMock = stubPostmark(
+      200,
+      JSON.stringify({ MessageID: "pm-msg-125", ErrorCode: 0, Message: "OK" }),
+    );
+
+    await transport().send(
+      postmarkTask({
+        renderedContent: {
+          content: {
+            subject: "S",
+            body: "B",
+            from: "marketing@corp.com",
+            replyTo: "hello@corp.com",
+          },
+        },
+      }),
+    );
+
+    const sent = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    expect(sent.From).toBe("marketing@corp.com");
+    expect(sent.ReplyTo).toBe("hello@corp.com");
+  });
+
+  it("passes List-Unsubscribe headers through as Postmark Headers", async () => {
+    const fetchMock = stubPostmark(
+      200,
+      JSON.stringify({ MessageID: "pm-msg-126", ErrorCode: 0, Message: "OK" }),
+    );
+
+    await transport().send(
+      postmarkTask({
+        deliveryOptions: {
+          headers: { "List-Unsubscribe": "<https://example.com/unsub>" },
+        },
+      }),
+    );
+
+    const sent = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    expect(sent.Headers).toEqual([
+      { Name: "List-Unsubscribe", Value: "<https://example.com/unsub>" },
+    ]);
+  });
+
+  it("returns a clear error without calling the API when the destination is missing", async () => {
+    const fetchMock = stubPostmark(200, "");
+
+    const result = await transport().send(postmarkTask({ destination: undefined }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No destination (recipient address) on task",
+    });
+  });
+
+  it("marks an inactive recipient (ErrorCode 406) as a dead destination", async () => {
+    stubPostmark(
+      422,
+      JSON.stringify({
+        ErrorCode: 406,
+        Message: "You tried to send to recipient(s) that have been marked as inactive.",
+      }),
+    );
+
+    const result = await transport().send(postmarkTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: true,
+      retryable: false,
+      error: "You tried to send to recipient(s) that have been marked as inactive.",
+    });
+  });
+
+  it("marks another 4xx refusal as permanent, not a dead destination", async () => {
+    stubPostmark(422, JSON.stringify({ ErrorCode: 300, Message: "Invalid email request." }));
+
+    const result = await transport().send(postmarkTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: false,
+      retryable: false,
+      error: "Invalid email request.",
+    });
+  });
+
+  it.each([500, 429])("retries a transient %s failure", async (status) => {
+    stubPostmark(status, JSON.stringify({ ErrorCode: 500, Message: "boom" }));
+
+    const result = await transport().send(postmarkTask());
+
+    expect(result).toEqual({ success: false, invalidToken: false, error: "boom" });
+    expect(result.retryable).toBeUndefined();
+  });
+
+  it("retries a network error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("socket hang up")));
+
+    const result = await transport().send(postmarkTask());
+
+    expect(result).toEqual({ success: false, error: "socket hang up" });
+  });
+
+  it("accepts a webhook with valid basic-auth credentials", () => {
+    expect(transport().verifyWebhook("{}", webhookHeaders())).toBe(true);
+  });
+
+  it("rejects a webhook with the wrong password", () => {
+    expect(
+      transport().verifyWebhook("{}", webhookHeaders(basicAuthHeader("hook-user", "wrong"))),
+    ).toBe(false);
+  });
+
+  it("rejects a webhook with no credentials at all", () => {
+    expect(transport().verifyWebhook("{}", {})).toBe(false);
+  });
+
+  it("rejects everything when no webhook credentials are configured", () => {
+    const t = transport({ webhookUsername: undefined, webhookPassword: undefined });
+    expect(t.verifyWebhook("{}", webhookHeaders())).toBe(false);
+  });
+
+  it("maps a HardBounce to a hard bounce", async () => {
+    const body = {
+      ID: 42,
+      Type: "HardBounce",
+      TypeCode: 1,
+      Name: "Hard bounce",
+      MessageID: "pm-msg-1",
+      Description: "The server was unable to deliver your message.",
+      Email: "a@example.com",
+      BouncedAt: "2014-08-01T13:28:10.2735393-04:00",
+    };
+
+    const events = await transport().parseWebhook(body, JSON.stringify(body), webhookHeaders());
+
+    expect(events).toEqual([
+      {
+        providerMessageId: "pm-msg-1",
+        status: "bounced",
+        timestamp: new Date("2014-08-01T13:28:10.2735393-04:00"),
+        recipient: "a@example.com",
+        bounceType: "hard",
+        metadata: { description: "The server was unable to deliver your message." },
+      },
+    ]);
+  });
+
+  it.each(["SoftBounce", "Transient"])("maps a %s to a soft bounce", async (type) => {
+    const body = {
+      Type: type,
+      MessageID: "pm-msg-2",
+      Email: "a@example.com",
+      BouncedAt: "2014-08-01T13:28:10.2735393-04:00",
+    };
+
+    const events = await transport().parseWebhook(body, JSON.stringify(body), webhookHeaders());
+
+    expect(events).toEqual([
+      {
+        providerMessageId: "pm-msg-2",
+        status: "bounced",
+        timestamp: new Date("2014-08-01T13:28:10.2735393-04:00"),
+        recipient: "a@example.com",
+        bounceType: "soft",
+      },
+    ]);
+  });
+
+  it("maps a SpamComplaint to a complaint", async () => {
+    const body = {
+      Type: "SpamComplaint",
+      MessageID: "pm-msg-3",
+      Email: "a@example.com",
+      BouncedAt: "2014-08-01T13:28:10.2735393-04:00",
+    };
+
+    const events = await transport().parseWebhook(body, JSON.stringify(body), webhookHeaders());
+
+    expect(events).toEqual([
+      {
+        providerMessageId: "pm-msg-3",
+        status: "complained",
+        timestamp: new Date("2014-08-01T13:28:10.2735393-04:00"),
+        recipient: "a@example.com",
+      },
+    ]);
+  });
+
+  it("ignores an untracked event type", async () => {
+    const body = {
+      Type: "Delivery",
+      MessageID: "pm-msg-4",
+      Email: "a@example.com",
+    };
+
+    const events = await transport().parseWebhook(body, JSON.stringify(body), webhookHeaders());
+
+    expect(events).toEqual([]);
+  });
+
+  it("does not trust a well-formed body that fails basic auth", async () => {
+    const body = {
+      Type: "HardBounce",
+      MessageID: "pm-msg-1",
+      Email: "a@example.com",
+      BouncedAt: "2014-08-01T13:28:10.2735393-04:00",
+    };
+
+    const events = await transport().parseWebhook(
+      body,
+      JSON.stringify(body),
+      webhookHeaders(basicAuthHeader("hook-user", "wrong")),
+    );
+
+    expect(events).toEqual([]);
+  });
+
+  it("drops a bounce event with no MessageID", async () => {
+    const body = {
+      Type: "HardBounce",
+      Email: "a@example.com",
+      BouncedAt: "2014-08-01T13:28:10.2735393-04:00",
+    };
+
+    const events = await transport().parseWebhook(body, JSON.stringify(body), webhookHeaders());
+
+    expect(events).toEqual([]);
   });
 });
