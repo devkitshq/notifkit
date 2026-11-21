@@ -2623,6 +2623,7 @@ describe("SmtpTransport (SMTP Provider)", () => {
 import { Readable } from "node:stream";
 import { SESv2Client } from "@aws-sdk/client-sesv2";
 import { SesTransport } from "../packages/provider-ses/src/index.js";
+import { MailgunTransport } from "../packages/provider-mailgun/src/index.js";
 
 describe("SesTransport (AWS SES Provider)", () => {
   const sesTask = (content: Record<string, unknown> = {}, overrides = {}): any => ({
@@ -2899,5 +2900,299 @@ describe("SesTransport (AWS SES Provider)", () => {
 
     expect(ownDestroy).toHaveBeenCalledOnce();
     expect(passedDestroy).not.toHaveBeenCalled();
+  });
+});
+describe("MailgunTransport (Email Provider)", () => {
+  const webhookSigningKey = "test-signing-key";
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** Stubs `fetch` with a real Response carrying the given status and body. */
+  function stubMailgun(status: number, body = "", headers: Record<string, string> = {}) {
+    const fn = vi.fn().mockResolvedValue(new Response(body, { status, headers }));
+    vi.stubGlobal("fetch", fn);
+    return fn;
+  }
+
+  function mailgunTask(overrides: Record<string, unknown> = {}): any {
+    return {
+      taskId: "task-uuid-mg-1",
+      destination: "recipient@example.com",
+      renderedContent: {
+        content: {
+          subject: "Welcome Alice",
+          body: "Hello Alice",
+          htmlBody: "<h1>Hello Alice</h1>",
+        },
+      },
+      ...overrides,
+    };
+  }
+
+  const transport = (overrides: Record<string, unknown> = {}) =>
+    new MailgunTransport({
+      apiKey: "test-api-key",
+      domain: "sandbox123.mailgun.org",
+      from: "onboarding@corp.com",
+      webhookSigningKey,
+      ...overrides,
+    });
+
+  /** Form fields the transport posted, as a plain object. */
+  function postedForm(fetchMock: ReturnType<typeof stubMailgun>): Record<string, string> {
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    return Object.fromEntries(new URLSearchParams(String(init.body)));
+  }
+
+  /**
+   * Produce a body + raw body the verifier will accept, the way Mailgun
+   * sends them: an HMAC-SHA256 hex signature over `<timestamp><token>`,
+   * under `signature` in the body.
+   */
+  function signEvent(eventData: Record<string, unknown>) {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const token = "test-token-abc";
+    const signature = createHmac("sha256", webhookSigningKey)
+      .update(`${timestamp}${token}`)
+      .digest("hex");
+
+    const payload = {
+      signature: { timestamp, token, signature },
+      "event-data": eventData,
+    };
+    return { payload, rawBody: JSON.stringify(payload) };
+  }
+
+  it("registers against the email channel with a webhook path", () => {
+    const t = transport();
+    expect(t.channel).toBe("email");
+    expect(t.webhookPath).toBe("/webhooks/mailgun");
+    expect(typeof t.verifyWebhook).toBe("function");
+    expect(typeof t.parseWebhook).toBe("function");
+  });
+
+  it("sends an email successfully via the Messages API", async () => {
+    const fetchMock = stubMailgun(
+      200,
+      JSON.stringify({ id: "<abc123@sandbox123.mailgun.org>", message: "Queued. Thank you." }),
+    );
+
+    const result = await transport().send(mailgunTask());
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(
+      "https://api.mailgun.net/v3/sandbox123.mailgun.org/messages",
+    );
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({
+      Authorization: `Basic ${Buffer.from("api:test-api-key").toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    });
+    expect(postedForm(fetchMock)).toEqual({
+      from: "onboarding@corp.com",
+      to: "recipient@example.com",
+      subject: "Welcome Alice",
+      text: "Hello Alice",
+      html: "<h1>Hello Alice</h1>",
+    });
+    expect(result).toEqual({
+      success: true,
+      providerMessageId: "<abc123@sandbox123.mailgun.org>",
+    });
+  });
+
+  it("uses the EU base URL when configured", async () => {
+    const fetchMock = stubMailgun(200, JSON.stringify({ id: "<eu1@mg.example.com>" }));
+
+    await transport({ baseUrl: "https://api.eu.mailgun.net" }).send(mailgunTask());
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe(
+      "https://api.eu.mailgun.net/v3/sandbox123.mailgun.org/messages",
+    );
+  });
+
+  it("builds an HTML part from the text when the template has no html", async () => {
+    const fetchMock = stubMailgun(200, JSON.stringify({ id: "<abc124@mg.example.com>" }));
+
+    await transport().send(
+      mailgunTask({ renderedContent: { content: { subject: "Hi", body: "a <b> test" } } }),
+    );
+
+    const form = postedForm(fetchMock);
+    expect(form.text).toBe("a <b> test");
+    expect(form.html).toBe("<p>a &lt;b&gt; test</p>");
+  });
+
+  it("prefers a from and replyTo named by the template", async () => {
+    const fetchMock = stubMailgun(200, JSON.stringify({ id: "<abc125@mg.example.com>" }));
+
+    await transport().send(
+      mailgunTask({
+        renderedContent: {
+          content: {
+            subject: "S",
+            body: "B",
+            from: "marketing@corp.com",
+            replyTo: "hello@corp.com",
+          },
+        },
+      }),
+    );
+
+    const form = postedForm(fetchMock);
+    expect(form.from).toBe("marketing@corp.com");
+    expect(form["h:Reply-To"]).toBe("hello@corp.com");
+  });
+
+  it("returns a clear error without calling the API when the destination is missing", async () => {
+    const fetchMock = stubMailgun(200, "");
+
+    const result = await transport().send(mailgunTask({ destination: undefined }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No destination (recipient address) on task",
+    });
+  });
+
+  it("marks a bad request as a permanent failure", async () => {
+    stubMailgun(400, JSON.stringify({ message: "'to' parameter is not a valid address." }));
+
+    const result = await transport().send(mailgunTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: false,
+      retryable: false,
+      error: "'to' parameter is not a valid address.",
+    });
+  });
+
+  it.each([500, 429])("retries a transient %s failure", async (status) => {
+    stubMailgun(status, JSON.stringify({ message: "boom" }));
+
+    const result = await transport().send(mailgunTask());
+
+    expect(result).toEqual({ success: false, invalidToken: false, error: "boom" });
+    expect(result.retryable).toBeUndefined();
+  });
+
+  it("retries a network error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("socket hang up")));
+
+    const result = await transport().send(mailgunTask());
+
+    expect(result).toEqual({ success: false, error: "socket hang up" });
+  });
+
+  it("accepts a correctly signed webhook payload", () => {
+    const { rawBody } = signEvent({ event: "delivered" });
+
+    expect(transport().verifyWebhook(rawBody, {})).toBe(true);
+  });
+
+  it("rejects a payload whose token was tampered with after signing", () => {
+    const { payload } = signEvent({ event: "delivered" });
+    // The HMAC covers timestamp + token, so a changed token invalidates it.
+    const forged = JSON.stringify({
+      ...payload,
+      signature: { ...payload.signature, token: "other-token" },
+    });
+
+    expect(transport().verifyWebhook(forged, {})).toBe(false);
+  });
+
+  it("rejects everything when no webhookSigningKey is configured", () => {
+    const { rawBody } = signEvent({ event: "delivered" });
+
+    expect(transport({ webhookSigningKey: undefined }).verifyWebhook(rawBody, {})).toBe(false);
+  });
+
+  it("rejects a webhook missing the signature fields", () => {
+    const rawBody = JSON.stringify({ "event-data": { event: "delivered" } });
+
+    expect(transport().verifyWebhook(rawBody, {})).toBe(false);
+  });
+
+  it.each([
+    ["failed", "permanent", "bounced", "hard"],
+    ["failed", "temporary", "bounced", "soft"],
+    ["complained", undefined, "complained", undefined],
+  ])("maps a %s event (%s) to %s (%s)", async (event, severity, status, bounceType) => {
+    const eventData = {
+      event,
+      ...(severity ? { severity } : {}),
+      recipient: "recipient@example.com",
+      message: { headers: { "message-id": "<abc123@sandbox123.mailgun.org>" } },
+      timestamp: 1700000000,
+      ...(event === "failed"
+        ? { "delivery-status": { description: "550 mailbox unavailable" } }
+        : {}),
+    };
+    const { payload, rawBody } = signEvent(eventData);
+
+    const events = await transport().parseWebhook(payload, rawBody, {});
+
+    expect(events).toEqual([
+      {
+        providerMessageId: "<abc123@sandbox123.mailgun.org>",
+        status,
+        timestamp: new Date(1700000000 * 1000),
+        recipient: "recipient@example.com",
+        ...(bounceType ? { bounceType } : {}),
+        ...(event === "failed"
+          ? {
+              metadata: {
+                severity,
+                bounceMessage: "550 mailbox unavailable",
+              },
+            }
+          : {}),
+      },
+    ]);
+  });
+
+  it("ignores untracked event types", async () => {
+    const { payload, rawBody } = signEvent({
+      event: "delivered",
+      recipient: "a@example.com",
+      message: { headers: { "message-id": "<d1@mg.example.com>" } },
+      timestamp: 1,
+    });
+
+    await expect(transport().parseWebhook(payload, rawBody, {})).resolves.toEqual([]);
+  });
+
+  it("ignores events without a message id", async () => {
+    const { payload, rawBody } = signEvent({
+      event: "failed",
+      severity: "permanent",
+      recipient: "a@example.com",
+      message: { headers: {} },
+      timestamp: 1,
+    });
+
+    await expect(transport().parseWebhook(payload, rawBody, {})).resolves.toEqual([]);
+  });
+
+  it("does not trust a body that fails verification, even if it is well formed", async () => {
+    const { payload, rawBody } = signEvent({
+      event: "failed",
+      severity: "permanent",
+      recipient: "a@example.com",
+      message: { headers: { "message-id": "<f1@mg.example.com>" } },
+      timestamp: 1,
+    });
+    // Same payload, but the signature in the raw body is a wrong HMAC.
+    const forgedObj = JSON.parse(rawBody) as any;
+    forgedObj.signature.signature = "0".repeat(64);
+
+    await expect(
+      transport().parseWebhook(payload, JSON.stringify(forgedObj), {}),
+    ).resolves.toEqual([]);
   });
 });
