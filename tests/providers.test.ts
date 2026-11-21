@@ -3385,3 +3385,306 @@ describe("SesTransport (SNS webhooks)", () => {
     await expect(ses.parseWebhook(JSON.parse(rawBody), rawBody)).rejects.toThrow(/HTTP 500/);
   });
 });
+
+// ─── Expo Push ───────────────────────────────────────────────────────────────
+
+import { ExpoTransport } from "../packages/provider-expo/src/index.js";
+
+const EXPO_TOKEN = "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]";
+
+/**
+ * Stubs `fetch` with an Expo push API response. A single message gets a
+ * single ticket in `data`; a refused request gets an `errors` array and a
+ * 4xx or 5xx status.
+ */
+function stubExpo(body: unknown, status = 200) {
+  const fn = vi.fn().mockResolvedValue({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+  });
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+/** The request init passed to fetch on the Nth call. */
+function expoInit(fn: ReturnType<typeof stubExpo>, n = 0) {
+  return fn.mock.calls[n]![1] as RequestInit & { headers: Record<string, string> };
+}
+
+function expoTransport(overrides: Record<string, unknown> = {}) {
+  return new ExpoTransport({ ...overrides } as any);
+}
+
+function expoTask(overrides: Record<string, unknown> = {}): any {
+  return {
+    taskId: "task-uuid-expo-1",
+    enrichedEventId: "evt-expo-1",
+    destination: EXPO_TOKEN,
+    renderedContent: { content: { subject: "Order shipped", body: "It arrives Friday" } },
+    ...overrides,
+  };
+}
+
+const expoTicket = (id: string) => ({ data: { status: "ok", id } });
+const expoTicketError = (error: string, message = `${error} message`) => ({
+  data: { status: "error", message, details: { error } },
+});
+
+describe("ExpoTransport", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as any;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("registers against the push channel", () => {
+    expect(expoTransport().channel).toBe("push");
+  });
+
+  it("defaults to Expo's per-project rate and accepts an override", () => {
+    expect(expoTransport().limits).toEqual({ limit: 600, windowSeconds: 1 });
+    expect(expoTransport({ limits: { limit: 10, windowSeconds: 1 } }).limits).toEqual({
+      limit: 10,
+      windowSeconds: 1,
+    });
+  });
+
+  it("posts one message to Expo's send endpoint and returns the ticket id", async () => {
+    const fetchMock = stubExpo(expoTicket("ticket-1"));
+
+    const result = await expoTransport().send(expoTask());
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://exp.host/--/api/v2/push/send");
+    const init = expoInit(fetchMock);
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    });
+    expect(JSON.parse(init.body as string)).toEqual({
+      to: EXPO_TOKEN,
+      title: "Order shipped",
+      body: "It arrives Friday",
+      data: { eventId: "evt-expo-1", taskId: "task-uuid-expo-1" },
+    });
+    expect(result).toEqual({ success: true, providerMessageId: "ticket-1" });
+  });
+
+  it("sends the access token as a bearer token when one is set", async () => {
+    const fetchMock = stubExpo(expoTicket("ticket-2"));
+
+    await expoTransport({ accessToken: "expo-access-token" }).send(expoTask());
+
+    expect(expoInit(fetchMock).headers.Authorization).toBe("Bearer expo-access-token");
+  });
+
+  it("accepts the ExpoPushToken[...] spelling too", async () => {
+    const fetchMock = stubExpo(expoTicket("ticket-3"));
+
+    const result = await expoTransport().send(
+      expoTask({ destination: "ExpoPushToken[yyyyyyyyyyyyyyyyyyyyyy]" }),
+    );
+
+    expect(JSON.parse(expoInit(fetchMock).body as string).to).toBe(
+      "ExpoPushToken[yyyyyyyyyyyyyyyyyyyyyy]",
+    );
+    expect(result.success).toBe(true);
+  });
+
+  it("prefers content.text over content.body and leaves out a missing title", async () => {
+    const fetchMock = stubExpo(expoTicket("ticket-4"));
+
+    await expoTransport().send(
+      expoTask({ renderedContent: { content: { text: "from text", body: "from body" } } }),
+    );
+
+    const sent = JSON.parse(expoInit(fetchMock).body as string);
+    expect(sent.body).toBe("from text");
+    expect(sent).not.toHaveProperty("title");
+  });
+
+  it("fails without calling Expo when the task carries no destination", async () => {
+    const fetchMock = stubExpo(expoTicket("never"));
+
+    const result = await expoTransport().send(expoTask({ destination: undefined }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No destination (Expo push token) on task",
+    });
+  });
+
+  it.each(["fcm-registration-token:APA91b", "ExponentPushToken[]", "exponentpushtoken[abc]"])(
+    "treats %j as a dead token without calling Expo",
+    async (destination) => {
+      const fetchMock = stubExpo(expoTicket("never"));
+
+      const result = await expoTransport().send(expoTask({ destination }));
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ success: false, invalidToken: true, retryable: false });
+    },
+  );
+
+  it("marks a DeviceNotRegistered ticket as a dead token", async () => {
+    const log = logger();
+    stubExpo(
+      expoTicketError("DeviceNotRegistered", "not a registered push notification recipient"),
+    );
+
+    const result = await expoTransport({ logger: log }).send(expoTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: true,
+      retryable: false,
+      error: "not a registered push notification recipient",
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-expo-1", code: "DeviceNotRegistered", invalidToken: true },
+      "Expo push failed",
+    );
+  });
+
+  it.each(["MessageTooBig", "InvalidCredentials", "MismatchSenderId", "InvalidProviderToken"])(
+    "fails a %s ticket without a retry",
+    async (code) => {
+      stubExpo(expoTicketError(code));
+
+      const result = await expoTransport().send(expoTask());
+
+      expect(result).toEqual({
+        success: false,
+        invalidToken: false,
+        retryable: false,
+        error: `${code} message`,
+      });
+    },
+  );
+
+  it("waits out a MessageRateExceeded ticket and retries an unknown ticket error", async () => {
+    stubExpo(expoTicketError("MessageRateExceeded"));
+    expect(await expoTransport().send(expoTask())).toEqual({
+      success: false,
+      invalidToken: false,
+      throttled: true,
+      error: "MessageRateExceeded message",
+    });
+
+    stubExpo({ data: { status: "error" } });
+    expect(await expoTransport().send(expoTask())).toEqual({
+      success: false,
+      invalidToken: false,
+      error: "Expo push error unknown",
+    });
+  });
+
+  it("fails a refused request without a retry and reports Expo's message", async () => {
+    const log = logger();
+    stubExpo({ errors: [{ code: "UNAUTHORIZED", message: "The bearer token is invalid" }] }, 401);
+
+    const result = await expoTransport({ logger: log }).send(expoTask());
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "The bearer token is invalid",
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-expo-1", status: 401, code: "UNAUTHORIZED" },
+      "Expo push request failed",
+    );
+  });
+
+  it.each([408, 500, 503])("retries a request that failed with %i", async (status) => {
+    stubExpo({ errors: [{ code: "INTERNAL_SERVER_ERROR", message: "try again" }] }, status);
+
+    const result = await expoTransport().send(expoTask());
+
+    expect(result).toEqual({ success: false, error: "try again" });
+  });
+
+  it("marks a 429 as throttled, so delivery waits instead of using up a retry", async () => {
+    stubExpo({ errors: [{ code: "TOO_MANY_REQUESTS", message: "slow down" }] }, 429);
+
+    const result = await expoTransport().send(expoTask());
+
+    expect(result).toEqual({ success: false, throttled: true, error: "slow down" });
+  });
+
+  it("reads the status when a gateway answers with something other than JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: async () => {
+          throw new SyntaxError("Unexpected token '<'");
+        },
+      }),
+    );
+
+    expect(await expoTransport().send(expoTask())).toEqual({
+      success: false,
+      error: "Expo push API error 502",
+    });
+  });
+
+  it("retries a 2xx response that carries no ticket", async () => {
+    stubExpo({});
+
+    expect(await expoTransport().send(expoTask())).toEqual({
+      success: false,
+      error: "Expo push response had no ticket",
+    });
+  });
+
+  it("reads the first ticket if Expo answers with an array", async () => {
+    stubExpo({ data: [{ status: "ok", id: "ticket-5" }] });
+
+    expect(await expoTransport().send(expoTask())).toEqual({
+      success: true,
+      providerMessageId: "ticket-5",
+    });
+  });
+
+  it("reports a network failure as retryable without marking the token dead", async () => {
+    const log = logger();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("socket hang up")));
+
+    const result = await expoTransport({ logger: log }).send(expoTask());
+
+    expect(result).toEqual({ success: false, error: "socket hang up" });
+    expect(log.error).toHaveBeenCalledWith(
+      { taskId: "task-uuid-expo-1", error: "socket hang up" },
+      "Expo push unexpected error",
+    );
+  });
+
+  it("passes delivery's abort signal to fetch, and its own timeout when called alone", async () => {
+    const fetchMock = stubExpo(expoTicket("ticket-6"));
+    const controller = new AbortController();
+
+    await expoTransport().send(expoTask({ signal: controller.signal }));
+    await expoTransport().send(expoTask());
+
+    expect(expoInit(fetchMock, 0).signal).toBe(controller.signal);
+    expect(expoInit(fetchMock, 1).signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("logs an accepted send", async () => {
+    const log = logger();
+    stubExpo(expoTicket("ticket-7"));
+
+    await expoTransport({ logger: log }).send(expoTask());
+
+    expect(log.debug).toHaveBeenCalledWith(
+      { taskId: "task-uuid-expo-1", providerMessageId: "ticket-7" },
+      "Expo push sent",
+    );
+  });
+});
