@@ -59,7 +59,8 @@ only codes known to mean the number itself is gone are hard.
 Twilio handles STOP/START itself and rejects a send to an opted-out recipient
 with error `21610`. That is returned as an invalid token — as are `21211`,
 `21612`, and `21614` — so notifkit stops retrying and flags the contact.
-Everything else, including rate limits, stays retryable.
+A rate limit (HTTP 429) waits for capacity instead, and doesn't count as a
+failed attempt. Everything else stays retryable.
 
 Requires `notifkit` as a peer dependency. Documentation:
 [notifkit.dev/docs](https://notifkit.dev/docs/). MIT licensed.
