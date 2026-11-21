@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/devkitshq/notifkit/compare/create-notifkit-v0.1.3...create-notifkit-v0.1.4) (2026-11-21)
+
+
+### Features
+
+* **create-notifkit:** scaffold apps that send email through Amazon SES ([#47](https://github.com/devkitshq/notifkit/issues/47)) ([7ff390f](https://github.com/devkitshq/notifkit/commit/7ff390ffb173adb71acbc62de77d1ab28bab37b8))
+
 ## [0.1.3](https://github.com/devkitshq/notifkit/compare/create-notifkit-v0.1.2...create-notifkit-v0.1.3) (2026-11-18)
 
 
