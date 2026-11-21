@@ -390,7 +390,10 @@ describe("code-defined workflows", () => {
   it("reads a fractional duration exactly: 1.5h sleeps 90 minutes, not 1 hour", async () => {
     const p = await project();
     const id = await trigger(p.api, { name: "fractional-wait", user: "alice" });
-    await waitForStatus(p.api, id, "pending");
+    // Not waitForStatus("pending"): a new instance is pending before it has run.
+    await waitFor("wait step recorded", async () =>
+      Boolean((await instance(p.api, id))?.steps.some((s: any) => s.action === "wait")),
+    );
     const wait = (await instance(p.api, id)).steps.find((s: any) => s.action === "wait");
     const sleptMs = wait.output.scheduledAt - Date.parse(wait.createdAt);
     expect(Math.abs(sleptMs - 90 * 60_000)).toBeLessThan(60_000);
