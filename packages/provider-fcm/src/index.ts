@@ -113,11 +113,20 @@ export class FcmTransport implements Transport {
         success: false,
         invalidToken: isInvalidToken,
         ...(permanent ? { retryable: false } : {}),
+        ...(RATE_LIMIT_CODES.has(error.code ?? "") ? { throttled: true } : {}),
         error: error.message ?? "FCM error",
       };
     }
   }
 }
+
+/** Quota and rate limits: FCM is up but wants fewer sends. */
+const RATE_LIMIT_CODES = new Set([
+  "messaging/quota-exceeded",
+  "messaging/message-rate-exceeded",
+  "messaging/device-message-rate-exceeded",
+  "messaging/topics-message-rate-exceeded",
+]);
 
 /**
  * The `messaging/` errors a later attempt can get past: quota and rate limits,
@@ -125,10 +134,7 @@ export class FcmTransport implements Transport {
  * https://firebase.google.com/docs/cloud-messaging/send/admin-sdk#admin
  */
 const RETRYABLE_CODES = new Set([
-  "messaging/quota-exceeded",
-  "messaging/message-rate-exceeded",
-  "messaging/device-message-rate-exceeded",
-  "messaging/topics-message-rate-exceeded",
+  ...RATE_LIMIT_CODES,
   "messaging/internal-error",
   "messaging/server-unavailable",
   "messaging/unavailable",

@@ -58,8 +58,7 @@ export class SesTransport implements Transport {
 
   constructor({ from, region, client, configurationSetName, logger, limits }: SesTransportOptions) {
     // Send rates differ from one account to the next, so no default fits. With
-    // none, SES throttles a burst and the circuit breaker fails the rest
-    // without trying them.
+    // none, every burst goes to SES at once and most of it comes back throttled.
     if (!limits || !(limits.limit > 0) || !(limits.windowSeconds > 0)) {
       throw new Error(
         "SesTransport: limits is required. Set it to the account's maximum send rate, e.g. { limit: 14, windowSeconds: 1 }",
@@ -150,6 +149,7 @@ export class SesTransport implements Transport {
       return {
         success: false,
         ...(isPermanent(error.name, status) ? { retryable: false } : {}),
+        ...(isThrottled(error, status) ? { throttled: true } : {}),
         error: `${error.name}: ${error.message}`,
       };
     }
@@ -175,6 +175,16 @@ function isPermanent(name: string, status: number | undefined): boolean {
   return (
     typeof status === "number" && status >= 400 && status < 500 && status !== 408 && status !== 429
   );
+}
+
+/**
+ * Whether SES is over its send rate, so the send should wait for capacity. The
+ * daily quota is reported as throttling too, but resets over 24 hours, so it
+ * takes the ordinary retries instead of waiting.
+ */
+function isThrottled(error: Error, status: number | undefined): boolean {
+  if (/daily message quota/i.test(error.message)) return false;
+  return THROTTLING_ERRORS.has(error.name) || status === 429;
 }
 
 function textToHtml(text: string): string {

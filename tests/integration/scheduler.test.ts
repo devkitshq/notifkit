@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { randomUUID } from "node:crypto";
 import {
   executeSchedulerPoll,
+  msUntilNextDue,
   rebuildScheduledQueue,
   SchedulerWorker,
   SCHEDULER_SENTINEL_KEY,
@@ -203,6 +204,34 @@ describe("executeSchedulerPoll", () => {
  * person did since — hours or days of it, for a `sendAt` or a quiet-hours
  * deferral — has to stop it at release.
  */
+describe("msUntilNextDue", () => {
+  // A throttled task asks to come back within a second; a flat 5s poll held
+  // it for five, so a provider got one window's sends per poll.
+  it("is the time until the earliest parked task, across shards", async () => {
+    await park("task-1", Date.now() + 4_000);
+    await park("task-2", Date.now() + 800);
+
+    const ms = await msUntilNextDue(infra.redis, 5_000);
+
+    expect(ms).toBeGreaterThan(500);
+    expect(ms).toBeLessThanOrEqual(800);
+  });
+
+  it("is zero when a task is already due", async () => {
+    await park("task-3", Date.now() - 1_000);
+    expect(await msUntilNextDue(infra.redis, 5_000)).toBe(0);
+  });
+
+  it("is capped, so tasks parked meanwhile still go out on time", async () => {
+    await park("task-4", Date.now() + 60_000);
+    expect(await msUntilNextDue(infra.redis, 5_000)).toBe(5_000);
+  });
+
+  it("is the cap when nothing is parked", async () => {
+    expect(await msUntilNextDue(infra.redis, 5_000)).toBe(5_000);
+  });
+});
+
 describe("executeSchedulerPoll re-checks a parked send when releasing it", () => {
   let project: string;
   const users = () => new UserRepository(infra.db);

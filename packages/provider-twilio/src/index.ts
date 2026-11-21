@@ -167,6 +167,7 @@ export class TwilioTransport implements Transport {
         success: false,
         invalidToken,
         ...(permanent ? { retryable: false } : {}),
+        ...(error.status === 429 ? { throttled: true } : {}),
         error: error.message,
       };
     }

@@ -64,8 +64,10 @@ const DISPATCH_LOG_DELAY_MS = 1_000;
 // so a retry reaches the half-open probe instead of the still-open breaker.
 const RETRY_BACKOFF_MS = [30_000, 120_000, 600_000];
 
-// Deferrals for provider capacity. Not counted against maxAttempts: waiting is not a failure.
-export const MAX_THROTTLE_DEFERRALS = 50;
+// How long a task may wait for provider capacity. Not counted against
+// maxAttempts: waiting is not a failure. Capped by time because the number of
+// rounds a wait takes depends on how often the scheduler releases it.
+export const MAX_THROTTLE_WAIT_MS = 15 * 60_000;
 
 // Stable across processes because the rate limit budget is shared in Redis.
 function providerKey(channel: string, transports: any[], i: number): string {
@@ -380,6 +382,48 @@ export class DeliveryWorker extends BaseWorker {
       return false; // No fallback
     };
 
+    /** Parks a task until a provider has room, or fails it once it has waited too long. Returns whether it parked. */
+    const waitForCapacity = async (retryAfterMs: number, windowMs: number): Promise<boolean> => {
+      const throttleAttemptCount = (task.throttleAttemptCount ?? 0) + 1;
+      const throttledSince = task.throttledSince ?? new Date().toISOString();
+
+      if (Date.now() - Date.parse(throttledSince) > MAX_THROTTLE_WAIT_MS) {
+        this.logger.warn(
+          {
+            messageId: message.id,
+            taskId: task.taskId,
+            attempts: throttleAttemptCount,
+            throttledSince,
+          },
+          "provider rate limit max attempts exceeded",
+        );
+        const fallbackTriggered = await fallbackToNextChannel("provider_throttle_exceeded");
+        if (!fallbackTriggered) {
+          this.globalEmitter.emit(
+            "delivery:failed",
+            task.taskId,
+            "provider throttle exceeded",
+            task.channel,
+            task.projectId,
+          );
+          await failed("provider rate limit max attempts exceeded", "provider_throttle_exceeded");
+        }
+        return false;
+      }
+
+      // Spread retries over twice the windows each round, so they don't all return
+      // at once, and a throttle that lasts isn't asked again every few seconds.
+      const spreadMs = Number.isFinite(windowMs)
+        ? Math.random() * windowMs * Math.min(2 ** (throttleAttemptCount - 1), 60)
+        : 0;
+      await this.reschedule(
+        { ...original, throttleAttemptCount, throttledSince },
+        new Date(Date.now() + retryAfterMs + spreadMs),
+        "throttle",
+      );
+      return true;
+    };
+
     const transports = this.transportRegistry.getAll(task.channel);
 
     if (transports.length === 0) {
@@ -416,36 +460,7 @@ export class DeliveryWorker extends BaseWorker {
       windowMs = Math.min(windowMs, (transports[i].limits?.windowSeconds ?? 0) * 1000);
     }
     if (startAt === -1) {
-      task.throttleAttemptCount = (task.throttleAttemptCount ?? 0) + 1;
-
-      if (task.throttleAttemptCount > MAX_THROTTLE_DEFERRALS) {
-        this.logger.warn(
-          { messageId: message.id, taskId: task.taskId, attempts: task.throttleAttemptCount },
-          "provider rate limit max attempts exceeded",
-        );
-        const fallbackTriggered = await fallbackToNextChannel("provider_throttle_exceeded");
-        if (!fallbackTriggered) {
-          this.globalEmitter.emit(
-            "delivery:failed",
-            task.taskId,
-            "provider throttle exceeded",
-            task.channel,
-            task.projectId,
-          );
-          await failed("provider rate limit max attempts exceeded", "provider_throttle_exceeded");
-        }
-        return;
-      }
-
-      // Spread retries over more windows the longer a task waits, so they don't all return at once.
-      const spreadMs = Number.isFinite(windowMs)
-        ? Math.random() * windowMs * Math.min(task.throttleAttemptCount, 10)
-        : 0;
-      await this.reschedule(
-        { ...original, throttleAttemptCount: task.throttleAttemptCount },
-        new Date(Date.now() + retryAfterMs + spreadMs),
-        "throttle",
-      );
+      await waitForCapacity(retryAfterMs, windowMs);
       return;
     }
 
@@ -482,7 +497,8 @@ export class DeliveryWorker extends BaseWorker {
       if (failure.retryable === false || attemptNo >= maxAttempts) return false;
       const delayMs = retryDelayMs(task.deliveryAttemptCount ?? 0);
       await this.reschedule(
-        { ...original, deliveryAttemptCount: attemptNo },
+        // A real attempt was made, so a later throttle starts its own wait.
+        { ...original, throttledSince: undefined, deliveryAttemptCount: attemptNo },
         new Date(Date.now() + delayMs),
         "retry",
       );
@@ -517,6 +533,7 @@ export class DeliveryWorker extends BaseWorker {
       // deactivated rather than the next provider tried.
       const isPush = task.channel === "push";
       let result: any = { success: false, error: "No transports" };
+      let throttledWindowMs = 1000;
       for (let i = startAt; i < transports.length; i++) {
         const transport = transports[i];
         // The first provider's slot was taken above; later ones spend their own.
@@ -555,8 +572,14 @@ export class DeliveryWorker extends BaseWorker {
                   );
                 }),
               ]);
-              // Permanent rejections (bad address) are returned, not thrown, so the breaker ignores them.
-              if (!res.success && !(isPush && res.invalidToken) && res.retryable !== false) {
+              // Permanent rejections (bad address) and throttling are returned, not
+              // thrown, so the breaker ignores them: the provider isn't down.
+              if (
+                !res.success &&
+                !(isPush && res.invalidToken) &&
+                !res.throttled &&
+                res.retryable !== false
+              ) {
                 throw providerFailure(res);
               }
               return res;
@@ -566,6 +589,8 @@ export class DeliveryWorker extends BaseWorker {
           });
 
           if (result.success || (isPush && result.invalidToken)) break;
+          // Busy, not down: the next provider may have room.
+          if (result.throttled) throttledWindowMs = (transport.limits?.windowSeconds ?? 1) * 1000;
         } catch (err: any) {
           result = { success: false, error: err.message, retryable: err.retryable };
         }
@@ -641,6 +666,8 @@ export class DeliveryWorker extends BaseWorker {
             "notification delivered",
           );
         }
+      } else if (result.throttled) {
+        retryScheduled = await waitForCapacity(throttledWindowMs, throttledWindowMs);
       } else if (!(await retryLater(result))) {
         const error =
           result.error ?? (isPush ? "push delivery failed" : "delivery failed completely");
