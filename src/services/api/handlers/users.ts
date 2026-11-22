@@ -10,7 +10,14 @@ import { readJsonBody, sendJson, sendNoContent, sendValidationError } from "../h
 import type { RouteContext } from "../router.js";
 import { eq, desc, and, inArray } from "drizzle-orm";
 import { messageLogs, deliveryOutbox } from "@/db/schema.js";
-import { type Deps, contactsOf, persistUsers, getQueryParam, parseLimit } from "./shared.js";
+import {
+  type Deps,
+  contactsOf,
+  persistUsers,
+  invalidateUsers,
+  getQueryParam,
+  parseLimit,
+} from "./shared.js";
 
 export function createUsersHandlers(deps: Deps) {
   const { logger } = deps;
@@ -55,6 +62,7 @@ export function createUsersHandlers(deps: Deps) {
         await deps.contactRepo.upsert(ctx.projectId!, userId, c.channel, c.target);
       }
     }
+    await invalidateUsers(deps, ctx.projectId!, [userId]);
     logger.info({ userId }, "user updated");
     sendJson(res, 200, { id: userId });
   }
@@ -67,6 +75,7 @@ export function createUsersHandlers(deps: Deps) {
     const userId = ctx.params.id!;
     const deleted = await deps.userRepo.delete(ctx.projectId!, userId);
     if (!deleted) return sendJson(res, 404, { error: "user_not_found", id: userId });
+    await invalidateUsers(deps, ctx.projectId!, [userId]);
     logger.info({ userId }, "user deleted");
     sendNoContent(res);
   }
@@ -92,6 +101,7 @@ export function createUsersHandlers(deps: Deps) {
         preferences: c.preferences ?? {},
       }));
       await deps.contactRepo.upsertMany(ctx.projectId!, contactsList);
+      await invalidateUsers(deps, ctx.projectId!, [userId]);
       logger.info({ userId, count: contactsList.length }, "contacts batch added");
       sendJson(res, 201, {
         userId,
@@ -105,6 +115,7 @@ export function createUsersHandlers(deps: Deps) {
         parsed.data.target,
         parsed.data.preferences ?? {},
       );
+      await invalidateUsers(deps, ctx.projectId!, [userId]);
       logger.info({ userId, channel: parsed.data.channel }, "contact added");
       sendJson(res, 201, { userId, channel: parsed.data.channel, target: parsed.data.target });
     }
@@ -127,6 +138,7 @@ export function createUsersHandlers(deps: Deps) {
       ctx.params.target!,
     );
     if (!deleted) return sendJson(res, 404, { error: "contact_not_found" });
+    await invalidateUsers(deps, ctx.projectId!, [userId]);
     logger.info({ userId, channel: channelResult.data }, "contact deleted");
     sendNoContent(res);
   }
@@ -169,6 +181,7 @@ export function createUsersHandlers(deps: Deps) {
       preferences: parsed.data,
     });
     if (!updated) return sendJson(res, 404, { error: "user_not_found", id: userId });
+    await invalidateUsers(deps, ctx.projectId!, [userId]);
 
     logger.info({ userId }, "user preferences updated");
     sendJson(res, 200, { id: userId, preferences: parsed.data });

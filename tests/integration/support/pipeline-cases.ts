@@ -192,6 +192,22 @@ export function definePipelineSuite(mode: { fused: boolean }) {
       expect(email.for(p.id)[0]!.destination).toBe("inline@x.com");
     });
 
+    it("reaches an address added seconds after the user's last send", async () => {
+      const p = await project();
+      await notify(p.api, { user: { id: "u", email: "u@x.com" }, template: "receipt" });
+      await waitFor("email delivered", () => email.for(p.id).length === 1);
+
+      // A signup's OTP: the same user, now with a phone, right after the welcome mail.
+      await notify(p.api, {
+        user: { id: "u", phone: "+15550002" },
+        template: "otp",
+        channels: ["sms"],
+        data: { code: "1234" },
+      });
+      await waitFor("sms delivered", () => sms.for(p.id).length === 1);
+      expect(sms.for(p.id)[0]!.destination).toBe("+15550002");
+    });
+
     it("reaches every member of a segment exactly once, and only in this project", async () => {
       const p = await project();
       const other = await project();
@@ -395,6 +411,21 @@ export function definePipelineSuite(mode: { fused: boolean }) {
         });
         await notify(p.api, { user: "u", template: "news" });
         await expectNothingSentFor(p);
+      });
+
+      it("stops a topic's mail as soon as the user opts out of it", async () => {
+        const p = await project();
+        await addUser(p.api, { id: "u", email: "u@x.com" });
+        await notify(p.api, { user: "u", template: "news" });
+        await waitFor("delivered", () => email.for(p.id).length === 1);
+
+        const res = await p.api("PATCH", "/v1/users/u/preferences", {
+          topics: { newsletter: false },
+        });
+        expect(res.status).toBe(200);
+
+        await notify(p.api, { user: "u", template: "news", data: { after: true } });
+        await expectNothingSentFor(p, (t) => t.templateVariables?.after === true);
       });
 
       it("still sends transactional mail to that user", async () => {

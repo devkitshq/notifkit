@@ -5,7 +5,7 @@ import { eq, and, sql } from "drizzle-orm";
 import { suppressions, users as dbUsers, userTopicPreferences } from "@/db/schema.js";
 import { readBaseConfig } from "@/config/index.js";
 import { verifyUnsubscribeToken } from "@/unsubscribe/index.js";
-import { type Deps } from "./shared.js";
+import { type Deps, invalidateUsers } from "./shared.js";
 
 export function createUnsubscribeHandlers(deps: Deps) {
   const { logger } = deps;
@@ -138,6 +138,7 @@ code{background:#f4f4f5;padding:.1rem .35rem;border-radius:4px}</style>
             target: [userTopicPreferences.userId, userTopicPreferences.topic],
             set: { enabled: sql`excluded.enabled` },
           });
+        await invalidateUsers(deps, claim.projectId, [claim.userId]);
       } else {
         // No topic, or the user is gone: suppress the address outright.
         await deps.db

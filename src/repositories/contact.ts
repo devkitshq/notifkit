@@ -7,8 +7,17 @@ import type { UserContact } from "./types.js";
 
 export class ContactRepository {
   private readonly activeContactsCache = new LRUCache<string, UserContact[]>(5000, 30_000);
+  /** When each key was last invalidated, so a read begun before then isn't cached. */
+  private readonly invalidatedAt = new LRUCache<string, number>(5000, 30_000);
 
   constructor(private readonly db: Db) {}
+
+  /** Drops a user's cached contacts after a write, possibly made by another process. */
+  invalidate(projectId: string, userId: string): void {
+    const key = `${projectId}:${userId}`;
+    this.activeContactsCache.delete(key);
+    this.invalidatedAt.set(key, Date.now());
+  }
 
   /** A repository that runs its queries inside `tx`. */
   withTx(tx: Db): ContactRepository {
@@ -80,6 +89,7 @@ export class ContactRepository {
       return byUser;
     }
 
+    const startedAt = Date.now();
     const rows = await this.db
       .select({
         userId: users.externalId,
@@ -138,7 +148,10 @@ export class ContactRepository {
 
     for (const id of missingIds) {
       const contacts = fetchedByUser.get(id) ?? [];
-      this.activeContactsCache.set(`${projectId}:${id}`, contacts);
+      const key = `${projectId}:${id}`;
+      if ((this.invalidatedAt.get(key) ?? -Infinity) < startedAt) {
+        this.activeContactsCache.set(key, contacts);
+      }
       if (contacts.length > 0) {
         byUser.set(id, contacts);
       }

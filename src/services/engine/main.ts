@@ -24,7 +24,12 @@ import {
 } from "@/index.js";
 import { IdempotencyGuard } from "@/index.js";
 import { UserThrottle, ProjectSettingsCache } from "@/index.js";
-import { TemplateRepository, ContactRepository, ProjectRepository } from "@/index.js";
+import {
+  TemplateRepository,
+  ContactRepository,
+  ProjectRepository,
+  dropCachedUsers,
+} from "@/index.js";
 import { suppressions } from "@/db/schema.js";
 import { and, eq } from "drizzle-orm";
 import {
@@ -606,6 +611,7 @@ export async function startEngineWorker() {
   await subscriber.subscribe(
     PUBSUB_CHANNELS.TEMPLATE_INVALIDATED,
     PUBSUB_CHANNELS.PROJECT_INVALIDATED,
+    PUBSUB_CHANNELS.USERS_INVALIDATED,
   );
   subscriber.on("message", (channel: string, message: string) => {
     if (channel === PUBSUB_CHANNELS.TEMPLATE_INVALIDATED) {
@@ -614,6 +620,8 @@ export async function startEngineWorker() {
     } else if (channel === PUBSUB_CHANNELS.PROJECT_INVALIDATED) {
       projectSettings.invalidate(message);
       logger.info({ projectId: message }, "invalidated project settings cache");
+    } else if (channel === PUBSUB_CHANNELS.USERS_INVALIDATED) {
+      dropCachedUsers(message, [contactRepo]);
     }
   });
 

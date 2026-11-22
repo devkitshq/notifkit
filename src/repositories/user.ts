@@ -23,8 +23,17 @@ const DEFAULT_TIMEZONE = "UTC";
 
 export class UserRepository {
   private readonly recordCache = new LRUCache<string, UserRecord>(5000, 30_000);
+  /** When each key was last invalidated, so a read begun before then isn't cached. */
+  private readonly invalidatedAt = new LRUCache<string, number>(5000, 30_000);
 
   constructor(private readonly db: Db) {}
+
+  /** Drops a user's cached record after a write, possibly made by another process. */
+  invalidate(projectId: string, userId: string): void {
+    const key = `${projectId}:${userId}`;
+    this.recordCache.delete(key);
+    this.invalidatedAt.set(key, Date.now());
+  }
 
   /** A repository that runs its queries inside `tx`. */
   withTx(tx: Db): UserRepository {
@@ -77,6 +86,7 @@ export class UserRepository {
       return results;
     }
 
+    const startedAt = Date.now();
     const usersRows = await this.db
       .select()
       .from(users)
@@ -143,7 +153,8 @@ export class UserRepository {
         },
       };
 
-      this.recordCache.set(`${projectId}:${record.userId}`, record);
+      const key = `${projectId}:${record.userId}`;
+      if ((this.invalidatedAt.get(key) ?? -Infinity) < startedAt) this.recordCache.set(key, record);
       results.push(record);
     }
 

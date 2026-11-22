@@ -45,6 +45,8 @@ export const PUBSUB_CHANNELS = {
   TEMPLATE_INVALIDATED: "template.invalidated",
   /** Payload: `{projectId}`. Published when project settings change. */
   PROJECT_INVALIDATED: "project.invalidated",
+  /** Payload: JSON `{ projectId, userIds }`. Published after a user's profile or contacts change. */
+  USERS_INVALIDATED: "users.invalidated",
   /** Payload: a token hash, or `*` for the whole cache. */
   API_KEY_INVALIDATED: "apikey.invalidated",
   /** Delivery outcomes for GET /v1/events/stream; see services/delivery/live-events. */

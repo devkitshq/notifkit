@@ -10,7 +10,12 @@ import type {
   SegmentRepository,
   AdminUserRepository,
 } from "@/repositories/index.js";
-import type { Preferences, UserContactInput, ContactChannel } from "@/contracts/index.js";
+import {
+  PUBSUB_CHANNELS,
+  type Preferences,
+  type UserContactInput,
+  type ContactChannel,
+} from "@/contracts/index.js";
 import type { RouteContext } from "../router.js";
 import type { LiveDeliveryEvents } from "../live-events.js";
 import type { Db } from "@/db/index.js";
@@ -123,6 +128,26 @@ export async function persistUsers(
     await deps.userRepo.withTx(tx as Db).upsertManyFull(projectId, usersList);
     await deps.contactRepo.withTx(tx as Db).upsertMany(projectId, contactsList);
   });
+  await invalidateUsers(
+    deps,
+    projectId,
+    usersList.map((u) => u.userId),
+  );
+}
+
+/**
+ * Drops these users' cached profiles and contacts in every process. Without it
+ * a send in the next 30 s reads the old ones: a new address unseen, an opt-out ignored.
+ */
+export async function invalidateUsers(
+  deps: Deps,
+  projectId: string,
+  userIds: string[],
+): Promise<void> {
+  await deps.redis.native.publish(
+    PUBSUB_CHANNELS.USERS_INVALIDATED,
+    JSON.stringify({ projectId, userIds }),
+  );
 }
 
 /** As StreamConsumer writes it: the event JSON under `data` with a `dlq` block. Flat fields are hand-written entries. */

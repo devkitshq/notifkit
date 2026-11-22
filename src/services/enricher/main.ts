@@ -16,7 +16,7 @@ import {
   type StreamEvent,
 } from "@/index.js";
 import { IdempotencyGuard } from "@/index.js";
-import { UserRepository, TemplateRepository, ContactRepository } from "@/index.js";
+import { UserRepository, TemplateRepository, ContactRepository, dropCachedUsers } from "@/index.js";
 import { TemplateCache } from "@/templates/index.js";
 import { getPriorityBucket, globalEmitter, type WorkerOptions } from "@/shared/index.js";
 import { startHealthReporter } from "@/workers/index.js";
@@ -587,11 +587,16 @@ export async function startEnricherWorker() {
   });
 
   subscriber = redis.native.duplicate({ enableAutoPipelining: false });
-  await subscriber.subscribe(PUBSUB_CHANNELS.TEMPLATE_INVALIDATED);
+  await subscriber.subscribe(
+    PUBSUB_CHANNELS.TEMPLATE_INVALIDATED,
+    PUBSUB_CHANNELS.USERS_INVALIDATED,
+  );
   subscriber.on("message", (channel: string, message: string) => {
     if (channel === PUBSUB_CHANNELS.TEMPLATE_INVALIDATED) {
       templateCache.invalidateKey(message);
       logger.info({ cacheKey: message }, "invalidated template cache");
+    } else if (channel === PUBSUB_CHANNELS.USERS_INVALIDATED) {
+      dropCachedUsers(message, [userRepo, contactRepo]);
     }
   });
 

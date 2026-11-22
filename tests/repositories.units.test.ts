@@ -128,6 +128,35 @@ describe("Repository mapping and guards", () => {
       expect(result.has("usr-2")).toBe(false);
     });
 
+    // A user with no contacts yet, so each read is the one join query.
+    it("reads a user's contacts again once they are invalidated", async () => {
+      mockDb.queueSelect([]);
+      mockDb.queueSelect([]);
+      const repo = new ContactRepository(mockDb.db);
+
+      await repo.findActiveByUserIds("proj-1", ["usr-1"]);
+      await repo.findActiveByUserIds("proj-1", ["usr-1"]);
+      expect(mockDb.selects).toHaveLength(1);
+
+      repo.invalidate("proj-1", "usr-1");
+      await repo.findActiveByUserIds("proj-1", ["usr-1"]);
+      expect(mockDb.selects).toHaveLength(2);
+    });
+
+    it("does not cache a read that an invalidation overtook", async () => {
+      mockDb.queueSelect([]);
+      mockDb.queueSelect([]);
+      const repo = new ContactRepository(mockDb.db);
+
+      // The write lands while the read is in flight, so what it returns may predate it.
+      const inFlight = repo.findActiveByUserIds("proj-1", ["usr-1"]);
+      repo.invalidate("proj-1", "usr-1");
+      await inFlight;
+
+      await repo.findActiveByUserIds("proj-1", ["usr-1"]);
+      expect(mockDb.selects).toHaveLength(2);
+    });
+
     it("resolves contacts with a single join rather than a query per user", async () => {
       mockDb.queueSelect([]);
       const repo = new ContactRepository(mockDb.db);

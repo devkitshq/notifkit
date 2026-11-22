@@ -12,8 +12,9 @@ import {
   WorkflowRepository,
   SegmentRepository,
   AdminUserRepository,
+  dropCachedUsers,
 } from "@/repositories/index.js";
-import { STREAMS } from "@/contracts/index.js";
+import { STREAMS, PUBSUB_CHANNELS } from "@/contracts/index.js";
 import { readJsonBody, sendJson, HttpError, extractAuthToken } from "./http.js";
 import { Router } from "./router.js";
 import { createHandlers, type Deps } from "./handlers.js";
@@ -510,9 +511,14 @@ export async function startApiServer() {
 
   // Let key rotation take effect immediately instead of waiting out the TTL.
   authSubscriber = redis.native.duplicate({ enableAutoPipelining: false });
-  await authSubscriber.subscribe(API_KEY_INVALIDATION_CHANNEL);
-  authSubscriber.on("message", (channel: string, tokenHash: string) => {
+  await authSubscriber.subscribe(API_KEY_INVALIDATION_CHANNEL, PUBSUB_CHANNELS.USERS_INVALIDATED);
+  authSubscriber.on("message", (channel: string, message: string) => {
+    if (channel === PUBSUB_CHANNELS.USERS_INVALIDATED) {
+      dropCachedUsers(message, [deps.userRepo, deps.contactRepo]);
+      return;
+    }
     if (channel !== API_KEY_INVALIDATION_CHANNEL) return;
+    const tokenHash = message;
     if (tokenHash === "*") {
       authCache.clear();
       tokenHashToToken.clear();
