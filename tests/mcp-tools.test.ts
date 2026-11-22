@@ -207,6 +207,22 @@ describe("MCP Server Tool Registration", () => {
     }
   });
 
+  it("keeps a waitForEvent step's match when creating a workflow", async () => {
+    const fetchMock = stubFetch({ name: "drip" });
+    const server = createServer({ baseUrl: "https://api.test", apiKey: "nk_key" });
+    const tools = (server as any)._registeredTools;
+
+    const step = {
+      action: "waitForEvent",
+      event: "order.paid",
+      options: { timeout: "24h", match: { userId: "u1" } },
+    };
+    const args = tools["create_workflow"].inputSchema.parse({ name: "drip", steps: [step] });
+    await tools["create_workflow"].handler(args);
+
+    expect(JSON.parse(callArgs(fetchMock).init.body as string).steps[0]).toEqual(step);
+  });
+
   it("executes delete_template tool handler", async () => {
     const fetchMock = stubFetch("", 204);
     const server = createServer({ baseUrl: "https://api.test", apiKey: "nk_key" });

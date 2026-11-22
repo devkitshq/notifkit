@@ -36,7 +36,16 @@ export function registerWorkflowsTools(server: McpServer, api: NotifkitApi): voi
                 action: z.literal("waitForEvent"),
                 event: z.string().describe("Event name to wait for, as passed to ingest_event."),
                 options: z
-                  .object({ timeout: z.string().optional().describe("e.g. '24h'.") })
+                  .object({
+                    timeout: z.string().optional().describe("e.g. '24h'."),
+                    match: z
+                      .record(z.string(), z.unknown())
+                      .optional()
+                      .describe(
+                        "Fields the event must carry to wake this instance, e.g. { userId: 'u1' }. " +
+                          "Without it any event of that name wakes every waiting instance.",
+                      ),
+                  })
                   .optional()
                   .describe("Give a timeout so the instance cannot wait forever."),
               }),
