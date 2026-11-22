@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createHmac } from "node:crypto";
+import { createHmac, createSign, generateKeyPairSync } from "node:crypto";
 import { ResendTransport } from "../packages/provider-resend/src/index.js";
+import { SendGridTransport } from "../packages/provider-sendgrid/src/index.js";
 import { FcmTransport } from "../packages/provider-fcm/src/index.js";
 import { initializeApp } from "firebase-admin/app";
 import { ConsoleTransport } from "../packages/provider-console/src/index.js";
@@ -501,6 +502,304 @@ describe("ResendTransport (Webhooks)", () => {
 
     await expect(
       transport.parseWebhook(bounced, JSON.stringify(bounced), headers),
+    ).resolves.toEqual([]);
+  });
+});
+
+describe("SendGridTransport (Email Provider)", () => {
+  // One P-256 key pair for the whole block: the public key configures the
+  // transport, the private key signs the test webhooks. No real keys.
+  const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+  const webhookPublicKey = publicKey.export({ type: "spki", format: "pem" }).toString();
+  const webhookPrivateKey = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** Stubs `fetch` with a real Response carrying the given status and body. */
+  function stubSendGrid(status: number, body = "", headers: Record<string, string> = {}) {
+    const fn = vi.fn().mockResolvedValue(new Response(body, { status, headers }));
+    vi.stubGlobal("fetch", fn);
+    return fn;
+  }
+
+  function sendGridTask(overrides: Record<string, unknown> = {}): any {
+    return {
+      taskId: "task-uuid-sg-1",
+      destination: "recipient@example.com",
+      renderedContent: {
+        content: {
+          subject: "Welcome Alice",
+          body: "Hello Alice",
+          htmlBody: "<h1>Hello Alice</h1>",
+        },
+      },
+      ...overrides,
+    };
+  }
+
+  const transport = (overrides: Record<string, unknown> = {}) =>
+    new SendGridTransport({
+      apiKey: "test-api-key",
+      from: "onboarding@corp.com",
+      webhookPublicKey,
+      ...overrides,
+    });
+
+  /**
+   * Produce a body + headers the verifier will accept, the way SendGrid
+   * sends them: a base64 ECDSA signature over
+   * `<timestamp><raw body>`, under the `X-Twilio-Email-Event-Webhook-*`
+   * headers.
+   */
+  function signEvents(events: unknown[]) {
+    const rawBody = JSON.stringify(events);
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const signature = createSign("sha256")
+      .update(timestamp + rawBody)
+      .sign(webhookPrivateKey, "base64");
+
+    return {
+      rawBody,
+      headers: {
+        "X-Twilio-Email-Event-Webhook-Signature": signature,
+        "X-Twilio-Email-Event-Webhook-Timestamp": timestamp,
+      } as Record<string, string>,
+    };
+  }
+
+  it("registers against the email channel with a webhook path", () => {
+    const t = transport();
+    expect(t.channel).toBe("email");
+    expect(t.webhookPath).toBe("/webhooks/sendgrid");
+    expect(typeof t.verifyWebhook).toBe("function");
+    expect(typeof t.parseWebhook).toBe("function");
+  });
+
+  it("sends an email successfully via the Mail Send API", async () => {
+    const fetchMock = stubSendGrid(202, "", { "x-message-id": "sg-msg-123" });
+
+    const result = await transport().send(sendGridTask());
+
+    expect(String(fetchMock.mock.calls[0]![0])).toBe("https://api.sendgrid.com/v3/mail/send");
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({
+      Authorization: "Bearer test-api-key",
+      "Content-Type": "application/json",
+    });
+    expect(JSON.parse(init.body as string)).toEqual({
+      personalizations: [{ to: [{ email: "recipient@example.com" }] }],
+      from: { email: "onboarding@corp.com" },
+      subject: "Welcome Alice",
+      content: [
+        { type: "text/plain", value: "Hello Alice" },
+        { type: "text/html", value: "<h1>Hello Alice</h1>" },
+      ],
+    });
+    expect(result).toEqual({ success: true, providerMessageId: "sg-msg-123" });
+  });
+
+  it("builds an HTML part from the text when the template has no html", async () => {
+    const fetchMock = stubSendGrid(202, "", { "x-message-id": "sg-msg-124" });
+
+    await transport().send(
+      sendGridTask({ renderedContent: { content: { subject: "Hi", body: "a <b> test" } } }),
+    );
+
+    const sent = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    expect(sent.content).toEqual([
+      { type: "text/plain", value: "a <b> test" },
+      { type: "text/html", value: "<p>a &lt;b&gt; test</p>" },
+    ]);
+  });
+
+  it("prefers a from and replyTo named by the template", async () => {
+    const fetchMock = stubSendGrid(202, "", { "x-message-id": "sg-msg-125" });
+
+    await transport().send(
+      sendGridTask({
+        renderedContent: {
+          content: {
+            subject: "S",
+            body: "B",
+            from: "marketing@corp.com",
+            replyTo: "hello@corp.com",
+          },
+        },
+      }),
+    );
+
+    const sent = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    expect(sent.from).toEqual({ email: "marketing@corp.com" });
+    expect(sent.reply_to).toEqual({ email: "hello@corp.com" });
+  });
+
+  it("returns a clear error without calling the API when the destination is missing", async () => {
+    const fetchMock = stubSendGrid(202, "");
+
+    const result = await transport().send(sendGridTask({ destination: undefined }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No destination (recipient address) on task",
+    });
+  });
+
+  it("marks a rejected sender as a permanent failure, not a dead destination", async () => {
+    stubSendGrid(
+      400,
+      JSON.stringify({
+        errors: [
+          {
+            message: "The from address does not match a verified Sender Identity.",
+            field: "from",
+          },
+        ],
+      }),
+    );
+
+    const result = await transport().send(sendGridTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: false,
+      retryable: false,
+      error: "The from address does not match a verified Sender Identity.",
+    });
+  });
+
+  it("marks a refused recipient address as a dead destination", async () => {
+    stubSendGrid(
+      400,
+      JSON.stringify({
+        errors: [
+          {
+            message: "Does not contain a valid address.",
+            field: "personalizations.0.to.0.email",
+          },
+        ],
+      }),
+    );
+
+    const result = await transport().send(sendGridTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: true,
+      retryable: false,
+      error: "Does not contain a valid address.",
+    });
+  });
+
+  it.each([500, 429])("retries a transient %s failure", async (status) => {
+    stubSendGrid(status, JSON.stringify({ errors: [{ message: "boom" }] }));
+
+    const result = await transport().send(sendGridTask());
+
+    expect(result).toEqual({ success: false, invalidToken: false, error: "boom" });
+    expect(result.retryable).toBeUndefined();
+  });
+
+  it("retries a network error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("socket hang up")));
+
+    const result = await transport().send(sendGridTask());
+
+    expect(result).toEqual({ success: false, error: "socket hang up" });
+  });
+
+  it("accepts a correctly signed webhook payload", () => {
+    const { rawBody, headers } = signEvents([
+      { event: "delivered", email: "a@example.com", sg_message_id: "sg-msg-1" },
+    ]);
+
+    expect(transport().verifyWebhook(rawBody, headers)).toBe(true);
+  });
+
+  it("rejects a payload whose body was tampered with after signing", () => {
+    const { headers } = signEvents([
+      { event: "delivered", email: "a@example.com", sg_message_id: "sg-msg-1" },
+    ]);
+    const forged = JSON.stringify([
+      { event: "bounce", email: "a@example.com", sg_message_id: "sg-msg-1" },
+    ]);
+
+    expect(transport().verifyWebhook(forged, headers)).toBe(false);
+  });
+
+  it("rejects everything when no webhookPublicKey is configured", () => {
+    const { rawBody, headers } = signEvents([
+      { event: "delivered", email: "a@example.com", sg_message_id: "sg-msg-1" },
+    ]);
+
+    expect(transport({ webhookPublicKey: undefined }).verifyWebhook(rawBody, headers)).toBe(false);
+  });
+
+  it("rejects a webhook missing the signature headers", () => {
+    const { rawBody } = signEvents([
+      { event: "delivered", email: "a@example.com", sg_message_id: "sg-msg-1" },
+    ]);
+
+    expect(transport().verifyWebhook(rawBody, {})).toBe(false);
+  });
+
+  it.each([
+    ["bounce", "bounced", "hard"],
+    ["blocked", "bounced", "soft"],
+    ["deferred", "bounced", "soft"],
+    ["spamreport", "complained", undefined],
+    ["unsubscribe", "unsubscribed", undefined],
+  ])("maps a %s event to %s (%s)", async (event, status, bounceType) => {
+    const entry = {
+      event,
+      email: "recipient@example.com",
+      sg_message_id: "sg-msg-123.abc",
+      timestamp: 1700000000,
+    };
+    const { rawBody, headers } = signEvents([entry]);
+
+    const events = await transport().parseWebhook([entry], rawBody, headers);
+
+    expect(events).toEqual([
+      {
+        providerMessageId: "sg-msg-123.abc",
+        status,
+        timestamp: new Date(1700000000 * 1000),
+        recipient: "recipient@example.com",
+        ...(bounceType ? { bounceType } : {}),
+      },
+    ]);
+  });
+
+  it("ignores untracked event types and entries without a message id", async () => {
+    const entries = [
+      { event: "delivered", email: "a@example.com", sg_message_id: "sg-msg-1", timestamp: 1 },
+      { event: "open", email: "a@example.com", sg_message_id: "sg-msg-2", timestamp: 1 },
+      { event: "bounce", email: "a@example.com", timestamp: 1 },
+    ];
+    const { rawBody, headers } = signEvents(entries);
+
+    await expect(transport().parseWebhook(entries, rawBody, headers)).resolves.toEqual([]);
+  });
+
+  it("does not trust a body that fails verification, even if it is well formed", async () => {
+    const entry = {
+      event: "bounce",
+      email: "a@example.com",
+      sg_message_id: "sg-msg-1",
+      timestamp: 1,
+    };
+    // Signature for a different body.
+    const { headers } = signEvents([
+      { event: "delivered", email: "a@example.com", sg_message_id: "sg-msg-2" },
+    ]);
+
+    await expect(
+      transport().parseWebhook([entry], JSON.stringify([entry]), headers),
     ).resolves.toEqual([]);
   });
 });
