@@ -260,7 +260,8 @@ export async function startApiServer() {
     // URL is parsed only if something reads the query.
     const rawUrl = req.url ?? "/";
     const qIdx = rawUrl.indexOf("?");
-    const pathname = qIdx === -1 ? rawUrl : rawUrl.slice(0, qIdx);
+    // Collapse "//" so the auth and CORS checks below see the same path the router matches.
+    const pathname = (qIdx === -1 ? rawUrl : rawUrl.slice(0, qIdx)).replace(/\/{2,}/g, "/");
     let _lazyUrl: URL | null = null;
     const getUrl = (): URL => (_lazyUrl ??= new URL(rawUrl, "http://n"));
     const searchParams = (): URLSearchParams => getUrl().searchParams;

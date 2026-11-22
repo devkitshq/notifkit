@@ -56,7 +56,7 @@ vi.mock("@/db/index.js", () => ({
 
 import { startApiServer, stopApiServer } from "@/services/api/main.js";
 
-function request(method: string, url: string, token: string): Promise<number> {
+function request(method: string, url: string, token?: string): Promise<number> {
   return new Promise((resolve) => {
     const res: any = {
       headersSent: false,
@@ -72,7 +72,7 @@ function request(method: string, url: string, token: string): Promise<number> {
       {
         url,
         method,
-        headers: { authorization: `Bearer ${token}` },
+        headers: token ? { authorization: `Bearer ${token}` } : {},
         socket: { remoteAddress: "127.0.0.1" },
       },
       res,
@@ -117,5 +117,14 @@ describe("read-only dashboard session", () => {
     );
 
     expect(await request("POST", "/v1/dlq/replay", token)).toBe(403);
+  });
+});
+
+describe("doubled slashes in the path", () => {
+  it("still need a token, since the router ignores empty segments", async () => {
+    expect(await request("GET", "//v1/projects")).toBe(401);
+    expect(await request("POST", "/v1//projects/p1/keys")).toBe(401);
+    expect(await request("GET", "//v1/users")).toBe(401);
+    expect(await request("GET", "//v1/dlq")).toBe(401);
   });
 });
