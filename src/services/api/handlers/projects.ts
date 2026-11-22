@@ -27,6 +27,8 @@ export function createProjectsHandlers(deps: Deps) {
     const deleted = isUuid(id) && (await deps.projectRepo.delete(id));
     if (!deleted) return sendJson(res, 404, { error: "project_not_found" });
 
+    // Its keys cascaded away, but the auth cache would accept them for another minute.
+    await deps.redis.native.publish(PUBSUB_CHANNELS.API_KEY_INVALIDATED, "*");
     sendNoContent(res);
   }
 

@@ -136,6 +136,18 @@ describe("authentication", () => {
     );
   });
 
+  it("stops accepting a project's keys as soon as the project is deleted", async () => {
+    const p = await project();
+    expect((await p.api("GET", "/v1/segments")).status).toBe(200); // now cached
+
+    expect((await app.admin("DELETE", `/v1/projects/${p.id}`)).status).toBe(204);
+    await waitFor(
+      "revoked",
+      async () => (await p.api("GET", "/v1/segments")).status === 401,
+      5_000,
+    );
+  });
+
   it("enforces a project's request rate limit", async () => {
     const p = await project();
     await app.admin("PATCH", `/v1/projects/${p.id}`, { rateLimitRpm: 3 });
