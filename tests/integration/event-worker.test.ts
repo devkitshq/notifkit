@@ -237,6 +237,42 @@ describe("EventWorker: waking workflows", () => {
     expect(await resumes()).toEqual([]);
   });
 
+  it("keeps the waiter until the resume is out, so a failed publish is retried", async () => {
+    const id = await waitingInstance("order.paid", {});
+    const published: any[] = [];
+    let redisDown = true;
+    worker = new EventWorker({
+      consumer: {} as any,
+      pendingScanner: {} as any,
+      logger,
+      db: infra.db,
+      workflowProducer: {
+        publishBatch: async (events: any[]) => {
+          if (redisDown) throw new Error("redis down");
+          published.push(...events);
+          return { messageIds: [], eventIds: [] };
+        },
+      },
+    });
+    const ev = {
+      ...buildStreamEvent(
+        "event.received",
+        { projectId: project, eventName: "order.paid", payload: { total: 5 } },
+        "test",
+      ),
+      id: randomUUID(),
+      timestamp: new Date().toISOString(),
+    };
+
+    await expect(worker.process({ id: "1-0", event: ev })).rejects.toThrow("redis down");
+    redisDown = false;
+    // The stream redelivers the event, since it was never acked.
+    await worker.process({ id: "1-0", event: ev });
+
+    expect(published.map((e) => e.payload.instanceId)).toEqual([id]);
+    expect(await infra.sql`SELECT 1 FROM workflow_waiters`).toEqual([]);
+  });
+
   it("drops a waiter whose instance no longer exists", async () => {
     await start();
     const id = await waitingInstance("ping", {});

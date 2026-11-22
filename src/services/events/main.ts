@@ -11,7 +11,7 @@ import { BaseWorker } from "@/index.js";
 import { STREAMS, CONSUMER_GROUPS, buildStreamEvent } from "@/index.js";
 import { insertMessageLogs } from "@/db/bulk.js";
 import { workflowWaiters, workflowSteps, workflowInstances } from "@/db/schema.js";
-import { eq, and, or, isNull, gt } from "drizzle-orm";
+import { eq, and, or, isNull, gt, inArray } from "drizzle-orm";
 import { type WorkerOptions } from "@/shared/index.js";
 import { startHealthReporter } from "@/workers/index.js";
 import {
@@ -250,6 +250,7 @@ export class EventWorker extends BaseWorker {
       );
 
     const data: Record<string, any> = eventData && typeof eventData === "object" ? eventData : {};
+    const woken: string[] = [];
 
     for (const waiter of waiters) {
       let matched = true;
@@ -318,10 +319,10 @@ export class EventWorker extends BaseWorker {
             .where(eq(workflowSteps.id, pendingStep.id));
         }
 
-        // Wake up workflow. Publish BEFORE deleting the waiter: a crash after the
-        // delete but before the publish would leave the instance unrecoverable,
-        // whereas a duplicate resume is idempotent (the instance lock and the
-        // replayed step outputs both absorb it).
+        // The waiter is deleted only once this resume is out (below): a failed
+        // publish or a crash before it would otherwise leave the instance with
+        // nothing to wake it, whereas a duplicate resume is idempotent (the
+        // instance lock and the replayed step outputs both absorb it).
         publishPromises.push(
           new Promise((resolve, reject) => {
             this.eventBuffer.push({
@@ -343,14 +344,15 @@ export class EventWorker extends BaseWorker {
             });
           }),
         );
-
-        await this.dbConn.delete(workflowWaiters).where(eq(workflowWaiters.id, waiter.id));
-
-        // The timer entry is left; the poll loop drops it once the instance isn't pending.
+        woken.push(waiter.id);
       }
     }
 
     await Promise.all(publishPromises);
+    // The timer entry is left; the poll loop drops it once the instance isn't pending.
+    if (woken.length > 0) {
+      await this.dbConn.delete(workflowWaiters).where(inArray(workflowWaiters.id, woken));
+    }
   }
 }
 
