@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/devkitshq/notifkit/compare/provider-slack-v0.1.4...provider-slack-v0.1.5) (2026-11-22)
+
+
+### Bug Fixes
+
+* **providers:** stop timed-out sends landing twice, keep fcm apps apart ([141f11c](https://github.com/devkitshq/notifkit/commit/141f11c4edc6c108d4611b98d81e9b972d0b6f5c))
+
 ## [0.1.4](https://github.com/devkitshq/notifkit/compare/provider-slack-v0.1.3...provider-slack-v0.1.4) (2026-11-21)
 
 

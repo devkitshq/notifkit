@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.23](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.22...notifkit-v0.1.23) (2026-11-22)
+
+
+### Bug Fixes
+
+* **api:** reject unknown key roles and mount every provider's webhook ([4ff2713](https://github.com/devkitshq/notifkit/commit/4ff2713564601cbe4b4262061e80ee0bb917c0e7))
+* **api:** stop accepting a deleted project's API keys right away ([d306e10](https://github.com/devkitshq/notifkit/commit/d306e10ed722b71757bb8f5ac0df34aa5de29be5))
+* **dashboard:** show a traced workflow run's name and steps reached ([ebbf8db](https://github.com/devkitshq/notifkit/commit/ebbf8dbd337c0d2c2e1d7c16c5e9570952f0c915))
+* drop cached users and contacts when they change ([4137536](https://github.com/devkitshq/notifkit/commit/4137536c7be207d612c5f4c1ced8c01a311c8b91))
+* **events:** keep a workflow's waiter until its resume is published ([1b6b03f](https://github.com/devkitshq/notifkit/commit/1b6b03fc1fc0a03f81cf70c24d603a6268eaa303))
+* fail AI sends with no model and drop edited templates in enricher ([49a27c9](https://github.com/devkitshq/notifkit/commit/49a27c9bc901ae9aa466c356e84d1278b7fa5c66))
+* **mcp:** keep a waitForEvent step's match when creating a workflow ([281fa8a](https://github.com/devkitshq/notifkit/commit/281fa8abd98f1f1aace901da1de79f432efe7a7e))
+* **providers:** stop timed-out sends landing twice, keep fcm apps apart ([141f11c](https://github.com/devkitshq/notifkit/commit/141f11c4edc6c108d4611b98d81e9b972d0b6f5c))
+
 ## [0.1.22](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.21...notifkit-v0.1.22) (2026-11-21)
 
 
