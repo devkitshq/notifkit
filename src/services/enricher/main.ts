@@ -7,6 +7,7 @@ import { BaseWorker, type ProcessResult } from "@/index.js";
 import {
   INBOUND_STREAMS,
   CONSUMER_GROUPS,
+  PUBSUB_CHANNELS,
   registry,
   buildStreamEvent,
   type NotificationCreatedPayload,
@@ -49,6 +50,7 @@ let consumer: StreamConsumer;
 let pendingScanner: PendingMessageScanner;
 let worker: BaseWorker;
 let healthInterval: NodeJS.Timeout | null = null;
+let subscriber: any = null;
 
 export interface EnricherWorkerOptions extends WorkerOptions {
   producers: any;
@@ -584,6 +586,15 @@ export async function startEnricherWorker() {
     templateCache,
   });
 
+  subscriber = redis.native.duplicate({ enableAutoPipelining: false });
+  await subscriber.subscribe(PUBSUB_CHANNELS.TEMPLATE_INVALIDATED);
+  subscriber.on("message", (channel: string, message: string) => {
+    if (channel === PUBSUB_CHANNELS.TEMPLATE_INVALIDATED) {
+      templateCache.invalidateKey(message);
+      logger.info({ cacheKey: message }, "invalidated template cache");
+    }
+  });
+
   healthInterval = startHealthReporter("enricher", worker, redis, logger);
 
   logger.info({ env: config.NODE_ENV }, "enricher starting");
@@ -595,6 +606,14 @@ export function getEnricherWorker(): EnricherWorker | undefined {
 }
 
 export async function stopEnricherWorker(): Promise<void> {
-  await shutdownWorker("enricher", { logger, timers: [healthInterval], worker, sql, redis });
+  await shutdownWorker("enricher", {
+    logger,
+    timers: [healthInterval],
+    subscriber,
+    worker,
+    sql,
+    redis,
+  });
   healthInterval = null;
+  subscriber = null;
 }

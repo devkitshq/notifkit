@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { MockLanguageModelV4 } from "ai/test";
 import { APICallError } from "ai";
 import { STREAMS } from "@/contracts/index.js";
+import { setAiConfig } from "@/config/index.js";
 import { useInfra, waitFor, settle } from "./support/infra.js";
 import { RecordingTransport, startNotifkit, type Running, type Api } from "./support/pipeline.js";
 
@@ -183,6 +184,25 @@ describe("AI-generated notifications", () => {
       expect(prompts.filter((pr) => pr === marker)).toHaveLength(1);
       expect(email.for(p.id)).toEqual([]);
     } finally {
+      app.server.off("notification:failed", on);
+    }
+  });
+
+  it("fails a notification instead of sending its prompt when no model is set", async () => {
+    const p = await project();
+    await p.api("POST", "/v1/users", { id: "u", email: "u@x.com" });
+    const failures: unknown[][] = [];
+    const on = (...a: unknown[]) => failures.push(a);
+    app.server.on("notification:failed", on);
+    setAiConfig({});
+    try {
+      await notify(p.api, { user: "u", template: "digest", aiPrompts: { summary: "secret" } });
+
+      await waitFor("failure reported", () => failures.length > 0);
+      await settle(1_000);
+      expect(email.for(p.id)).toEqual([]);
+    } finally {
+      setAiConfig({ aiModel: model as any });
       app.server.off("notification:failed", on);
     }
   });

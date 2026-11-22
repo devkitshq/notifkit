@@ -408,6 +408,36 @@ export function definePipelineSuite(mode: { fused: boolean }) {
         await waitFor("delivered", () => email.for(p.id).length === 1);
       });
 
+      it("applies a topic added to a template straight away", async () => {
+        const p = await project();
+        await addUser(p.api, {
+          id: "u",
+          email: "u@x.com",
+          preferences: { topics: { newsletter: false } },
+        });
+        await notify(p.api, { user: "u", template: "receipt", data: { name: "before" } });
+        await waitFor("delivered", () => email.for(p.id).length === 1);
+
+        const res = await p.api("PUT", "/v1/templates", {
+          templates: [
+            {
+              id: "receipt",
+              channel: "email",
+              topic: "newsletter",
+              content: { subject: "Receipt for {{name}}", text: "Hi {{name}}" },
+            },
+          ],
+        });
+        expect(res.status).toBe(200);
+        await settle(300);
+
+        await notify(p.api, { user: "u", template: "receipt", data: { name: "after" } });
+        await expectNothingSentFor(
+          p,
+          (t) => t.renderedContent.content.subject === "Receipt for after",
+        );
+      });
+
       it("skips only the address that opted out of the topic", async () => {
         const p = await project();
         await addUser(p.api, {
