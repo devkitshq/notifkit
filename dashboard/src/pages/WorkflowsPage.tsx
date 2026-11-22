@@ -27,11 +27,11 @@ interface WorkflowDef {
 interface WorkflowInstance {
   id: string;
   projectId: string;
-  workflowName: string;
-  status: "pending" | "running" | "completed" | "failed";
-  currentStepIndex: number;
+  name: string;
+  status: "pending" | "running" | "completed" | "failed" | "canceled";
   input: any;
-  output: any;
+  // One row per step reached, including the one it is waiting on.
+  steps: any[];
   createdAt: string;
   updatedAt: string;
 }
@@ -182,11 +182,9 @@ export default function WorkflowsPage() {
                 </div>
                 <div className="text-xs text-muted-foreground">
                   Workflow Name:{" "}
-                  <strong className="text-foreground">{searchedInstance.workflowName}</strong> |
-                  Step Pointer:{" "}
-                  <strong className="text-foreground">
-                    {searchedInstance.currentStepIndex ?? 0}
-                  </strong>
+                  <strong className="text-foreground">{searchedInstance.name}</strong> | Steps
+                  Reached:{" "}
+                  <strong className="text-foreground">{searchedInstance.steps.length}</strong>
                 </div>
               </div>
             )}
