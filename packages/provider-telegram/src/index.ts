@@ -81,6 +81,9 @@ export class TelegramTransport implements Transport {
           ...(content.disableWebPagePreview ? { link_preview_options: { is_disabled: true } } : {}),
           ...(content.disableNotification ? { disable_notification: true } : {}),
         }),
+        // Delivery aborts this when the send times out, so a late request
+        // cannot land after its retry.
+        signal: (task as { signal?: AbortSignal }).signal,
       });
 
       const data = (await res.json()) as {

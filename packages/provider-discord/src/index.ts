@@ -116,6 +116,9 @@ export class DiscordTransport implements Transport {
           ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
           ...(embeds ? { embeds } : {}),
         }),
+        // Delivery aborts this when the send times out, so a late request
+        // cannot land after its retry.
+        signal: (task as { signal?: AbortSignal }).signal,
       });
 
       if (!res.ok) {

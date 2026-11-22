@@ -1,5 +1,6 @@
 import type { DeliveryResult, Transport } from "notifkit";
 import type { NotificationDispatchedPayload, Logger } from "notifkit";
+import { createHash } from "node:crypto";
 import { initializeApp, getApp, cert, type App } from "firebase-admin/app";
 import { getMessaging, type Messaging } from "firebase-admin/messaging";
 
@@ -30,12 +31,15 @@ export class FcmTransport implements Transport {
   private getMessaging(): Messaging {
     if (this.messaging) return this.messaging;
 
+    // One app per service account: a shared name would hand a second
+    // transport the first one's credentials.
+    const appName = `notifkit-${createHash("sha256").update(this.serviceAccountJson).digest("hex").slice(0, 16)}`;
     let app: App;
     try {
-      app = getApp("notifkit");
+      app = getApp(appName);
     } catch {
       const serviceAccount = JSON.parse(this.serviceAccountJson) as Record<string, unknown>;
-      app = initializeApp({ credential: cert(serviceAccount) }, "notifkit");
+      app = initializeApp({ credential: cert(serviceAccount) }, appName);
     }
 
     this.messaging = getMessaging(app);

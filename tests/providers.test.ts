@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
 import { ResendTransport } from "../packages/provider-resend/src/index.js";
 import { FcmTransport } from "../packages/provider-fcm/src/index.js";
+import { initializeApp } from "firebase-admin/app";
 import { ConsoleTransport } from "../packages/provider-console/src/index.js";
 import type * as ResendModule from "resend";
 
@@ -344,6 +345,23 @@ describe("FcmTransport (Push Provider)", () => {
       serviceAccountJson: JSON.stringify({ project_id: "test-project" }),
     });
     expect((await transport.send(fcmTask)).retryable).not.toBe(false);
+  });
+
+  it("gives transports with different service accounts their own Firebase app", async () => {
+    mockSendPush.mockResolvedValue("id");
+    const init = vi.mocked(initializeApp);
+    init.mockClear();
+    const accountA = JSON.stringify({ project_id: "project-a" });
+    const accountB = JSON.stringify({ project_id: "project-b" });
+
+    await new FcmTransport({ serviceAccountJson: accountA }).send(fcmTask);
+    await new FcmTransport({ serviceAccountJson: accountB }).send(fcmTask);
+    await new FcmTransport({ serviceAccountJson: accountA }).send(fcmTask);
+
+    const names = init.mock.calls.map((call) => call[1]);
+    expect(names[0]).not.toBe(names[1]);
+    // The same credentials map to the same app name, so getApp can reuse it.
+    expect(names[2]).toBe(names[0]);
   });
 });
 
@@ -1089,6 +1107,32 @@ describe("TwilioTransport (Client and logging)", () => {
 
 // ─── Telegram ────────────────────────────────────────────────────────────────
 
+/**
+ * Stubs `fetch` with a request that lands `response` after 100ms unless its
+ * abort signal fires first, the way a real fetch does.
+ */
+function stubSlowFetch(response: unknown) {
+  const fn = vi.fn(
+    (_url: unknown, init?: RequestInit) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve(response), 100);
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(init.signal!.reason);
+        });
+      }),
+  );
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+/** A signal that aborts after 20ms, like delivery's send timeout. */
+function timeoutSignal() {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(new Error("Transport timeout after 20ms")), 20);
+  return controller.signal;
+}
+
 import { TelegramTransport } from "../packages/provider-telegram/src/index.js";
 
 const BOT_TOKEN = "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11";
@@ -1313,6 +1357,14 @@ describe("TelegramTransport (Telegram Provider)", () => {
       { taskId: "task-uuid-tg-1", error: "socket hang up" },
       "Telegram unexpected error",
     );
+  });
+
+  it("cancels the request when delivery aborts the send", async () => {
+    stubSlowFetch({ json: async () => okResult(1) });
+
+    const result = await telegramTransport().send(telegramTask({ signal: timeoutSignal() }));
+
+    expect(result).toEqual({ success: false, error: "Transport timeout after 20ms" });
   });
 
   it("logs an accepted send", async () => {
@@ -1582,6 +1634,14 @@ describe("DiscordTransport (Discord Provider)", () => {
       { taskId: "task-uuid-dc-1", error: "socket hang up" },
       "Discord unexpected error",
     );
+  });
+
+  it("cancels the request when delivery aborts the send", async () => {
+    stubSlowFetch({ ok: true, status: 200, json: async () => ({ id: "msg-1" }) });
+
+    const result = await new DiscordTransport().send(discordTask({ signal: timeoutSignal() }));
+
+    expect(result).toEqual({ success: false, error: "Transport timeout after 20ms" });
   });
 
   it("logs an accepted send", async () => {
@@ -1918,6 +1978,16 @@ describe("SlackTransport (Slack Provider)", () => {
         "Slack unexpected error",
       );
     });
+
+    it("cancels the request when delivery aborts the send", async () => {
+      stubSlowFetch({ status: 200, json: async () => ({ ok: true, ts: "1.2" }) });
+
+      const result = await new SlackTransport({ botToken: SLACK_BOT_TOKEN }).send(
+        slackTask({ signal: timeoutSignal() }),
+      );
+
+      expect(result).toEqual({ success: false, error: "Transport timeout after 20ms" });
+    });
   });
 
   describe("incoming webhooks", () => {
@@ -2040,6 +2110,16 @@ describe("SlackTransport (Slack Provider)", () => {
         { taskId: "task-uuid-slack-1", error: "dns failure" },
         "Slack unexpected error",
       );
+    });
+
+    it("cancels the request when delivery aborts the send", async () => {
+      stubSlowFetch({ ok: true, status: 200, text: async () => "ok" });
+
+      const result = await new SlackTransport().send(
+        slackTask({ destination: HOOK_URL, signal: timeoutSignal() }),
+      );
+
+      expect(result).toEqual({ success: false, error: "Transport timeout after 20ms" });
     });
   });
 });

@@ -171,6 +171,9 @@ export class SlackTransport implements Transport {
           "Content-Type": "application/json; charset=utf-8",
         },
         body: JSON.stringify({ channel, text, ...(blocks ? { blocks } : {}) }),
+        // Delivery aborts this when the send times out, so a late request
+        // cannot land after its retry.
+        signal: (task as { signal?: AbortSignal }).signal,
       });
 
       const body = (await response.json()) as {
@@ -227,6 +230,7 @@ export class SlackTransport implements Transport {
         method: "POST",
         headers: { "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify({ text, ...(blocks ? { blocks } : {}) }),
+        signal: (task as { signal?: AbortSignal }).signal,
       });
 
       const body = await response.text();
