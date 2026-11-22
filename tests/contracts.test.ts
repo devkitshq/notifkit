@@ -123,4 +123,33 @@ describe("End-to-End Contract Registry Tests", () => {
     expect(delivered.success).toBe(true);
     expect(failed.success).toBe(true);
   });
+
+  it("accepts the teams channel with a Workflows webhook URL", () => {
+    const requested = registry.safeParsePayload("notification.requested", {
+      projectId: "33eb2225-c6f3-4e4b-91bb-000000000000",
+      target: { type: "user", userId: "user-456" },
+      templateId: "tmpl-789",
+      channels: ["teams"],
+      data: { name: "Alice" },
+      fallback: false,
+    });
+    expect(requested.success).toBe(true);
+
+    const enriched = registry.safeParsePayload("notification.enriched", {
+      projectId: "33eb2225-c6f3-4e4b-91bb-000000000000",
+      rawEventId: "44eb2225-c6f3-4e4b-91bb-000000000000",
+      recipientId: "user-456",
+      channel: "teams",
+      priority: "normal",
+      templateVariables: { name: "Alice" },
+      recipient: {
+        id: "cnt-1",
+        teams: "https://prod-12.westus.logic.azure.com/workflows/abc",
+        locale: "en",
+        timezone: "UTC",
+        preferences: { optedOut: false, channels: [] },
+      },
+    });
+    expect(enriched.success).toBe(true);
+  });
 });
