@@ -3,7 +3,7 @@ import { ContactChannelSchema } from "@/contracts/index.js";
 import { readJsonBody, sendJson, sendNoContent, sendValidationError } from "../http.js";
 import type { RouteContext } from "../router.js";
 import { normaliseTarget } from "@/shared/index.js";
-import { eq, desc, and, like } from "drizzle-orm";
+import { eq, desc, and, ilike } from "drizzle-orm";
 import { suppressions } from "@/db/schema.js";
 import { z } from "zod";
 import { type Deps, contains, getQueryParam, parseLimit } from "./shared.js";
@@ -22,7 +22,7 @@ export function createSuppressionsHandlers(deps: Deps) {
     const conditions = [eq(suppressions.projectId, ctx.projectId!)];
     if (channel) conditions.push(eq(suppressions.channel, channel as any));
     if (reason) conditions.push(eq(suppressions.reason, reason));
-    if (target) conditions.push(like(suppressions.target, contains(target.toLowerCase().trim())));
+    if (target) conditions.push(ilike(suppressions.target, contains(target.trim())));
 
     const rows = await deps.db
       .select()

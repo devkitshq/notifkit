@@ -528,9 +528,12 @@ export async function startApiServer() {
     logger.info({ tokenHash }, "api key cache invalidated");
   });
 
-  for (const channel of transportRegistry.registeredChannels()) {
-    const transport = transportRegistry.get(channel as any);
-    if (!transport?.webhookPath) continue;
+  const transports = transportRegistry
+    .registeredChannels()
+    .flatMap((channel) => transportRegistry.getAll(channel as any));
+  for (const transport of transports) {
+    const channel = transport.channel;
+    if (!transport.webhookPath) continue;
 
     if (transport.verifyWebhookChallenge) {
       router.get(transport.webhookPath, async (_req, res, ctx) => {

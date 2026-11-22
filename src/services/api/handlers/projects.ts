@@ -64,8 +64,9 @@ export function createProjectsHandlers(deps: Deps) {
     const id = ctx.params.id!;
     const parsed = z
       .object({ role: z.enum(["admin", "read_only"]).default("admin") })
-      .safeParse(await readJsonBody(req));
-    const role = parsed.success ? parsed.data.role : "admin";
+      .safeParse((await readJsonBody(req)) ?? {});
+    if (!parsed.success) return sendValidationError(res, parsed.error);
+    const { role } = parsed.data;
 
     // A key for a project that does not exist would fail the foreign key.
     if (!isUuid(id) || !(await deps.projectRepo.findThrottleSettings(id))) {

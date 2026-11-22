@@ -27,8 +27,7 @@ const SECRET = "api-test-unsubscribe-secret";
 
 // A provider with a webhook, as Resend or Twilio would mount one.
 class WebhookTransport extends RecordingTransport implements Transport {
-  readonly webhookPath = "/webhooks/test";
-  constructor() {
+  constructor(readonly webhookPath = "/webhooks/test") {
     super("email");
   }
   verifyWebhookChallenge(query: URLSearchParams) {
@@ -42,11 +41,13 @@ class WebhookTransport extends RecordingTransport implements Transport {
   }
 }
 const email = new WebhookTransport();
+// A second email provider, whose webhook must be mounted too.
+const backupEmail = new WebhookTransport("/webhooks/test-backup");
 
 beforeAll(async () => {
   app = await startNotifkit(infra, {
     services: ["api", "enricher", "engine", "delivery", "scheduler", "events"],
-    providers: [email],
+    providers: [email, backupEmail],
     env: {
       RATE_LIMIT_PER_HOUR: "100000",
       UNSUBSCRIBE_SECRET: SECRET,
@@ -331,6 +332,19 @@ describe("projects", () => {
     expect(JSON.stringify(keys)).not.toContain(p.apiKey.slice(8));
     await client.deleteProjectKey(p.id, created.id);
     expect((await client.listProjectKeys(p.id)).keys).toHaveLength(1);
+  });
+
+  it("rejects a key role it does not know instead of minting an admin key", async () => {
+    const p = await project();
+    const typo = await app.admin("POST", `/v1/projects/${p.id}/keys`, { role: "readonly" });
+    expect(typo.status).toBe(400);
+    expect(typo.body.error).toBe("validation_error");
+    expect((await sdk(ADMIN_KEY).listProjectKeys(p.id)).keys).toHaveLength(1);
+
+    // No body at all still gets the default admin key.
+    const bare = await app.admin("POST", `/v1/projects/${p.id}/keys`);
+    expect(bare.status).toBe(201);
+    expect(bare.body.role).toBe("admin");
   });
 });
 
@@ -774,6 +788,14 @@ describe("provider webhooks", () => {
     expect(ok.status).toBe(200);
     expect(await ok.text()).toBe("abc123");
     expect((await fetch(`${app.baseUrl}/webhooks/test?hub.verify_token=no`)).status).toBe(403);
+  });
+
+  it("mounts the webhook of every provider on a channel, not just the first", async () => {
+    const res = await fetch(
+      `${app.baseUrl}/webhooks/test-backup?hub.verify_token=ok&hub.challenge=xyz`,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("xyz");
   });
 
   it("rejects an unsigned webhook", async () => {
@@ -1312,6 +1334,13 @@ describe("regressions", () => {
     const found = (await p.client.listSuppressions({ target: "a_b" })).suppressions;
     expect(found.map((s) => s.target)).toEqual(["a_b@x.com"]);
     expect((await p.client.listSuppressions({ target: "%" })).suppressions).toEqual([]);
+  });
+
+  it("finds a mixed-case target that is not an email address", async () => {
+    const p = await project();
+    await p.client.createSuppression({ channel: "slack", target: "U01ABCDEF" });
+    const found = (await p.client.listSuppressions({ target: "U01ABC" })).suppressions;
+    expect(found.map((s) => s.target)).toEqual(["U01ABCDEF"]);
   });
 
   it("serves many live event streams without leaking listener warnings", async () => {
