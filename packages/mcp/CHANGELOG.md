@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.7](https://github.com/devkitshq/notifkit/compare/mcp-v0.1.6...mcp-v0.1.7) (2026-11-22)
+
+
+### Bug Fixes
+
+* **mcp:** keep a waitForEvent step's match when creating a workflow ([281fa8a](https://github.com/devkitshq/notifkit/commit/281fa8abd98f1f1aace901da1de79f432efe7a7e))
+
 ## [0.1.6](https://github.com/devkitshq/notifkit/compare/mcp-v0.1.5...mcp-v0.1.6) (2026-11-01)
 
 
