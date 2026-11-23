@@ -64,28 +64,46 @@ function applyEscape(value: string, mode: EscapeMode): string {
   return value;
 }
 
+// `{{{path}}}` (group 1) or `{{path}}` (group 2), where a path is a variable
+// name or a dotted path (`user.name`), with optional whitespace inside the
+// braces. One regex so the template is scanned in a single pass.
+const PLACEHOLDER = /\{\{\{\s*(\w+(?:\.\w+)*)\s*\}\}\}|\{\{\s*(\w+(?:\.\w+)*)\s*\}\}/g;
+
+/**
+ * The value at a dotted path in `variables`, as a string. A missing segment,
+ * an inherited property (`constructor`, `toString`) or a null value gives "".
+ */
+function lookup(variables: Record<string, unknown>, path: string): string {
+  let value: unknown = variables;
+  for (const segment of path.split(".")) {
+    if (value === null || typeof value !== "object" || !Object.hasOwn(value, segment)) return "";
+    value = (value as Record<string, unknown>)[segment];
+  }
+  if (value === undefined || value === null) return "";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
 /**
  * Interpolate `{{var}}` placeholders in a single leaf string.
  *
  * `{{{var}}}` (triple braces) interpolates raw unescaped values.
  * `{{var}}` (double braces) applies contextual escaping to the substituted value.
+ * Both accept a dotted path (`{{user.name}}`) and spaces (`{{ name }}`).
+ * Inserted values are never scanned again, so a value that contains `{{…}}`
+ * comes out as written instead of pulling in other variables.
  */
 function interpolateLeaf(
   tmpl: string,
   variables: Record<string, unknown>,
   mode: EscapeMode,
 ): string {
-  return tmpl
-    .replace(/\{\{\{(\w+)\}\}\}/g, (_, k: string) => {
-      const raw = variables[k];
-      if (raw === undefined || raw === null) return "";
-      return typeof raw === "string" ? raw : JSON.stringify(raw);
-    })
-    .replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
-      const raw = variables[k];
-      if (raw === undefined || raw === null) return "";
-      return applyEscape(typeof raw === "string" ? raw : JSON.stringify(raw), mode);
-    });
+  return tmpl.replace(
+    PLACEHOLDER,
+    (_, rawPath: string | undefined, escapedPath: string | undefined) =>
+      rawPath !== undefined
+        ? lookup(variables, rawPath)
+        : applyEscape(lookup(variables, escapedPath ?? ""), mode),
+  );
 }
 
 /**

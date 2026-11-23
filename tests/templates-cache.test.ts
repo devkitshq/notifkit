@@ -153,4 +153,59 @@ describe("Template Rendering Utilities (src/templates/render.ts)", () => {
       expect(rendered.content.body).toContain('"msg": "alert"');
     });
   });
+
+  describe("renderWithTemplate (dotted paths and spaces in placeholders)", () => {
+    const render = (content: Record<string, unknown>, vars: Record<string, unknown>) =>
+      renderWithTemplate({ content }, vars).content;
+
+    it("replaces a nested value", () => {
+      expect(render({ body: "Hi {{user.name}}" }, { user: { name: "Ada" } })).toEqual({
+        body: "Hi Ada",
+      });
+    });
+
+    it("renders an empty string for a missing nested value", () => {
+      const vars = { user: { name: "Ada" }, plan: "pro" };
+      expect(render({ body: "[{{user.missing}}][{{nope.name}}][{{plan.name}}]" }, vars)).toEqual({
+        body: "[][][]",
+      });
+    });
+
+    it("does not read inherited properties", () => {
+      expect(render({ body: "[{{user.constructor.name}}][{{toString}}]" }, { user: {} })).toEqual({
+        body: "[][]",
+      });
+    });
+
+    it("allows spaces inside the braces", () => {
+      const vars = { name: "Ada", user: { name: "Grace" } };
+      expect(render({ body: "{{ name }} {{{ name }}} {{ user.name }}" }, vars)).toEqual({
+        body: "Ada Ada Grace",
+      });
+    });
+
+    it("does not scan an inserted value for placeholders", () => {
+      const vars = {
+        body: "{{ x }} {{x}} {{{x}}} {{ user.token }}",
+        x: "leaked",
+        user: { token: "secret" },
+      };
+      expect(render({ html: "{{{body}}}", text: "{{body}}" }, vars)).toEqual({
+        html: "{{ x }} {{x}} {{{x}}} {{ user.token }}",
+        text: "{{ x }} {{x}} {{{x}}} {{ user.token }}",
+      });
+    });
+
+    it("keeps the escaping of the field the nested value lands in", () => {
+      const vars = { user: { bio: "<b>hi</b>", name: "Ada\r\nBcc: x@example.com" } };
+      const rendered = render(
+        { html: "<p>{{user.bio}}</p>{{{ user.bio }}}", subject: "Hi {{ user.name }}" },
+        vars,
+      );
+      expect(rendered).toEqual({
+        html: "<p>&lt;b&gt;hi&lt;/b&gt;</p><b>hi</b>",
+        subject: "Hi Ada Bcc: x@example.com",
+      });
+    });
+  });
 });
