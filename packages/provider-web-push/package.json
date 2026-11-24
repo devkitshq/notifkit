@@ -1,0 +1,44 @@
+{
+  "name": "@notifkit/provider-web-push",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7"
+  },
+  "peerDependencies": {
+    "notifkit": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/web-push": "^3.6.4",
+    "notifkit": "file:../../",
+    "typescript": "^5.8.3"
+  },
+  "description": "Web Push (VAPID) browser push transport for notifkit.",
+  "license": "MIT",
+  "author": "devkitshq",
+  "homepage": "https://notifkit.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devkitshq/notifkit.git",
+    "directory": "packages/provider-web-push"
+  },
+  "bugs": {
+    "url": "https://github.com/devkitshq/notifkit/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
