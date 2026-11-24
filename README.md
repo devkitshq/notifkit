@@ -144,7 +144,7 @@ Everything lives at **[notifkit.dev/docs](https://notifkit.dev/docs/)**: [concep
 
 ## Production support
 
-Need help running notifkit in production? We can deploy it on your infrastructure, migrate your templates from Knock, Courier, Novu or your custom engine, and give you priority support. Email [contact.devkitshq@gmail.com](mailto:contact.devkitshq@gmail.com?subject=notifkit%20production%20support).
+Need help running notifkit in production? We can deploy it on your infrastructure, migrate your templates from Knock, Courier, Novu or your custom engine, and give you priority support. Email [contact@devkitshq.com](mailto:contact@devkitshq.com?subject=notifkit%20production%20support).
 
 ## Contributing
 
@@ -159,7 +159,7 @@ npm test
 
 The test suite starts its own PostgreSQL and Redis containers, so Docker is the only thing you need running.
 
-Questions, bugs, or ideas: [contact.devkitshq@gmail.com](mailto:contact.devkitshq@gmail.com), or open an issue. If notifkit saved you from building notification plumbing, a [star](https://github.com/devkitshq/notifkit) helps other developers find it.
+Questions, bugs, or ideas: [contact@devkitshq.com](mailto:contact@devkitshq.com), or open an issue. If notifkit saved you from building notification plumbing, a [star](https://github.com/devkitshq/notifkit) helps other developers find it.
 
 ## Contributors
 

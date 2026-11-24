@@ -89,6 +89,6 @@ Use `feat` and `fix` only for changes users will notice, since those appear in t
 
 ## Questions
 
-Open an issue or email [contact.devkitshq@gmail.com](mailto:contact.devkitshq@gmail.com).
+Open an issue or email [contact@devkitshq.com](mailto:contact@devkitshq.com).
 
 By contributing, you agree your work is licensed under the [MIT License](./LICENSE).
