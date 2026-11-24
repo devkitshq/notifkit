@@ -103,6 +103,7 @@ Bring your own provider accounts. First-party packages:
 - [`@notifkit/provider-slack`](./packages/provider-slack): Slack messages via Incoming Webhooks or the Web API
 - [`@notifkit/provider-telegram`](./packages/provider-telegram): messages via a Telegram bot
 - [`@notifkit/provider-discord`](./packages/provider-discord): messages via a Discord webhook
+- [`@notifkit/provider-ntfy`](./packages/provider-ntfy): push notifications via ntfy (ntfy.sh or self-hosted)
 - [`@notifkit/provider-whatsapp`](./packages/provider-whatsapp): messages via Meta's WhatsApp Cloud API
 - [`@notifkit/provider-console`](./packages/provider-console): prints instead of sending, for development and tests
 
