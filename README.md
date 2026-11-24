@@ -96,6 +96,7 @@ Longer comparisons: [Novu](https://notifkit.dev/docs/vs/novu.html) · [Knock](ht
 Bring your own provider accounts. First-party packages:
 
 - [`@notifkit/provider-resend`](./packages/provider-resend): transactional email via Resend
+- [`@notifkit/provider-postmark`](./packages/provider-postmark): transactional email via Postmark, with Basic Auth-verified bounce and complaint webhooks
 - [`@notifkit/provider-smtp`](./packages/provider-smtp): email through any SMTP server, via nodemailer
 - [`@notifkit/provider-ses`](./packages/provider-ses): email via AWS SES, with bounces and complaints through SNS
 - [`@notifkit/provider-fcm`](./packages/provider-fcm): push notifications via Firebase Cloud Messaging
