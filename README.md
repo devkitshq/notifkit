@@ -99,6 +99,7 @@ Bring your own provider accounts. First-party packages:
 - [`@notifkit/provider-smtp`](./packages/provider-smtp): email through any SMTP server, via nodemailer
 - [`@notifkit/provider-ses`](./packages/provider-ses): email via AWS SES, with bounces and complaints through SNS
 - [`@notifkit/provider-fcm`](./packages/provider-fcm): push notifications via Firebase Cloud Messaging
+- [`@notifkit/provider-ntfy`](./packages/provider-ntfy): push notifications via ntfy
 - [`@notifkit/provider-twilio`](./packages/provider-twilio): SMS via Twilio, with signature-verified delivery status callbacks
 - [`@notifkit/provider-slack`](./packages/provider-slack): Slack messages via Incoming Webhooks or the Web API
 - [`@notifkit/provider-telegram`](./packages/provider-telegram): messages via a Telegram bot
