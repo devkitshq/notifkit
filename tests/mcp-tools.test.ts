@@ -159,6 +159,30 @@ describe("MCP Server Tool Registration", () => {
     expect(renderData.rendered.text).toBe("Total: $50");
   });
 
+  it("previews dotted paths and spaced placeholders the way the renderer sends them", async () => {
+    const server = createServer({ baseUrl: "https://api.test", apiKey: "nk_key" });
+    const tools = (server as any)._registeredTools;
+
+    const res = await tools["preview_template"].handler({
+      content: {
+        subject: "Hi {{ user.name }}",
+        html: "<p>{{user.bio}}</p>{{{ body }}}",
+        text: "[{{ missing.path }}][{{toString}}]",
+      },
+      data: { user: { name: "Ada", bio: "<b>x</b>" }, body: "{{ user.name }}" },
+    });
+    expect(res.isError).toBeFalsy();
+    const data = JSON.parse(res.content[0].text);
+    expect(data.rendered).toEqual({
+      subject: "Hi Ada",
+      // A raw value is inserted as written: its own {{ }} is not filled in.
+      html: "<p>&lt;b&gt;x&lt;/b&gt;</p>{{ user.name }}",
+      text: "[][]",
+    });
+    expect(data.resolvedVariables).toEqual(["user.name", "user.bio", "body"]);
+    expect(data.unresolvedVariables).toEqual(["missing.path", "toString"]);
+  });
+
   it("executes send_campaign with multichannel support", async () => {
     const fetchMock = stubFetch({ messageId: "msg_1" }, 202);
     const server = createServer({ baseUrl: "https://api.test", apiKey: "nk_key" });

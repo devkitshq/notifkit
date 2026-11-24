@@ -24,7 +24,7 @@ import { IdempotencyGuard } from "@/index.js";
 import { TemplateRepository } from "@/index.js";
 import { scheduleOrDispatch } from "@/services/engine/schedule-or-dispatch.js";
 import { globalEmitter, type WorkerOptions } from "@/shared/index.js";
-import { renderWithTemplate, TemplateCache } from "@/templates/index.js";
+import { interpolateText, renderWithTemplate, TemplateCache } from "@/templates/index.js";
 import { startHealthReporter } from "@/workers/index.js";
 import {
   createPriorityProducers,
@@ -300,7 +300,7 @@ export async function startAiWorker() {
   // AI generation
   async function generateAiContent(prompt: string, vars: Record<string, unknown>): Promise<string> {
     const aiConfig = getAiConfig();
-    const interpolated = prompt.replace(/\{\{(\w+)\}\}/g, (_, k: string) => String(vars[k] ?? ""));
+    const interpolated = interpolateText(prompt, vars);
 
     // Sending the raw prompt as the message would put it in front of the recipient.
     if (!aiConfig.aiModel) {
