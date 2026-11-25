@@ -101,7 +101,11 @@ export class WhatsAppTransport implements Transport {
           Authorization: `Bearer ${this.accessToken}`,
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(task.deliveryOptions?.timeoutMs ?? 10000),
+        // Delivery aborts this when it gives up on the send and retries, so a late
+        // request can't send the message twice. Called on its own, a send gets the same timeout.
+        signal:
+          (task as { signal?: AbortSignal }).signal ??
+          AbortSignal.timeout(task.deliveryOptions?.timeoutMs ?? 10000),
       });
 
       const data: any = await res.json().catch(() => ({}));

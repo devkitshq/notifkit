@@ -161,7 +161,11 @@ export class VonageTransport implements Transport {
           from: normaliseSender(from),
           text: truncate(text, VONAGE_MAX_TEXT),
         }),
-        signal: AbortSignal.timeout(task.deliveryOptions?.timeoutMs ?? 10_000),
+        // Delivery aborts this when it gives up on the send and retries, so a late
+        // request can't send the SMS twice. Called on its own, a send gets the same timeout.
+        signal:
+          (task as { signal?: AbortSignal }).signal ??
+          AbortSignal.timeout(task.deliveryOptions?.timeoutMs ?? 10_000),
       });
       const data: unknown = await res.json().catch(() => undefined);
 

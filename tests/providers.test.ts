@@ -1370,6 +1370,15 @@ describe("VonageTransport (SMS Provider)", () => {
     expect(result.retryable).toBeUndefined();
   });
 
+  it("cancels the request when delivery aborts the send", async () => {
+    // Delivery retries once it gives up, so a request left running could still send the SMS.
+    stubSlowFetch({ ok: true, status: 202, json: async () => ({ message_uuid: MESSAGE_UUID }) });
+
+    const result = await vonageTransport().send(vonageTask({ signal: timeoutSignal() }));
+
+    expect(result).toEqual({ success: false, error: "Transport timeout after 20ms" });
+  });
+
   it("counts an accepted message without a message_uuid as sent, and says so", async () => {
     stubVonage(202, {});
     const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
@@ -2700,6 +2709,15 @@ describe("WhatsAppTransport (WhatsApp Provider)", () => {
       success: false,
       error: "network error",
     });
+  });
+
+  it("cancels the request when delivery aborts the send", async () => {
+    // Delivery retries once it gives up, so a request left running could still send the message.
+    stubSlowFetch({ ok: true, json: async () => ({ messages: [{ id: "wamid.1" }] }) });
+
+    const result = await whatsappTransport().send(whatsappTask({ signal: timeoutSignal() }));
+
+    expect(result).toEqual({ success: false, error: "Transport timeout after 20ms" });
   });
 
   it("logs error when send fails", async () => {
