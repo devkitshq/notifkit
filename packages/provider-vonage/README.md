@@ -11,17 +11,20 @@ npm install @notifkit/provider-vonage
 ```
 
 ```ts
+import { NotifkitServer } from "notifkit";
 import { VonageTransport } from "@notifkit/provider-vonage";
 
-registry.register(
-  "sms",
-  new VonageTransport({
-    apiKey: process.env.VONAGE_API_KEY!,
-    apiSecret: process.env.VONAGE_API_SECRET!,
-    from: "+447700900001",
-    signatureSecret: process.env.VONAGE_SIGNATURE_SECRET,
-  }),
-);
+const server = new NotifkitServer({
+  services: ["all"],
+  providers: [
+    new VonageTransport({
+      apiKey: process.env.VONAGE_API_KEY!,
+      apiSecret: process.env.VONAGE_API_SECRET!,
+      from: "+447700900001",
+      signatureSecret: process.env.VONAGE_SIGNATURE_SECRET,
+    }),
+  ],
+});
 ```
 
 ## Options
@@ -43,7 +46,9 @@ other transports let a template override their default sender.
 
 ## Delivery status webhooks
 
-1. In the Vonage Dashboard, open **API Settings** and set the **Messages API**
+1. In the Vonage Dashboard, open **API Settings**, set the **Messaging API
+   type** to **Messages API** (on **SMS API**, delivery receipts keep the
+   legacy format and never reach this route), and set the **Messages API**
    version to `v1`.
 2. Set the account's **Status URL** to the public URL of this transport's
    route, `/webhooks/vonage` on your notifkit API (for example

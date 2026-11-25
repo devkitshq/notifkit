@@ -9,14 +9,17 @@ npm install @notifkit/provider-fcm
 ```
 
 ```ts
+import { NotifkitServer } from "notifkit";
 import { FcmTransport } from "@notifkit/provider-fcm";
 
-registry.register(
-  "push",
-  new FcmTransport({
-    serviceAccountJson: process.env.FCM_SERVICE_ACCOUNT_JSON!,
-  }),
-);
+const server = new NotifkitServer({
+  services: ["all"],
+  providers: [
+    new FcmTransport({
+      serviceAccountJson: process.env.FCM_SERVICE_ACCOUNT_JSON!,
+    }),
+  ],
+});
 ```
 
 Requires `notifkit` as a peer dependency and a Firebase service account.

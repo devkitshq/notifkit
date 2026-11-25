@@ -10,16 +10,19 @@ npm install @notifkit/provider-resend
 ```
 
 ```ts
+import { NotifkitServer } from "notifkit";
 import { ResendTransport } from "@notifkit/provider-resend";
 
-registry.register(
-  "email",
-  new ResendTransport({
-    apiKey: process.env.RESEND_API_KEY!,
-    from: "notifications@example.com",
-    webhookSecret: process.env.RESEND_WEBHOOK_SECRET,
-  }),
-);
+const server = new NotifkitServer({
+  services: ["all"],
+  providers: [
+    new ResendTransport({
+      apiKey: process.env.RESEND_API_KEY!,
+      from: "notifications@example.com",
+      webhookSecret: process.env.RESEND_WEBHOOK_SECRET,
+    }),
+  ],
+});
 ```
 
 A template may carry its own `from` and `replyTo`, so one transport can serve

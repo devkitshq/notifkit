@@ -10,9 +10,13 @@ npm install @notifkit/provider-console
 ```
 
 ```ts
+import { NotifkitServer } from "notifkit";
 import { ConsoleTransport } from "@notifkit/provider-console";
 
-registry.register("email", new ConsoleTransport("email"));
+const server = new NotifkitServer({
+  services: ["all"],
+  providers: [new ConsoleTransport({ channel: "email" })],
+});
 ```
 
 Requires `notifkit` as a peer dependency. Documentation:

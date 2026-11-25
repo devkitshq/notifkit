@@ -10,17 +10,20 @@ npm install @notifkit/provider-twilio
 ```
 
 ```ts
+import { NotifkitServer } from "notifkit";
 import { TwilioTransport } from "@notifkit/provider-twilio";
 
-registry.register(
-  "sms",
-  new TwilioTransport({
-    accountSid: process.env.TWILIO_ACCOUNT_SID!,
-    authToken: process.env.TWILIO_AUTH_TOKEN!,
-    from: "+15550000001",
-    statusCallbackUrl: "https://api.example.com/webhooks/twilio",
-  }),
-);
+const server = new NotifkitServer({
+  services: ["all"],
+  providers: [
+    new TwilioTransport({
+      accountSid: process.env.TWILIO_ACCOUNT_SID!,
+      authToken: process.env.TWILIO_AUTH_TOKEN!,
+      from: "+15550000001",
+      statusCallbackUrl: "https://api.example.com/webhooks/twilio",
+    }),
+  ],
+});
 ```
 
 A recipient's `sms` contact target is the destination, in E.164

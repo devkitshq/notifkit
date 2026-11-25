@@ -11,15 +11,18 @@ npm install @notifkit/provider-whatsapp
 ```
 
 ```ts
+import { NotifkitServer } from "notifkit";
 import { WhatsAppTransport } from "@notifkit/provider-whatsapp";
 
-registry.register(
-  "whatsapp",
-  new WhatsAppTransport({
-    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID!,
-    accessToken: process.env.WHATSAPP_ACCESS_TOKEN!,
-  }),
-);
+const server = new NotifkitServer({
+  services: ["all"],
+  providers: [
+    new WhatsAppTransport({
+      phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID!,
+      accessToken: process.env.WHATSAPP_ACCESS_TOKEN!,
+    }),
+  ],
+});
 ```
 
 Reads `content.text` from the rendered template, same convention as SMS.
