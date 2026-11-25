@@ -129,6 +129,13 @@ export async function handleAdminRequest(
     return true;
   }
 
+  // Assets are relative (vite base "./"), so /admin/logs/ would fetch them from /admin/logs/assets and render blank.
+  if (url.pathname.length > "/admin/".length && url.pathname.endsWith("/")) {
+    res.writeHead(301, { Location: url.pathname.replace(/\/+$/, "") + url.search });
+    res.end();
+    return true;
+  }
+
   // Proxy to the dashboard's dev server only when one is named. Defaulting to
   // 127.0.0.1:5173 outside production meant a deployment that never set
   // NODE_ENV sent every /admin request, credentials included, to whatever

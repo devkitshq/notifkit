@@ -74,6 +74,17 @@ describe("Admin Static Server", () => {
     expect(res.writeHead).toHaveBeenCalledWith(301, { Location: "/admin/" });
   });
 
+  // The build links assets as ./assets/…, so /admin/logs/ would load them from
+  // /admin/logs/assets/, get index.html back and render a blank page.
+  it("redirects a trailing-slash page to the path without it", async () => {
+    const req = createMockReq("/admin/logs/?tab=1");
+    const res = createMockRes();
+    const url = new URL(req.url, "http://localhost:3000");
+
+    expect(await handleAdminRequest(req, res, url)).toBe(true);
+    expect(res.writeHead).toHaveBeenCalledWith(301, { Location: "/admin/logs?tab=1" });
+  });
+
   it("handles /admin/ with either static file or fallback placeholder", async () => {
     const req = createMockReq("/admin/");
     const res = createMockRes();
