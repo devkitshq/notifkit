@@ -7,6 +7,7 @@ import { WhatsAppTransport } from "../../packages/provider-whatsapp/src/index.js
 import { ResendTransport } from "../../packages/provider-resend/src/index.js";
 import { TwilioTransport } from "../../packages/provider-twilio/src/index.js";
 import { VonageTransport } from "../../packages/provider-vonage/src/index.js";
+import { NtfyTransport } from "../../packages/provider-ntfy/src/index.js";
 import { ConsoleTransport } from "../../packages/provider-console/src/index.js";
 import type { NotificationDispatchedPayload } from "@/contracts/index.js";
 import { startFakeInternet, type FakeInternet } from "./support/fake-internet.js";
@@ -697,6 +698,110 @@ describe("VonageTransport", () => {
   });
 });
 
+// ─── ntfy ───────────────────────────────────────────────────────────────────
+
+describe("NtfyTransport", () => {
+  const n = new NtfyTransport({ accessToken: "tk_test_token" });
+  const push = (
+    overrides: Partial<NotificationDispatchedPayload> & { content?: Record<string, unknown> } = {},
+  ) =>
+    task({
+      channel: "push",
+      destination: "notifkit-alerts_42",
+      priority: "high",
+      content: { title: "Commande expédiée 📦", body: "Order #9481 is on its way." },
+      ...overrides,
+    });
+  const published = (topic: string) => ({
+    json: { id: "sPs71M8A2T", time: 1764000000, event: "message", topic },
+  });
+
+  it("publishes the body to the topic, the title as encoded words, with priority and token", async () => {
+    net.on("ntfy.sh", () => published("notifkit-alerts_42"));
+    const r = await n.send(push());
+    expect(r).toEqual({ success: true, providerMessageId: "sPs71M8A2T" });
+    const req = net.requests[0]!;
+    expect(req.method).toBe("POST");
+    expect(req.path).toBe("/notifkit-alerts_42");
+    expect(req.body).toBe("Order #9481 is on its way.");
+    expect(req.headers["content-type"]).toBe("text/plain; charset=utf-8");
+    expect(req.headers["x-priority"]).toBe("4");
+    expect(req.headers.authorization).toBe("Bearer tk_test_token");
+    // What reached the server is plain ASCII; decoded, it is the title.
+    const title = req.headers["x-title"] as string;
+    expect(title).toMatch(/^=\?UTF-8\?B\?[A-Za-z0-9+/=]+\?=$/);
+    expect(Buffer.from(title.slice(10, -2), "base64").toString("utf8")).toBe(
+      "Commande expédiée 📦",
+    );
+  });
+
+  it("publishes to a self-hosted server under its path", async () => {
+    const selfHosted = new NtfyTransport({ serverUrl: "https://push.example.com/ntfy/" });
+    net.on("push.example.com", () => published("ops"));
+    await selfHosted.send(push({ destination: "ops", content: { body: "disk 91%" } }));
+    expect(net.requests[0]!.path).toBe("/ntfy/ops");
+    expect(net.requests[0]!.headers.authorization).toBeUndefined();
+    expect(net.requests[0]!.headers["x-title"]).toBeUndefined();
+  });
+
+  it("never builds a URL from a destination that is not a topic", async () => {
+    net.on("ntfy.sh", () => published("x"));
+    for (const bad of ["../v1/account", "a/b", "fcm:APA91bHun4MxP5egoKMwt2KZ"]) {
+      expect(await n.send(push({ destination: bad }))).toMatchObject({
+        success: false,
+        retryable: false,
+      });
+    }
+    expect(net.requests).toEqual([]);
+  });
+
+  it("does not follow a redirect, which would turn the publish into a GET answered with a page", async () => {
+    // What ntfy.sh does with POST /docs.
+    net.on("ntfy.sh", (req) =>
+      req.method === "POST"
+        ? { status: 302, headers: { location: "https://ntfy.sh/docs/" } }
+        : { text: "<!DOCTYPE html><html>docs</html>" },
+    );
+    expect(await n.send(push({ destination: "docs" }))).toMatchObject({
+      success: false,
+      retryable: false,
+      error: expect.stringContaining("redirected the publish to https://ntfy.sh/docs/"),
+    });
+    expect(net.requests.map((r) => r.method)).toEqual(["POST"]);
+  });
+
+  it("flags a topic ntfy says is gone, retries an outage, and gives up on a hung server within the task's timeout", async () => {
+    net.on("ntfy.sh", () => ({
+      status: 410,
+      json: {
+        code: 41002,
+        http: 410,
+        error: "UnifiedPush topic has had no subscriber for too long, subscription expired",
+      },
+    }));
+    expect(await n.send(push({ destination: "upAbCdEfGhIjKl" }))).toMatchObject({
+      success: false,
+      invalidToken: true,
+      retryable: false,
+    });
+
+    net.on("ntfy.sh", () => ({ status: 500, text: "upstream error" }));
+    const outage = await n.send(push());
+    expect(outage).toMatchObject({
+      success: false,
+      invalidToken: false,
+      error: "ntfy error 500: HTTP 500",
+    });
+    expect(outage.retryable).toBeUndefined();
+
+    net.on("ntfy.sh", () => ({ delayMs: 3_000, json: { id: "late" } }));
+    const started = Date.now();
+    const hung = await n.send(push({ deliveryOptions: { maxAttempts: 3, timeoutMs: 300 } }));
+    expect(hung.success).toBe(false);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
 describe("ConsoleTransport", () => {
   it("delivers after the configured latency and returns a message id", async () => {
     const c = new ConsoleTransport({ channel: "sms", latencyMs: "50-60" });
@@ -778,6 +883,43 @@ describe("which failures are worth retrying", () => {
       expect(notPermanent(await d.send(task({ destination: hook })))).toBe(true);
       net.on("discord.com", () => ({ status: 503, text: "unavailable" }));
       expect(notPermanent(await d.send(task({ destination: hook })))).toBe(true);
+    });
+  });
+
+  describe("ntfy", () => {
+    const n = new NtfyTransport();
+    const error =
+      (status: number, code: number, message: string): Reply =>
+      () => ({
+        status,
+        json: { code, http: status, error: message, link: "https://ntfy.sh/docs/publish/" },
+      });
+
+    it("gives up on a request ntfy refused, without flagging the topic", async () => {
+      net.on("ntfy.sh", error(401, 40101, "unauthorized"));
+      expect(await n.send(task({ destination: "alerts" }))).toMatchObject({
+        ...permanent,
+        invalidToken: false,
+      });
+      net.on("ntfy.sh", error(403, 40301, "forbidden"));
+      expect(await n.send(task({ destination: "alerts" }))).toMatchObject({
+        ...permanent,
+        invalidToken: false,
+      });
+      net.on("ntfy.sh", error(400, 40010, "invalid request: topic name is not allowed"));
+      expect(await n.send(task({ destination: "docs" }))).toMatchObject(permanent);
+      expect(await n.send(task({ destination: undefined }))).toMatchObject(permanent);
+    });
+
+    it("tries again after a rate limit, a server error or a dropped connection", async () => {
+      net.on("ntfy.sh", error(429, 42901, "limit reached: too many requests"));
+      const limited = await n.send(task({ destination: "alerts" }));
+      expect(notPermanent(limited)).toBe(true);
+      expect(limited.throttled).toBe(true);
+      net.on("ntfy.sh", () => ({ status: 502, text: "<html>Bad Gateway</html>" }));
+      expect(notPermanent(await n.send(task({ destination: "alerts" })))).toBe(true);
+      net.on("ntfy.sh", () => "hang-up");
+      expect(notPermanent(await n.send(task({ destination: "alerts" })))).toBe(true);
     });
   });
 

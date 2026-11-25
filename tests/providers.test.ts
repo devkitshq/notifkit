@@ -2092,6 +2092,411 @@ describe("DiscordTransport (Discord Provider)", () => {
   });
 });
 
+// ─── ntfy ────────────────────────────────────────────────────────────────────
+
+import { NtfyTransport } from "../packages/provider-ntfy/src/index.js";
+
+const NTFY_TOPIC = "notifkit-tests_abc123";
+
+/**
+ * Stubs `fetch` with one ntfy response. ntfy answers a publish with the
+ * message as JSON, and a refusal with `{ code, http, error, link }`; the
+ * transport reads both as text.
+ */
+function stubNtfy(status: number, body: unknown = {}, headers: Record<string, string> = {}) {
+  const fn = vi.fn().mockResolvedValue({
+    status,
+    ok: status >= 200 && status < 300,
+    headers: new Headers(headers),
+    text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
+  });
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+/** The URL, RequestInit and headers of the Nth publish. */
+function ntfyCall(fn: ReturnType<typeof stubNtfy>, n = 0) {
+  const [url, init] = fn.mock.calls[n]! as [string, RequestInit];
+  return { url, init, headers: init.headers as Record<string, string> };
+}
+
+function ntfyTask(overrides: Record<string, unknown> = {}): any {
+  return {
+    taskId: "task-uuid-nt-1",
+    destination: NTFY_TOPIC,
+    priority: "normal",
+    renderedContent: { content: { title: "Build finished", body: "All 42 checks passed" } },
+    ...overrides,
+  };
+}
+
+/** Decodes RFC 2047 base64 encoded words the way ntfy does. */
+function decodeWords(header: string): string {
+  return Buffer.concat(
+    header.split(" ").map((word) => {
+      const b64 = /^=\?UTF-8\?B\?([A-Za-z0-9+/=]*)\?=$/.exec(word)?.[1];
+      if (b64 === undefined) throw new Error(`not an encoded word: ${word}`);
+      return Buffer.from(b64, "base64");
+    }),
+  ).toString("utf8");
+}
+
+/** A title header, decoded if it was sent as encoded words. */
+function decodeTitle(header: string): string {
+  return header.startsWith("=?") ? decodeWords(header) : header;
+}
+
+/** A message as ntfy returns it from a publish. */
+const NTFY_PUBLISHED = {
+  id: "sPs71M8A2T",
+  time: 1_764_000_000,
+  expires: 1_764_043_200,
+  event: "message",
+  topic: NTFY_TOPIC,
+  message: "All 42 checks passed",
+};
+
+describe("NtfyTransport (Push Provider)", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as any;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("delivers the push channel and defaults to ntfy's per-visitor rate", () => {
+    expect(new NtfyTransport().channel).toBe("push");
+    expect(new NtfyTransport().limits).toEqual({ limit: 60, windowSeconds: 300 });
+    expect(new NtfyTransport({ limits: { limit: 1, windowSeconds: 1 } }).limits).toEqual({
+      limit: 1,
+      windowSeconds: 1,
+    });
+  });
+
+  it("publishes to the topic on ntfy.sh and returns the message id", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    const result = await new NtfyTransport().send(ntfyTask());
+
+    expect(result).toEqual({ success: true, providerMessageId: "sPs71M8A2T" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const { url, init, headers } = ntfyCall(fetchMock);
+    expect(url).toBe(`https://ntfy.sh/${NTFY_TOPIC}`);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe("All 42 checks passed");
+    expect(headers).toEqual({
+      "Content-Type": "text/plain; charset=utf-8",
+      "X-Title": "Build finished",
+      "X-Priority": "3",
+    });
+    expect(init.redirect).toBe("manual");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("publishes to a self-hosted server, also behind a path", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    await new NtfyTransport({ serverUrl: "https://ntfy.example.com/" }).send(ntfyTask());
+    await new NtfyTransport({ serverUrl: "http://10.0.0.5:8080/ntfy//" }).send(ntfyTask());
+
+    expect(ntfyCall(fetchMock, 0).url).toBe(`https://ntfy.example.com/${NTFY_TOPIC}`);
+    expect(ntfyCall(fetchMock, 1).url).toBe(`http://10.0.0.5:8080/ntfy/${NTFY_TOPIC}`);
+  });
+
+  it("refuses a server URL that is not http(s) when constructed", () => {
+    expect(() => new NtfyTransport({ serverUrl: "ftp://ntfy.example.com" })).toThrow(
+      "ntfy serverUrl must be an http(s) URL",
+    );
+    expect(() => new NtfyTransport({ serverUrl: "ntfy.example.com" })).toThrow();
+  });
+
+  it("sends the access token as a bearer token, and no Authorization header without one", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    await new NtfyTransport({ accessToken: "tk_test_token" }).send(ntfyTask());
+    await new NtfyTransport().send(ntfyTask());
+
+    expect(ntfyCall(fetchMock, 0).headers["Authorization"]).toBe("Bearer tk_test_token");
+    expect(ntfyCall(fetchMock, 1).headers).not.toHaveProperty("Authorization");
+  });
+
+  it.each([
+    ["low", "2"],
+    ["normal", "3"],
+    ["high", "4"],
+    ["critical", "5"],
+  ])("maps the %s priority to ntfy priority %s", async (priority, expected) => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    await new NtfyTransport().send(ntfyTask({ priority }));
+
+    expect(ntfyCall(fetchMock).headers["X-Priority"]).toBe(expected);
+  });
+
+  it("leaves the priority to the server when the task has none", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    await new NtfyTransport().send(ntfyTask({ priority: undefined }));
+
+    expect(ntfyCall(fetchMock).headers).not.toHaveProperty("X-Priority");
+  });
+
+  it("reads the title from title or subject, and the message from text or body", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    await new NtfyTransport().send(
+      ntfyTask({ renderedContent: { content: { subject: "Deploy", text: "done", body: "x" } } }),
+    );
+
+    expect(ntfyCall(fetchMock).headers["X-Title"]).toBe("Deploy");
+    expect(ntfyCall(fetchMock).init.body).toBe("done");
+  });
+
+  it("sends a title-only template as the message, since ntfy shows an empty one as 'triggered'", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    await new NtfyTransport().send(
+      ntfyTask({ renderedContent: { content: { title: "Heads up" } } }),
+    );
+
+    expect(ntfyCall(fetchMock).init.body).toBe("Heads up");
+    expect(ntfyCall(fetchMock).headers).not.toHaveProperty("X-Title");
+  });
+
+  it("encodes a title fetch cannot send as is, as RFC 2047 words ntfy decodes", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+    const titles = [
+      "Commande expédiée 📦",
+      "Ünïcødé ".repeat(20).trim(),
+      "Price =?not-a-word?= today",
+    ];
+
+    for (const title of titles) {
+      await new NtfyTransport().send(
+        ntfyTask({ renderedContent: { content: { title, body: "b" } } }),
+      );
+    }
+
+    titles.forEach((title, n) => {
+      const header = ntfyCall(fetchMock, n).headers["X-Title"]!;
+      expect(header).toMatch(/^[\x20-\x7e]+$/);
+      for (const word of header.split(" ")) expect(word.length).toBeLessThanOrEqual(75);
+      expect(decodeWords(header)).toBe(title);
+    });
+  });
+
+  it("keeps the title on one line", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    await new NtfyTransport().send(
+      ntfyTask({ renderedContent: { content: { title: "  Line one\r\nline two  ", body: "b" } } }),
+    );
+
+    expect(ntfyCall(fetchMock).headers["X-Title"]).toBe("Line one line two");
+  });
+
+  it("cuts the message to ntfy's 4,096 bytes so it isn't turned into an attachment", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+    // 1 + 1,363 × 3 = 4,090 bytes: room is left for "…" (3 bytes), not for the
+    // 4-byte emoji after it, so the cut lands inside the emoji.
+    const body = `a${"€".repeat(1363)}🎉🎉 end`;
+
+    await new NtfyTransport().send(ntfyTask({ renderedContent: { content: { body } } }));
+
+    const sent = ntfyCall(fetchMock).init.body as string;
+    expect(Buffer.byteLength(sent)).toBeLessThanOrEqual(4096);
+    expect(sent.endsWith("…")).toBe(true);
+    expect(sent.slice(-2, -1)).toBe("€");
+    expect(body.startsWith(sent.slice(0, -1))).toBe(true);
+  });
+
+  it("cuts a title over ntfy's 1,024 bytes instead of having it refused", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    await new NtfyTransport().send(
+      ntfyTask({ renderedContent: { content: { title: "t".repeat(2000), body: "b" } } }),
+    );
+
+    const title = decodeTitle(ntfyCall(fetchMock).headers["X-Title"]!);
+    expect(Buffer.byteLength(title)).toBeLessThanOrEqual(1024);
+    expect(title.endsWith("…")).toBe(true);
+  });
+
+  it("fails without reaching ntfy when the task carries no destination", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    const result = await new NtfyTransport().send(ntfyTask({ destination: undefined }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No destination (ntfy topic) on task",
+    });
+  });
+
+  it.each([
+    ["../v1/account"],
+    ["alerts/other"],
+    ["alerts?auth=x"],
+    ["t".repeat(65)],
+    ["dGVzdA:APA91bHun4MxP5egoKMwt2KZFBaFUH-1RYqx"],
+  ])("refuses topic %s without calling ntfy or flagging the contact", async (topic) => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    const result = await new NtfyTransport().send(ntfyTask({ destination: topic }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ success: false, retryable: false });
+    expect(result.invalidToken).toBeUndefined();
+    expect(result.error).toContain("Invalid ntfy topic");
+  });
+
+  it("fails without reaching ntfy when the template renders no text", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    const result = await new NtfyTransport().send(
+      ntfyTask({ renderedContent: { content: { title: "   ", body: "" } } }),
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: false, retryable: false, error: "No message body on task" });
+  });
+
+  it.each([
+    [400, 40009, "invalid request: topic invalid"],
+    [401, 40101, "unauthorized"],
+    [403, 40301, "forbidden"],
+  ])("gives up on a %s without flagging the contact", async (status, code, error) => {
+    stubNtfy(status, { code, http: status, error, link: "https://ntfy.sh/docs/publish/" });
+
+    const result = await new NtfyTransport({ accessToken: "tk_test_token" }).send(ntfyTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: false,
+      retryable: false,
+      error: `ntfy error ${status}: ${error}`,
+    });
+  });
+
+  it("flags a UnifiedPush topic that has lost its subscriber (410)", async () => {
+    stubNtfy(410, {
+      code: 41002,
+      http: 410,
+      error: "UnifiedPush topic has had no subscriber for too long, subscription expired",
+    });
+
+    const result = await new NtfyTransport().send(ntfyTask({ destination: "upAbCdEfGhIjKl" }));
+
+    expect(result).toMatchObject({ success: false, invalidToken: true, retryable: false });
+  });
+
+  it("waits out a rate limit instead of failing the attempt", async () => {
+    stubNtfy(429, { code: 42901, http: 429, error: "limit reached: too many requests" });
+
+    const result = await new NtfyTransport().send(ntfyTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: false,
+      throttled: true,
+      error: "ntfy error 429: limit reached: too many requests",
+    });
+  });
+
+  it.each([
+    [500, { code: 50001, http: 500, error: "internal server error" }, "internal server error"],
+    [502, "<html>Bad Gateway</html>", "HTTP 502"],
+    [507, { code: 50701, http: 507, error: "cannot publish" }, "cannot publish"],
+  ])("retries a %s", async (status, body, reason) => {
+    stubNtfy(status, body);
+
+    const result = await new NtfyTransport().send(ntfyTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: false,
+      error: `ntfy error ${status}: ${reason}`,
+    });
+  });
+
+  it("retries a network error or a timeout", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+    const log = logger();
+
+    const result = await new NtfyTransport({ logger: log }).send(ntfyTask());
+
+    expect(result).toEqual({ success: false, error: "fetch failed" });
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-nt-1", error: "fetch failed" },
+      "ntfy send threw",
+    );
+  });
+
+  it("does not count a reply without a message id as sent", async () => {
+    stubNtfy(200, "<!DOCTYPE html><html>ntfy web app</html>");
+    const log = logger();
+
+    const result = await new NtfyTransport({ logger: log }).send(ntfyTask());
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error:
+        "ntfy answered 200 without a message id, so the publish is unconfirmed: is serverUrl an ntfy server?",
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-nt-1", status: 200 },
+      "ntfy reply has no message id",
+    );
+  });
+
+  it.each([
+    [302, "https://docs.ntfy.sh/"],
+    [301, `https://ntfy.example.com/${NTFY_TOPIC}`],
+  ])("gives up on a %s redirect instead of following it", async (status, location) => {
+    stubNtfy(status, "", { location });
+    const log = logger();
+
+    const result = await new NtfyTransport({ logger: log }).send(ntfyTask());
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: `ntfy redirected the publish to ${location}, so nothing was sent: check serverUrl and the topic name`,
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-nt-1", status, location },
+      "ntfy redirected the publish",
+    );
+  });
+
+  it("logs a failed send without the access token", async () => {
+    stubNtfy(401, { code: 40101, http: 401, error: "unauthorized" });
+    const log = logger();
+
+    await new NtfyTransport({ accessToken: "tk_secret_value", logger: log }).send(ntfyTask());
+
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-nt-1", status: 401, error: "unauthorized", invalidToken: false },
+      "ntfy send failed",
+    );
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain("tk_secret_value");
+  });
+
+  it("logs an accepted send", async () => {
+    stubNtfy(200, NTFY_PUBLISHED);
+    const log = logger();
+
+    await new NtfyTransport({ logger: log }).send(ntfyTask());
+
+    expect(log.debug).toHaveBeenCalledWith(
+      { taskId: "task-uuid-nt-1", providerMessageId: "sPs71M8A2T" },
+      "ntfy message sent",
+    );
+  });
+});
+
 // ─── Slack ───────────────────────────────────────────────────────────────────
 
 import { SlackTransport } from "../packages/provider-slack/src/index.js";
