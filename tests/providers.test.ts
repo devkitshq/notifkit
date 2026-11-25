@@ -363,6 +363,39 @@ describe("FcmTransport (Push Provider)", () => {
     // The same credentials map to the same app name, so getApp can reuse it.
     expect(names[2]).toBe(names[0]);
   });
+
+  // The push template `create-notifkit` scaffolds renders `title`, not `subject`.
+  it("takes the notification title from a rendered title", async () => {
+    mockSendPush.mockResolvedValueOnce("id");
+    const transport = new FcmTransport({
+      serviceAccountJson: JSON.stringify({ project_id: "test-project" }),
+    });
+
+    await transport.send({
+      ...fcmTask,
+      renderedContent: { content: { title: "Welcome, Alice!", body: "It works." } },
+    });
+
+    expect(mockSendPush).toHaveBeenCalledWith(
+      expect.objectContaining({ notification: { title: "Welcome, Alice!", body: "It works." } }),
+    );
+  });
+
+  it("prefers a rendered title to a rendered subject", async () => {
+    mockSendPush.mockResolvedValueOnce("id");
+    const transport = new FcmTransport({
+      serviceAccountJson: JSON.stringify({ project_id: "test-project" }),
+    });
+
+    await transport.send({
+      ...fcmTask,
+      renderedContent: { content: { title: "Title", subject: "Subject", body: "B" } },
+    });
+
+    expect(mockSendPush).toHaveBeenCalledWith(
+      expect.objectContaining({ notification: { title: "Title", body: "B" } }),
+    );
+  });
 });
 
 describe("ResendTransport (Webhooks)", () => {
