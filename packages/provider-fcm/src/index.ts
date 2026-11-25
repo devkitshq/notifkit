@@ -61,7 +61,9 @@ export class FcmTransport implements Transport {
 
     const content = task.renderedContent.content as any;
     const body = content.text || content.body;
-    const subject = content.subject;
+    // Push templates, like the one `create-notifkit` scaffolds, name the
+    // header `title`; email-style templates name it `subject`.
+    const title = content.title || content.subject;
     const htmlBody = content.htmlBody || content.html;
 
     try {
@@ -70,7 +72,7 @@ export class FcmTransport implements Transport {
       const messageId = await this.getMessaging().send({
         token,
         notification: {
-          title: subject ?? "",
+          title: title ?? "",
           body,
         },
         data: {
