@@ -1,4 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-  <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-  <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <style>@media (prefers-color-scheme: light){.b{stroke:#09090B}.a{stroke:#12A05C}.d{fill:#12A05C}}</style>
+  <mask id="cut"><rect width="64" height="64" fill="#fff"/><circle cx="55" cy="11" r="10.5" fill="#000"/></mask>
+  <path class="b" mask="url(#cut)" stroke="#ECEDEF" stroke-width="4" d="M14 10H50Q58 10 58 18V40Q58 48 50 48H28L16 57V48H14Q6 48 6 40V18Q6 10 14 10Z"/>
+  <path class="a" stroke="#6CF0A6" stroke-width="3.5" d="M24 23L18 29L24 35M40 23L46 29L40 35M34.5 20.5L29.5 37.5"/>
+  <circle class="d" cx="55" cy="11" r="8" fill="#6CF0A6"/>
 </svg>

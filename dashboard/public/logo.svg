@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <mask id="cut"><rect width="64" height="64" fill="#fff"/><circle cx="55" cy="11" r="10.5" fill="#000"/></mask>
+  <path class="b" mask="url(#cut)" stroke="#ECEDEF" stroke-width="4" d="M14 10H50Q58 10 58 18V40Q58 48 50 48H28L16 57V48H14Q6 48 6 40V18Q6 10 14 10Z"/>
+  <path class="a" stroke="#6CF0A6" stroke-width="3.5" d="M24 23L18 29L24 35M40 23L46 29L40 35M34.5 20.5L29.5 37.5"/>
+  <circle class="d" cx="55" cy="11" r="8" fill="#6CF0A6"/>
+</svg>

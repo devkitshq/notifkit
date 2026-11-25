@@ -4,7 +4,6 @@ import {
   History,
   FolderKey,
   Users,
-  LayoutDashboard,
   HeartPulse,
   BarChart3,
   AlertTriangle,
@@ -43,9 +42,7 @@ export default function Sidebar() {
   return (
     <div className="flex flex-col w-64 border-r border-border bg-card h-full shrink-0">
       <div className="p-6 border-b border-border flex items-center gap-3">
-        <div className="bg-primary text-primary-foreground p-2 rounded-lg">
-          <LayoutDashboard className="w-5 h-5" />
-        </div>
+        <img src="./logo.svg" alt="" className="w-9 h-9" />
         <div>
           <h1 className="font-bold text-lg tracking-tight text-foreground">Notifkit</h1>
           <span className="text-[10px] uppercase font-semibold tracking-wider text-muted-foreground">
