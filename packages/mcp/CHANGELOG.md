@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.8](https://github.com/devkitshq/notifkit/compare/mcp-v0.1.7...mcp-v0.1.8) (2026-11-25)
+
+
+### Bug Fixes
+
+* match the renderer's placeholders in mcp previews and ai prompts ([#59](https://github.com/devkitshq/notifkit/issues/59)) ([2a5f385](https://github.com/devkitshq/notifkit/commit/2a5f3851cec6069ea7580d07535a70148835e2fb))
+
 ## [0.1.7](https://github.com/devkitshq/notifkit/compare/mcp-v0.1.6...mcp-v0.1.7) (2026-11-22)
 
 

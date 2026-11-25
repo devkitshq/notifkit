@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/devkitshq/notifkit/compare/provider-twilio-v0.1.4...provider-twilio-v0.1.5) (2026-11-25)
+
+
+### Bug Fixes
+
+* **delivery:** deactivate non-push contacts the last provider calls invalid ([3e9940d](https://github.com/devkitshq/notifkit/commit/3e9940d6780cbf947a44d252cbb9d90ee80d1167))
+
 ## [0.1.4](https://github.com/devkitshq/notifkit/compare/provider-twilio-v0.1.3...provider-twilio-v0.1.4) (2026-11-21)
 
 

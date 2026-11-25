@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.24](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.23...notifkit-v0.1.24) (2026-11-25)
+
+
+### Features
+
+* **provider-vonage:** add vonage sms provider ([#60](https://github.com/devkitshq/notifkit/issues/60)) ([7b2700b](https://github.com/devkitshq/notifkit/commit/7b2700b9564ddcd6aff7bc7863f56506903a5d4d)), closes [#20](https://github.com/devkitshq/notifkit/issues/20)
+* **templates:** support dotted paths and spaces in placeholders ([#51](https://github.com/devkitshq/notifkit/issues/51)) ([efdfa5e](https://github.com/devkitshq/notifkit/commit/efdfa5efd3c03ace46dc4c31ab854cbc0142eb34)), closes [#11](https://github.com/devkitshq/notifkit/issues/11)
+
+
+### Bug Fixes
+
+* **api:** require auth on paths with doubled slashes ([002cf04](https://github.com/devkitshq/notifkit/commit/002cf04510c09dd704cf6668286eccc328b9faa1))
+* **contracts:** reject sms and whatsapp contacts that aren't E.164 ([d76d5e0](https://github.com/devkitshq/notifkit/commit/d76d5e02f0b0ef4544613d7e3a22f9d31de83334))
+* **dashboard:** redirect trailing-slash admin URLs ([f4d50b4](https://github.com/devkitshq/notifkit/commit/f4d50b47bb6a0686e2f929e2210ffba58f087a79))
+* **delivery:** deactivate non-push contacts the last provider calls invalid ([3e9940d](https://github.com/devkitshq/notifkit/commit/3e9940d6780cbf947a44d252cbb9d90ee80d1167))
+* match the renderer's placeholders in mcp previews and ai prompts ([#59](https://github.com/devkitshq/notifkit/issues/59)) ([2a5f385](https://github.com/devkitshq/notifkit/commit/2a5f3851cec6069ea7580d07535a70148835e2fb))
+* **provider-vonage,provider-whatsapp:** cancel the request when delivery aborts the send ([aea574e](https://github.com/devkitshq/notifkit/commit/aea574ed6eaaa972c64ff44523320bb667cb55b1))
+* **provider-vonage,provider-whatsapp:** refuse destinations that aren't a phone number ([cc585cc](https://github.com/devkitshq/notifkit/commit/cc585ccc0f47b9e62c393c2bbb34a5893ae831b5))
+
 ## [0.1.23](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.22...notifkit-v0.1.23) (2026-11-22)
 
 
