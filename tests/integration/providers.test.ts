@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { TelegramTransport } from "../../packages/provider-telegram/src/index.js";
 import { DiscordTransport } from "../../packages/provider-discord/src/index.js";
 import { SlackTransport } from "../../packages/provider-slack/src/index.js";
 import { WhatsAppTransport } from "../../packages/provider-whatsapp/src/index.js";
 import { ResendTransport } from "../../packages/provider-resend/src/index.js";
 import { TwilioTransport } from "../../packages/provider-twilio/src/index.js";
+import { VonageTransport } from "../../packages/provider-vonage/src/index.js";
 import { ConsoleTransport } from "../../packages/provider-console/src/index.js";
 import type { NotificationDispatchedPayload } from "@/contracts/index.js";
 import { startFakeInternet, type FakeInternet } from "./support/fake-internet.js";
@@ -570,6 +571,129 @@ describe("TwilioTransport webhooks", () => {
     expect((await t.send(task({ destination: "+1", content: { subject: "only" } }))).success).toBe(
       false,
     );
+  });
+});
+
+// ─── Vonage ─────────────────────────────────────────────────────────────────
+
+/**
+ * Signs a status webhook the way Vonage documents: an HS256 JWT keyed by the
+ * signature secret, whose `payload_hash` claim is the SHA-256 of the body.
+ */
+function vonageSign(secret: string, rawBody: string) {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const header = encode({ alg: "HS256", typ: "JWT" });
+  const payload = encode({
+    iat: Math.floor(Date.now() / 1000),
+    jti: randomUUID(),
+    iss: "Vonage",
+    api_key: "key",
+    payload_hash: createHash("sha256").update(rawBody).digest("hex"),
+  });
+  const signature = createHmac("sha256", secret).update(`${header}.${payload}`).digest("base64url");
+  return { authorization: `Bearer ${header}.${payload}.${signature}` };
+}
+
+describe("VonageTransport", () => {
+  const v = new VonageTransport({
+    apiKey: "key",
+    apiSecret: "secret",
+    from: "+447700900001",
+    signatureSecret: "signature-secret",
+  });
+  const sms = (overrides: Partial<NotificationDispatchedPayload> = {}) =>
+    task({
+      channel: "sms",
+      destination: "+447700900000",
+      content: { text: "Your code is 1" },
+      ...overrides,
+    });
+
+  it("sends through the Messages API with basic auth, numbers without the +", async () => {
+    net.on("api.nexmo.com", () => ({ status: 202, json: { message_uuid: "uuid-1" } }));
+    const r = await v.send(sms());
+    expect(r).toEqual({ success: true, providerMessageId: "uuid-1" });
+    const req = net.requests[0]!;
+    expect(req.method).toBe("POST");
+    expect(req.path).toBe("/v1/messages");
+    expect(req.headers.authorization).toBe(`Basic ${Buffer.from("key:secret").toString("base64")}`);
+    expect(req.json()).toEqual({
+      message_type: "text",
+      channel: "sms",
+      to: "447700900000",
+      from: "447700900001",
+      text: "Your code is 1",
+    });
+  });
+
+  it("flags a refused number, retries an outage or a dropped connection, and gives up on a hung API within the task's timeout", async () => {
+    net.on("api.nexmo.com", () => ({
+      status: 422,
+      json: {
+        type: "https://developer.vonage.com/api-errors/messages#1170",
+        title: "Invalid recipient",
+        detail: "The `to` parameter is invalid.",
+      },
+    }));
+    expect(await v.send(sms())).toEqual({
+      success: false,
+      invalidToken: true,
+      retryable: false,
+      error: "The `to` parameter is invalid.",
+    });
+
+    net.on("api.nexmo.com", () => ({ status: 500, text: "upstream error" }));
+    const outage = await v.send(sms());
+    expect(outage).toMatchObject({ success: false, invalidToken: false, error: "HTTP 500" });
+    expect(outage.retryable).toBeUndefined();
+
+    net.on("api.nexmo.com", () => "hang-up");
+    const dropped = await v.send(sms());
+    expect(dropped.success).toBe(false);
+    expect(dropped.retryable).toBeUndefined();
+
+    net.on("api.nexmo.com", () => ({ delayMs: 3_000, status: 202, json: {} }));
+    const started = Date.now();
+    const hung = await v.send(sms({ deliveryOptions: { maxAttempts: 3, timeoutMs: 300 } }));
+    expect(hung.success).toBe(false);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("accepts only webhooks signed with the signature secret and bound to their body", () => {
+    const raw = JSON.stringify({ message_uuid: "uuid-1", status: "delivered" });
+    expect(v.webhookPath).toBe("/webhooks/vonage");
+    expect(v.verifyWebhook(raw, vonageSign("signature-secret", raw))).toBe(true);
+    expect(v.verifyWebhook(raw, vonageSign("another-secret", raw))).toBe(false);
+    expect(
+      v.verifyWebhook(raw.replace("delivered", "rejected"), vonageSign("signature-secret", raw)),
+    ).toBe(false);
+    expect(v.verifyWebhook(raw, {})).toBe(false);
+  });
+
+  it("maps rejected and undeliverable statuses, ignoring the rest", async () => {
+    const receive = async (body: Record<string, unknown>) => {
+      const raw = JSON.stringify({ to: "447700900000", channel: "sms", ...body });
+      return v.parseWebhook(JSON.parse(raw), raw, vonageSign("signature-secret", raw));
+    };
+    const rejected = (code: number) => ({
+      status: "rejected",
+      error: { type: `https://developer.vonage.com/api-errors/messages#${code}`, title: "x" },
+    });
+
+    const events = [
+      ...(await receive({ message_uuid: "a", ...rejected(1190) })),
+      ...(await receive({ message_uuid: "b", ...rejected(1240) })),
+      ...(await receive({ message_uuid: "c", ...rejected(1260) })),
+      ...(await receive({ message_uuid: "d", status: "undeliverable" })),
+      ...(await receive({ message_uuid: "e", status: "submitted" })),
+      ...(await receive({ message_uuid: "f", status: "delivered" })),
+    ];
+    expect(events.map((e) => [e.providerMessageId, e.status, e.recipient, e.bounceType])).toEqual([
+      ["a", "bounced", "+447700900000", "hard"],
+      ["b", "unsubscribed", "+447700900000", undefined],
+      ["c", "bounced", "+447700900000", "soft"],
+      ["d", "bounced", "+447700900000", "soft"],
+    ]);
   });
 });
 

@@ -1105,6 +1105,436 @@ describe("TwilioTransport (Client and logging)", () => {
   });
 });
 
+// ─── Vonage ──────────────────────────────────────────────────────────────────
+
+import { createHash } from "node:crypto";
+import { VonageTransport } from "../packages/provider-vonage/src/index.js";
+
+const VONAGE_SIGNATURE_SECRET = "vonage-signature-secret-for-tests";
+const MESSAGE_UUID = "aaaaaaaa-bbbb-4ccc-8ddd-0123456789ab";
+
+function vonageTransport(overrides: Record<string, unknown> = {}) {
+  return new VonageTransport({
+    apiKey: "vonage-key",
+    apiSecret: "vonage-secret",
+    from: "+447700900001",
+    ...overrides,
+  } as any);
+}
+
+function vonageTask(overrides: Record<string, unknown> = {}): any {
+  return {
+    taskId: "task-uuid-vg-1",
+    destination: "+447700900000",
+    renderedContent: { content: { text: "Your code is 123456" } },
+    ...overrides,
+  };
+}
+
+/** Stubs `fetch` with one Messages API response. */
+function stubVonage(status: number, body?: unknown) {
+  const fn = vi.fn().mockResolvedValue({
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => {
+      if (body === undefined) throw new SyntaxError("Unexpected end of JSON input");
+      return body;
+    },
+  });
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+/** An RFC 7807 problem the way the Messages API returns one. */
+function vonageProblem(code: number, detail: string) {
+  return {
+    type: `https://developer.vonage.com/api-errors/messages#${code}`,
+    title: "Bad request",
+    detail,
+    instance: "bf0ca0bf927b3b52e3cb03217e1a1ddf",
+  };
+}
+
+/** The Authorization header Vonage sends with a webhook: an HS256 JWT bound to the body. */
+function vonageAuth(
+  rawBody: string,
+  { secret = VONAGE_SIGNATURE_SECRET, alg = "HS256", claims = {} as Record<string, unknown> } = {},
+) {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const header = encode({ alg, typ: "JWT" });
+  const payload = encode({
+    iat: 1_700_000_000,
+    jti: "c5ba8f24-1a14-4c10-bfdf-3fbe8ce511b5",
+    iss: "Vonage",
+    api_key: "vonage-key",
+    payload_hash: createHash("sha256").update(rawBody).digest("hex"),
+    ...claims,
+  });
+  const signature = createHmac("sha256", secret).update(`${header}.${payload}`).digest("base64url");
+  return `Bearer ${header}.${payload}.${signature}`;
+}
+
+describe("VonageTransport (SMS Provider)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("delivers the sms channel and mounts its webhook only with a signature secret", () => {
+    expect(vonageTransport().channel).toBe("sms");
+    expect(vonageTransport().webhookPath).toBeUndefined();
+    expect(vonageTransport({ signatureSecret: VONAGE_SIGNATURE_SECRET }).webhookPath).toBe(
+      "/webhooks/vonage",
+    );
+  });
+
+  it("sends through the Messages API and returns the message_uuid", async () => {
+    const fetchMock = stubVonage(202, { message_uuid: MESSAGE_UUID });
+
+    const result = await vonageTransport().send(vonageTask());
+
+    expect(result).toEqual({ success: true, providerMessageId: MESSAGE_UUID });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]! as [string, RequestInit];
+    expect(url).toBe("https://api.nexmo.com/v1/messages");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      Authorization: `Basic ${Buffer.from("vonage-key:vonage-secret").toString("base64")}`,
+    });
+    // Vonage wants both numbers without the leading "+".
+    expect(JSON.parse(init.body as string)).toEqual({
+      message_type: "text",
+      channel: "sms",
+      to: "447700900000",
+      from: "447700900001",
+      text: "Your code is 123456",
+    });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("uses a template's own sender, keeping an alphanumeric sender ID as written", async () => {
+    const fetchMock = stubVonage(202, { message_uuid: MESSAGE_UUID });
+
+    await vonageTransport().send(
+      vonageTask({ renderedContent: { content: { body: "Sale today", from: "MyShop" } } }),
+    );
+    await vonageTransport().send(
+      vonageTask({ renderedContent: { content: { text: "Hi", from: 123 } } }),
+    );
+
+    const bodyOf = (n: number) =>
+      JSON.parse((fetchMock.mock.calls[n]![1] as RequestInit).body as string);
+    expect(bodyOf(0)).toMatchObject({ from: "MyShop", text: "Sale today" });
+    expect(bodyOf(1)).toMatchObject({ from: "447700900001" });
+  });
+
+  it("keeps only the digits of a formatted destination", async () => {
+    const fetchMock = stubVonage(202, { message_uuid: MESSAGE_UUID });
+
+    await vonageTransport().send(vonageTask({ destination: "+44 7700 900-000" }));
+
+    expect(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string).to).toBe(
+      "447700900000",
+    );
+  });
+
+  it("cuts a text longer than Vonage accepts", async () => {
+    const fetchMock = stubVonage(202, { message_uuid: MESSAGE_UUID });
+
+    await vonageTransport().send(
+      vonageTask({ renderedContent: { content: { text: "a".repeat(3300) } } }),
+    );
+
+    const sent = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string).text;
+    expect(sent).toHaveLength(3200);
+    expect(sent.endsWith("…")).toBe(true);
+  });
+
+  it.each([undefined, "", "+"])(
+    "fails without calling Vonage when the destination is %j",
+    async (destination) => {
+      const fetchMock = stubVonage(202, { message_uuid: MESSAGE_UUID });
+
+      const result = await vonageTransport().send(vonageTask({ destination }));
+
+      expect(result).toEqual({
+        success: false,
+        retryable: false,
+        error: "No destination (recipient phone number) on task",
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails without calling Vonage when the template has no text", async () => {
+    const fetchMock = stubVonage(202, { message_uuid: MESSAGE_UUID });
+
+    const result = await vonageTransport().send(vonageTask({ renderedContent: { content: {} } }));
+
+    expect(result).toEqual({ success: false, retryable: false, error: "No message body on task" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("flags the contact when Vonage refuses the destination", async () => {
+    stubVonage(422, vonageProblem(1170, "Invalid recipient"));
+
+    const result = await vonageTransport().send(vonageTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: true,
+      retryable: false,
+      error: "Invalid recipient",
+    });
+  });
+
+  it("does not retry a refused sender, and does not blame the recipient", async () => {
+    stubVonage(422, vonageProblem(1420, "Invalid sender"));
+
+    const result = await vonageTransport().send(vonageTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: false,
+      retryable: false,
+      error: "Invalid sender",
+    });
+  });
+
+  it("does not blame the recipient when our own credentials are rejected", async () => {
+    stubVonage(401, {
+      type: "https://developer.vonage.com/api-errors#unauthorized",
+      title: "Unauthorized",
+      detail: "You did not provide correct credentials.",
+      instance: "bf0ca0bf927b3b52e3cb03217e1a1ddf",
+    });
+
+    const result = await vonageTransport().send(vonageTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: false,
+      retryable: false,
+      error: "You did not provide correct credentials.",
+    });
+  });
+
+  it.each([
+    { status: 500, body: undefined, throttled: undefined, error: "HTTP 500" },
+    {
+      status: 503,
+      body: { title: "Service Unavailable" },
+      throttled: undefined,
+      error: "Service Unavailable",
+    },
+    { status: 429, body: undefined, throttled: true, error: "HTTP 429" },
+    { status: 400, body: vonageProblem(1000, "Throttled"), throttled: true, error: "Throttled" },
+    {
+      status: 400,
+      body: vonageProblem(1230, "Temporary network failure"),
+      throttled: undefined,
+      error: "Temporary network failure",
+    },
+  ])("retries a $status ($error)", async ({ status, body, throttled, error }) => {
+    stubVonage(status, body);
+
+    const result = await vonageTransport().send(vonageTask());
+
+    expect(result.success).toBe(false);
+    expect(result.retryable).toBeUndefined();
+    expect(result.invalidToken).toBe(false);
+    expect(result.throttled).toBe(throttled);
+    expect(result.error).toBe(error);
+  });
+
+  it("retries a network error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("socket hang up")));
+
+    const result = await vonageTransport().send(vonageTask());
+
+    expect(result).toEqual({ success: false, error: "socket hang up" });
+  });
+
+  it("gives up on a request that outlives the task's timeout, and retries it", async () => {
+    stubSlowFetch({ ok: true, status: 202, json: async () => ({ message_uuid: MESSAGE_UUID }) });
+
+    const result = await vonageTransport().send(vonageTask({ deliveryOptions: { timeoutMs: 20 } }));
+
+    expect(result.success).toBe(false);
+    expect(result.retryable).toBeUndefined();
+  });
+
+  it("counts an accepted message without a message_uuid as sent, and says so", async () => {
+    stubVonage(202, {});
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any;
+
+    const result = await vonageTransport({ logger }).send(vonageTask());
+
+    expect(result).toEqual({ success: true });
+    expect(logger.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-vg-1", status: 202 },
+      "Vonage accepted the message without a message_uuid",
+    );
+  });
+});
+
+describe("VonageTransport (Status webhooks)", () => {
+  const transport = () => vonageTransport({ signatureSecret: VONAGE_SIGNATURE_SECRET });
+
+  function statusBody(fields: Record<string, unknown>) {
+    return JSON.stringify({
+      message_uuid: MESSAGE_UUID,
+      to: "447700900000",
+      from: "447700900001",
+      timestamp: "2026-11-24T14:00:00.000Z",
+      channel: "sms",
+      ...fields,
+    });
+  }
+
+  /** Parses a webhook the way the mounted route does: a signed raw body, then its JSON. */
+  async function receive(rawBody: string, headers = { authorization: vonageAuth(rawBody) }) {
+    return transport().parseWebhook(JSON.parse(rawBody), rawBody, headers);
+  }
+
+  it("accepts a webhook signed with the signature secret", () => {
+    const rawBody = statusBody({ status: "delivered" });
+
+    expect(transport().verifyWebhook(rawBody, { authorization: vonageAuth(rawBody) })).toBe(true);
+  });
+
+  it.each([
+    ["another secret", (raw: string) => vonageAuth(raw, { secret: "not-the-secret" })],
+    ["a body that does not match payload_hash", (raw: string) => vonageAuth(`${raw} `)],
+    ["no payload_hash", (raw: string) => vonageAuth(raw, { claims: { payload_hash: undefined } })],
+    ["the none algorithm", (raw: string) => vonageAuth(raw, { alg: "none" })],
+    ["a token that is not a JWT", () => "Bearer not-a-jwt"],
+    ["no Bearer scheme", (raw: string) => vonageAuth(raw).slice("Bearer ".length)],
+    ["no Authorization header", () => undefined],
+  ])("rejects a webhook signed with %s", (_label, authorization) => {
+    const rawBody = statusBody({ status: "delivered" });
+
+    expect(transport().verifyWebhook(rawBody, { authorization: authorization(rawBody) })).toBe(
+      false,
+    );
+  });
+
+  it("rejects every webhook when no signature secret is configured", () => {
+    const rawBody = statusBody({ status: "delivered" });
+
+    expect(vonageTransport().verifyWebhook(rawBody, { authorization: vonageAuth(rawBody) })).toBe(
+      false,
+    );
+  });
+
+  it("maps a rejection for a dead number to a hard bounce, with the E.164 recipient", async () => {
+    const events = await receive(
+      statusBody({
+        status: "rejected",
+        error: vonageProblem(1170, "Invalid recipient"),
+      }),
+    );
+
+    expect(events).toEqual([
+      {
+        providerMessageId: MESSAGE_UUID,
+        status: "bounced",
+        bounceType: "hard",
+        recipient: "+447700900000",
+        timestamp: new Date("2026-11-24T14:00:00.000Z"),
+        metadata: { messageStatus: "rejected", errorCode: 1170, errorDetail: "Invalid recipient" },
+      },
+    ]);
+  });
+
+  it.each([
+    // The code may come only in `title`, as a number, as in Vonage's own example.
+    [{ type: "https://developer.vonage.com/api-errors/messages", title: 1050 }, "bounced", "hard"],
+    [vonageProblem(1260, "Destination unreachable"), "bounced", "soft"],
+    [undefined, "bounced", "soft"],
+    [vonageProblem(1240, "Illegal Number"), "unsubscribed", undefined],
+  ])("maps a rejection with %j to %s", async (error, status, bounceType) => {
+    const [event] = await receive(statusBody({ status: "rejected", error }));
+
+    expect(event?.status).toBe(status);
+    expect(event?.bounceType).toBe(bounceType);
+  });
+
+  it("reads a rejection in the shape Vonage really sends", async () => {
+    // A live Messages API status webhook, number replaced: the code comes in a
+    // developer.nexmo.com `type` URL and as a string `title`. An account-side
+    // block says nothing about the number, so it stays a soft bounce.
+    const rawBody = JSON.stringify({
+      to: "447700900000",
+      from: "Vonage APIs",
+      channel: "sms",
+      message_uuid: MESSAGE_UUID,
+      timestamp: "2026-11-24T21:44:59Z",
+      usage: { price: "0.0000", currency: "EUR" },
+      sms: { count_total: "1" },
+      status: "rejected",
+      error: {
+        type: "https://developer.nexmo.com/api-errors/messages-olympus#1474",
+        title: "1474",
+        detail: "Rejected due Fraud Defender country block",
+        instance: "42ae660f-08f9-404b-b1c8-6783f2921696",
+      },
+      destination: { network_code: "23415" },
+    });
+
+    expect(await receive(rawBody)).toEqual([
+      {
+        providerMessageId: MESSAGE_UUID,
+        status: "bounced",
+        bounceType: "soft",
+        recipient: "+447700900000",
+        timestamp: new Date("2026-11-24T21:44:59Z"),
+        metadata: {
+          messageStatus: "rejected",
+          errorCode: 1474,
+          errorDetail: "Rejected due Fraud Defender country block",
+        },
+      },
+    ]);
+  });
+
+  it("maps undeliverable to a soft bounce", async () => {
+    const [event] = await receive(statusBody({ status: "undeliverable" }));
+
+    expect(event).toMatchObject({ status: "bounced", bounceType: "soft" });
+  });
+
+  it.each(["submitted", "delivered"])("ignores %s", async (status) => {
+    expect(await receive(statusBody({ status }))).toEqual([]);
+  });
+
+  it("ignores a webhook that fails verification, even when called directly", async () => {
+    const rawBody = statusBody({ status: "rejected" });
+
+    expect(await receive(rawBody, { authorization: vonageAuth(rawBody, { secret: "x" }) })).toEqual(
+      [],
+    );
+    expect(await transport().parseWebhook(JSON.parse(rawBody))).toEqual([]);
+  });
+
+  it("ignores a signed webhook without a message_uuid", async () => {
+    const rawBody = JSON.stringify({ status: "rejected", to: "447700900000" });
+
+    expect(await receive(rawBody)).toEqual([]);
+  });
+
+  it("leaves out a recipient it cannot read and dates an undated event now", async () => {
+    const [event] = await receive(
+      statusBody({ status: "undeliverable", to: undefined, timestamp: "not a date" }),
+    );
+
+    expect(event).not.toHaveProperty("recipient");
+    expect(event?.timestamp).toBeInstanceOf(Date);
+    expect(Number.isNaN(event!.timestamp!.getTime())).toBe(false);
+  });
+});
+
 // ─── Telegram ────────────────────────────────────────────────────────────────
 
 /**
