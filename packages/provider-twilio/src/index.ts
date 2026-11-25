@@ -13,7 +13,7 @@ import twilio, { type Twilio } from "twilio";
 const INVALID_DESTINATION_CODES = new Set([
   21211, // Invalid 'To' phone number
   21610, // Attempt to send to unsubscribed recipient (replied STOP)
-  21612, // Message cannot be sent with this To/From combination
+  // Not 21612 (this To/From combination): it is often the sender's fault.
   21614, // 'To' number is not a valid mobile number
 ]);
 

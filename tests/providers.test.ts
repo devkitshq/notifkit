@@ -725,7 +725,6 @@ describe("TwilioTransport (SMS Provider)", () => {
   it.each([
     [21211, "Invalid 'To' Phone Number"],
     [21610, "Attempt to send to unsubscribed recipient"],
-    [21612, "Not reachable via SMS"],
     [21614, "'To' number is not a valid mobile number"],
   ])("flags a dead destination (%i) as an invalid token", async (code, message) => {
     mockCreateMessage.mockRejectedValueOnce(
@@ -740,17 +739,22 @@ describe("TwilioTransport (SMS Provider)", () => {
     });
   });
 
-  it("gives up on any other request Twilio refused", async () => {
+  it.each([
     // 21602: message body is required. Sending it again changes nothing.
+    [21602, "Message body is required"],
+    // 21612: this sender can't reach this destination. Often the sender's fault,
+    // so the number stays active.
+    [21612, "Message cannot be sent with the current combination of To and/or From"],
+  ])("gives up on any other request Twilio refused (%i)", async (code, message) => {
     mockCreateMessage.mockRejectedValueOnce(
-      Object.assign(new Error("Message body is required"), { code: 21602, status: 400 }),
+      Object.assign(new Error(message), { code, status: 400 }),
     );
 
     await expect(twilioTransport().send(smsTask())).resolves.toEqual({
       success: false,
       invalidToken: false,
       retryable: false,
-      error: "Message body is required",
+      error: message,
     });
   });
 
@@ -2329,11 +2333,12 @@ describe("SlackTransport (Slack Provider)", () => {
       ["is_archived", true, false],
       ["channel_is_archived", true, false],
       ["user_not_found", true, false],
-      ["account_inactive", true, false],
       ["not_in_channel", true, false],
       ["ratelimited", false, undefined],
       // Not the destination's fault, but no later attempt gets past a bad token.
       ["invalid_auth", false, false],
+      // Our bot token's user or workspace was deleted: every channel would be blamed.
+      ["account_inactive", false, false],
     ])(
       "classifies %s as dead-destination=%s, retryable=%s",
       async (error, invalidToken, retryable) => {

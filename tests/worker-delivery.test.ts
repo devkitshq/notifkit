@@ -972,16 +972,32 @@ describe("DeliveryWorker", () => {
       });
     });
 
-    it("an invalid token outside push is an ordinary provider failure", async () => {
-      sendsBack({ success: false, invalidToken: true, error: "bad address" });
+    it("an invalid token outside push deactivates the contact, failing as a provider error", async () => {
+      sendsBack({ success: false, invalidToken: true, retryable: false, error: "bad address" });
       const spy = vi.spyOn(worker["eventProcessor"], "add");
 
-      await expect(worker.process(task({ deliveryAttemptCount: 2 }) as any)).rejects.toThrow(
-        "bad address",
+      await expect(worker.process(task() as any)).rejects.toThrow("bad address");
+
+      expect(mockDeviceRepo.deactivate).toHaveBeenCalledWith(
+        ids.projectId,
+        "usr-1",
+        "email",
+        "alice@example.com",
       );
+      expect(added(spy).event.payload.failureCode).toBe("provider_error");
+    });
+
+    it("keeps a contact one provider calls invalid when the next one delivers", async () => {
+      mockTransportRegistry.getAll.mockReturnValue([
+        {
+          send: vi.fn().mockResolvedValue({ success: false, invalidToken: true, retryable: false }),
+        },
+        { send: vi.fn().mockResolvedValue({ success: true, providerMessageId: "sms-2" }) },
+      ]);
+
+      await worker.process(task({ channel: "sms", destination: "+447700900000" }) as any);
 
       expect(mockDeviceRepo.deactivate).not.toHaveBeenCalled();
-      expect(added(spy).event.payload.failureCode).toBe("provider_error");
     });
 
     it("no transport fails with recipientId and no dispatched entry", async () => {

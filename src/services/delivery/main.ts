@@ -530,7 +530,8 @@ export class DeliveryWorker extends BaseWorker {
       }, DISPATCH_LOG_DELAY_MS);
 
       // Push alone treats a rejected token as an answer: the token is
-      // deactivated rather than the next provider tried.
+      // deactivated rather than the next provider tried. Other channels try the
+      // next provider first, and deactivate only once every one has failed.
       const isPush = task.channel === "push";
       let result: any = { success: false, error: "No transports" };
       let throttledWindowMs = 1000;
@@ -707,6 +708,21 @@ export class DeliveryWorker extends BaseWorker {
           isPush ? failed(error, "push_failure") : failed(error, "provider_error", false),
         );
         if (!isPush) report();
+
+        // The last provider tried says the address itself is dead (a bad number,
+        // a deleted webhook): stop sending to it, as push does with a dead token.
+        if (result.invalidToken) {
+          await this.contactRepo.deactivate(
+            task.projectId,
+            task.recipientId,
+            task.channel as any,
+            task.destination,
+          );
+          this.logger.info(
+            { channel: task.channel, target: task.destination },
+            "deactivated invalid contact target",
+          );
+        }
 
         const fallbackTriggered = await fallbackToNextChannel(
           isPush ? "push_delivery_failed" : "all_providers_failed",

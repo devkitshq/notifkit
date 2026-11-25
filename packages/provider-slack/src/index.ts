@@ -13,7 +13,7 @@ const INVALID_DESTINATION_ERRORS = new Set([
   "is_archived",
   "channel_is_archived",
   "user_not_found",
-  "account_inactive",
+  // Not account_inactive: that is our own token's user or workspace being gone.
   "not_in_channel",
 ]);
 
