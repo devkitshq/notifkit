@@ -1,0 +1,63 @@
+name: First publish
+
+# Puts a new workspace package on npm for the first time. npm trusted publishing
+# (what release.yml uses) only works for a package that already exists, so the
+# first version goes out here with a token. Then set up the package's trusted
+# publisher on npmjs.com, and release.yml publishes every later version.
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Package directory, e.g. packages/provider-vonage"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm --provenance
+    env:
+      PKG: ${{ inputs.package }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Check the package is new
+        run: |
+          set -euo pipefail
+          if [[ ! "$PKG" =~ ^packages/[a-z0-9-]+$ || ! -f "$PKG/package.json" ]]; then
+            echo "::error::$PKG is not a workspace package directory"
+            exit 1
+          fi
+          name=$(node -p "require('./$PKG/package.json').name")
+          if [[ "$(npm view "$name" version 2>&1 || true)" != *E404* ]]; then
+            echo "::error::$name is already on npm (or npm can't be reached); release.yml publishes it"
+            exit 1
+          fi
+
+      - run: npm install -g npm@latest
+      - run: npm ci
+      # Workspace packages compile against the root's built types.
+      - run: npm run build
+      - run: npm run build --workspace "$PKG"
+      - run: npm run typecheck --workspace "$PKG" --if-present
+
+      - name: Publish to npm
+        working-directory: ${{ inputs.package }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public

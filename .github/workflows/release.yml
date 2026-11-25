@@ -66,6 +66,9 @@ jobs:
             version=$(node -p "require('./$dir/package.json').version")
             if npm view "$name@$version" version >/dev/null 2>&1; then
               echo "skip $name@$version (already published)"
+            elif [[ "$(npm view "$name" version 2>&1 || true)" == *E404* ]]; then
+              # Trusted publishing can't create a package, and failing here would stop the loop.
+              echo "::warning::skip $name@$version: not on npm yet, run the First publish workflow"
             else
               echo "publish $name@$version"
               (cd "$dir" && npm publish --provenance --access public)
