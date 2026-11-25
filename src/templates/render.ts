@@ -107,6 +107,15 @@ function interpolateLeaf(
 }
 
 /**
+ * Fill the placeholders of a plain-text string with no escaping, exactly as a
+ * template's text field is filled. AI prompts go through this so they accept
+ * the same placeholders as templates.
+ */
+export function interpolateText(tmpl: string, variables: Record<string, unknown>): string {
+  return interpolateLeaf(tmpl, variables, "text");
+}
+
+/**
  * Walk a template content tree and interpolate every leaf string in place.
  *
  * Values are substituted into the already-parsed structure. Interpolating into

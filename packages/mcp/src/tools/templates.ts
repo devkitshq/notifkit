@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { NotifkitApi } from "../client.js";
-import { CHANNELS, handler, renderContentNode } from "./shared.js";
+import { CHANNELS, handler, placeholderPaths, renderContentNode, valueAt } from "./shared.js";
 
 export function registerTemplatesTools(server: McpServer, api: NotifkitApi): void {
   server.registerTool(
@@ -126,13 +126,9 @@ export function registerTemplatesTools(server: McpServer, api: NotifkitApi): voi
     const vars = args.data ?? {};
     const rendered = renderContentNode(rawContent ?? {}, vars, "text");
 
-    const jsonStr = JSON.stringify(rawContent ?? {});
-    const placeholderMatches = Array.from(jsonStr.matchAll(/\{\{\{?(\w+)\}?\}\}/g)).map(
-      (m) => m[1]!,
-    );
-    const placeholders = Array.from(new Set(placeholderMatches));
-    const resolvedVariables = placeholders.filter((p) => p in vars);
-    const unresolvedVariables = placeholders.filter((p) => !(p in vars));
+    const placeholders = placeholderPaths(rawContent ?? {});
+    const resolvedVariables = placeholders.filter((p) => valueAt(vars, p) !== undefined);
+    const unresolvedVariables = placeholders.filter((p) => valueAt(vars, p) === undefined);
 
     return {
       ...(args.id ? { templateId: args.id } : {}),

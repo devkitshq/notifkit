@@ -90,25 +90,65 @@ function escapeModeFor(key: string, inherited: EscapeMode): EscapeMode {
   return inherited;
 }
 
+// Placeholders follow the server's renderer (src/templates/render.ts) so a
+// preview shows what will be sent: `{{{path}}}` (group 1) or `{{path}}`
+// (group 2), a path being a name or a dotted path (`user.name`), with optional
+// whitespace inside the braces.
+const PLACEHOLDER = /\{\{\{\s*(\w+(?:\.\w+)*)\s*\}\}\}|\{\{\s*(\w+(?:\.\w+)*)\s*\}\}/g;
+
+/** The value at a dotted path, reading own properties only; undefined when missing. */
+export function valueAt(variables: Record<string, unknown>, path: string): unknown {
+  let value: unknown = variables;
+  for (const segment of path.split(".")) {
+    if (value === null || typeof value !== "object" || !Object.hasOwn(value, segment)) {
+      return undefined;
+    }
+    value = (value as Record<string, unknown>)[segment];
+  }
+  return value;
+}
+
+function lookup(variables: Record<string, unknown>, path: string): string {
+  const value = valueAt(variables, path);
+  if (value === undefined || value === null) return "";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function applyEscape(value: string, mode: EscapeMode): string {
+  if (mode === "html") return escapeHtml(value);
+  if (mode === "header") return escapeHeader(value);
+  return value;
+}
+
+// One pass, so an inserted value is never scanned for placeholders again.
 function interpolateValue(
   tmpl: string,
   variables: Record<string, unknown>,
   mode: EscapeMode,
 ): string {
-  return tmpl
-    .replace(/\{\{\{(\w+)\}\}\}/g, (_, k: string) => {
-      const raw = variables[k];
-      if (raw === undefined || raw === null) return "";
-      return typeof raw === "string" ? raw : JSON.stringify(raw);
-    })
-    .replace(/\{\{(\w+)\}\}/g, (_, k: string) => {
-      const raw = variables[k];
-      if (raw === undefined || raw === null) return "";
-      const val = typeof raw === "string" ? raw : JSON.stringify(raw);
-      if (mode === "html") return escapeHtml(val);
-      if (mode === "header") return escapeHeader(val);
-      return val;
-    });
+  return tmpl.replace(
+    PLACEHOLDER,
+    (_, rawPath: string | undefined, escapedPath: string | undefined) =>
+      rawPath !== undefined
+        ? lookup(variables, rawPath)
+        : applyEscape(lookup(variables, escapedPath ?? ""), mode),
+  );
+}
+
+/** Every placeholder path used in the strings of a content tree, once each, in order. */
+export function placeholderPaths(node: unknown): string[] {
+  const paths = new Set<string>();
+  const visit = (value: unknown): void => {
+    if (typeof value === "string") {
+      for (const match of value.matchAll(PLACEHOLDER)) paths.add(match[1] ?? match[2] ?? "");
+    } else if (Array.isArray(value)) {
+      value.forEach(visit);
+    } else if (value && typeof value === "object") {
+      Object.values(value).forEach(visit);
+    }
+  };
+  visit(node);
+  return [...paths];
 }
 
 export function renderContentNode(

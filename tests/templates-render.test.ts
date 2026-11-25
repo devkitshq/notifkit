@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderWithTemplate } from "@/templates/render.js";
+import { interpolateText, renderWithTemplate } from "@/templates/render.js";
 
 describe("renderWithTemplate", () => {
   it("does not break when a variable contains a double quote", () => {
@@ -43,5 +43,27 @@ describe("renderWithTemplate", () => {
     const out = renderWithTemplate(template, { a: "one", b: "two" });
 
     expect(out.content).toEqual({ blocks: [{ title: "one" }], meta: { k: "two" } });
+  });
+});
+
+// AI prompts are filled with interpolateText, so they read placeholders the
+// same way as a template's text fields.
+describe("interpolateText", () => {
+  it("fills dotted paths and spaced placeholders without escaping", () => {
+    const vars = { user: { name: "Ada" }, notes: "<b>busy</b>", tags: ["a", "b"] };
+    expect(
+      interpolateText("Summarise {{ user.name }}: {{notes}} {{{ notes }}} {{tags}}", vars),
+    ).toBe('Summarise Ada: <b>busy</b> <b>busy</b> ["a","b"]');
+  });
+
+  it("renders an empty string for a missing path or an inherited property", () => {
+    expect(interpolateText("[{{user.missing}}][{{ nope }}][{{toString}}]", { user: {} })).toBe(
+      "[][][]",
+    );
+  });
+
+  it("does not scan an inserted value for placeholders", () => {
+    const vars = { bio: "{{ user.token }}", user: { token: "secret" } };
+    expect(interpolateText("{{{bio}}} {{bio}}", vars)).toBe("{{ user.token }} {{ user.token }}");
   });
 });
