@@ -3923,3 +3923,518 @@ describe("SesTransport (SNS webhooks)", () => {
     await expect(ses.parseWebhook(JSON.parse(rawBody), rawBody)).rejects.toThrow(/HTTP 500/);
   });
 });
+
+// ─── Web Push ────────────────────────────────────────────────────────────────
+
+import { generateVAPIDKeys } from "web-push";
+import { WebPushTransport } from "../packages/provider-web-push/src/index.js";
+import { decryptPushMessage, fakeBrowser, readVapidHeader } from "./helpers/web-push.js";
+
+const WEB_PUSH_SUBJECT = "mailto:push@example.com";
+const WEB_PUSH_ENDPOINT = "https://push.example.com/wpush/v2/gAAAAABk-test-subscription";
+
+/** A VAPID key pair, made for the run: no key lives in the tests. */
+const webPushVapid = generateVAPIDKeys();
+
+function webPushTransport(options: Record<string, unknown> = {}) {
+  return new WebPushTransport({
+    vapidSubject: WEB_PUSH_SUBJECT,
+    vapidPublicKey: webPushVapid.publicKey,
+    vapidPrivateKey: webPushVapid.privateKey,
+    ...options,
+  });
+}
+
+const webPushBrowser = () => fakeBrowser(WEB_PUSH_ENDPOINT);
+const verifyVapid = (authorization: string, publicKey = webPushVapid.publicKey) =>
+  readVapidHeader(authorization, publicKey);
+
+/** Stubs `fetch` with one push service response. */
+function stubPushService(status: number, body = "", headers: Record<string, string> = {}) {
+  const fn = vi
+    .fn()
+    .mockImplementation(async () => new Response(body || null, { status, headers }));
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+/** The URL, RequestInit and headers of the Nth push. */
+function pushCall(fn: ReturnType<typeof stubPushService>, n = 0) {
+  const [url, init] = fn.mock.calls[n]! as [string, RequestInit];
+  return { url, init, headers: init.headers as Record<string, string> };
+}
+
+function webPushTask(
+  destination: string | undefined,
+  overrides: Record<string, unknown> = {},
+): any {
+  return {
+    taskId: "task-uuid-wp-1",
+    enrichedEventId: "event-uuid-wp-1",
+    destination,
+    priority: "normal",
+    renderedContent: { content: { title: "Order shipped", body: "Order #9481 is on its way." } },
+    ...overrides,
+  };
+}
+
+const FCM_MESSAGE_URL = "https://fcm.googleapis.com/0:1764000000000000%7a1b2c3d4e5f6a7b";
+
+describe("WebPushTransport (Push Provider)", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as any;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("delivers the push channel with a default rate that a custom one replaces", () => {
+    expect(webPushTransport().channel).toBe("push");
+    expect(webPushTransport().limits).toEqual({ limit: 1000, windowSeconds: 60 });
+    expect(webPushTransport({ limits: { limit: 5, windowSeconds: 1 } }).limits).toEqual({
+      limit: 5,
+      windowSeconds: 1,
+    });
+  });
+
+  it("posts the encrypted message to the subscription's endpoint and returns its Location", async () => {
+    const browser = webPushBrowser();
+    const fetchMock = stubPushService(201, "", { location: FCM_MESSAGE_URL });
+
+    const result = await webPushTransport().send(webPushTask(browser.destination));
+
+    expect(result).toEqual({ success: true, providerMessageId: FCM_MESSAGE_URL });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const { url, init, headers } = pushCall(fetchMock);
+    expect(url).toBe(WEB_PUSH_ENDPOINT);
+    expect(init.method).toBe("POST");
+    expect(init.redirect).toBe("manual");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(headers).toEqual({
+      TTL: "2419200",
+      "Content-Type": "application/octet-stream",
+      "Content-Encoding": "aes128gcm",
+      Authorization: expect.stringMatching(/^vapid t=/),
+      Urgency: "normal",
+    });
+    expect(JSON.parse(decryptPushMessage(init.body as Uint8Array, browser))).toEqual({
+      title: "Order shipped",
+      body: "Order #9481 is on its way.",
+      data: { eventId: "event-uuid-wp-1", taskId: "task-uuid-wp-1" },
+    });
+  });
+
+  it("signs a VAPID token for the push service's origin with the configured key", async () => {
+    const fetchMock = stubPushService(201);
+    const before = Math.floor(Date.now() / 1000);
+
+    await webPushTransport().send(webPushTask(webPushBrowser().destination));
+
+    const vapid = verifyVapid(pushCall(fetchMock).headers["Authorization"]!);
+    expect(vapid.valid).toBe(true);
+    expect(vapid.k).toBe(webPushVapid.publicKey);
+    expect(vapid.header).toEqual({ typ: "JWT", alg: "ES256" });
+    expect(vapid.claims.aud).toBe("https://push.example.com");
+    expect(vapid.claims.sub).toBe(WEB_PUSH_SUBJECT);
+    // Push services refuse a token valid for more than 24 hours.
+    expect(vapid.claims.exp).toBeGreaterThan(before);
+    expect(vapid.claims.exp).toBeLessThanOrEqual(before + 24 * 60 * 60);
+  });
+
+  it("keeps each transport's own keys when two run in one process", async () => {
+    const other = generateVAPIDKeys();
+    const fetchMock = stubPushService(201);
+    const first = webPushTransport();
+    const second = webPushTransport({
+      vapidPublicKey: other.publicKey,
+      vapidPrivateKey: other.privateKey,
+    });
+
+    await second.send(webPushTask(webPushBrowser().destination));
+    await first.send(webPushTask(webPushBrowser().destination));
+
+    const secondAuth = pushCall(fetchMock, 0).headers["Authorization"]!;
+    const firstAuth = pushCall(fetchMock, 1).headers["Authorization"]!;
+    expect(verifyVapid(secondAuth, other.publicKey)).toMatchObject({
+      valid: true,
+      k: other.publicKey,
+    });
+    expect(verifyVapid(firstAuth)).toMatchObject({ valid: true, k: webPushVapid.publicKey });
+  });
+
+  it.each([
+    ["low", "low"],
+    ["normal", "normal"],
+    ["high", "high"],
+    ["critical", "high"],
+  ])("sends the %s priority as urgency %s", async (priority, urgency) => {
+    const fetchMock = stubPushService(201);
+
+    await webPushTransport().send(webPushTask(webPushBrowser().destination, { priority }));
+
+    expect(pushCall(fetchMock).headers["Urgency"]).toBe(urgency);
+  });
+
+  it("sends the configured time to live, zero included", async () => {
+    const fetchMock = stubPushService(201);
+
+    await webPushTransport({ ttlSeconds: 3600 }).send(webPushTask(webPushBrowser().destination));
+    await webPushTransport({ ttlSeconds: 0 }).send(webPushTask(webPushBrowser().destination));
+
+    expect(pushCall(fetchMock, 0).headers["TTL"]).toBe("3600");
+    expect(pushCall(fetchMock, 1).headers["TTL"]).toBe("0");
+  });
+
+  it.each([
+    [{ vapidSubject: "" }, "No subject set"],
+    [{ vapidSubject: "push@example.com" }, "Vapid subject is not a valid URL"],
+    [{ vapidSubject: "http://example.com" }, "not an https: or mailto: URL"],
+    [{ vapidPublicKey: "c2hvcnQ" }, "65 bytes long"],
+    [{ vapidPrivateKey: "c2hvcnQ" }, "32 bytes long"],
+    [{ vapidPublicKey: generateVAPIDKeys().publicKey }, "is not the public key of"],
+  ])("refuses VAPID details %o when constructed", (options, message) => {
+    expect(() => webPushTransport(options)).toThrow("Invalid VAPID details");
+    expect(() => webPushTransport(options)).toThrow(message);
+  });
+
+  it.each([-1, 1.5, Number.NaN])("refuses a time to live of %s when constructed", (ttlSeconds) => {
+    expect(() => webPushTransport({ ttlSeconds })).toThrow(
+      "ttlSeconds must be a whole number of seconds",
+    );
+  });
+
+  it.each([
+    [
+      { title: "T", text: "from text", body: "from body" },
+      { title: "T", body: "from text" },
+    ],
+    [
+      { subject: "From subject", body: "B" },
+      { title: "From subject", body: "B" },
+    ],
+    [
+      { subject: "From subject", title: "From title", body: "B" },
+      { title: "From title", body: "B" },
+    ],
+    [{ title: "Only a title" }, { title: "Only a title", body: "" }],
+    [
+      { body: "Only a body", title: "  " },
+      { title: "", body: "Only a body" },
+    ],
+  ])("builds the notification from %o", async (content, expected) => {
+    const browser = webPushBrowser();
+    const fetchMock = stubPushService(201);
+
+    await webPushTransport().send(
+      webPushTask(browser.destination, { renderedContent: { content } }),
+    );
+
+    const sent = JSON.parse(
+      decryptPushMessage(pushCall(fetchMock).init.body as Uint8Array, browser),
+    );
+    expect({ title: sent.title, body: sent.body }).toEqual(expected);
+  });
+
+  it("passes the template's data object to the service worker, with the task's ids", async () => {
+    const browser = webPushBrowser();
+    const fetchMock = stubPushService(201);
+    const content = {
+      title: "Order shipped",
+      body: "On its way",
+      data: { url: "/orders/9481", taskId: "template value" },
+    };
+
+    await webPushTransport().send(
+      webPushTask(browser.destination, { renderedContent: { content } }),
+    );
+
+    const sent = JSON.parse(
+      decryptPushMessage(pushCall(fetchMock).init.body as Uint8Array, browser),
+    );
+    expect(sent.data).toEqual({
+      url: "/orders/9481",
+      eventId: "event-uuid-wp-1",
+      taskId: "task-uuid-wp-1",
+    });
+  });
+
+  it("fails a task with neither title nor body without calling the push service", async () => {
+    const fetchMock = stubPushService(201);
+
+    const result = await webPushTransport().send(
+      webPushTask(webPushBrowser().destination, {
+        renderedContent: { content: { title: " ", data: { url: "/" } } },
+      }),
+    );
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No title or body on task",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fails a task without a destination without calling the push service", async () => {
+    const fetchMock = stubPushService(201);
+
+    const result = await webPushTransport().send(webPushTask(undefined));
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "No destination (Web Push subscription) on task",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an FCM registration token", "fMEP0vJqS0:APA91bHun4MxP5egoKMwt2KZFBaFUH"],
+    ["an ntfy topic", "acme-alerts-usr123"],
+    ["JSON without an endpoint", JSON.stringify({ keys: { p256dh: "x", auth: "y" } })],
+    ["a JSON array", JSON.stringify([WEB_PUSH_ENDPOINT])],
+    ["a JSON string", JSON.stringify(WEB_PUSH_ENDPOINT)],
+  ])("leaves %s to the other push providers, without flagging it", async (_, destination) => {
+    const fetchMock = stubPushService(201);
+
+    const result = await webPushTransport().send(webPushTask(destination));
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: "Destination is not a Web Push subscription (JSON with an endpoint)",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "an http endpoint",
+      { ...webPushBrowser().subscription, endpoint: "http://push.example.com/x" },
+      "the endpoint must be an https:// URL",
+    ],
+    [
+      "an endpoint that is not a URL",
+      { ...webPushBrowser().subscription, endpoint: "push.example.com/x" },
+      "Invalid URL",
+    ],
+    ["no keys", { endpoint: WEB_PUSH_ENDPOINT }, "must have 'auth' and 'p256dh' keys"],
+    [
+      "a p256dh of the wrong length",
+      { endpoint: WEB_PUSH_ENDPOINT, keys: { p256dh: "c2hvcnQ", auth: "c2hvcnQc2hvcnQc2hvcnQ" } },
+      "p256dh value should be 65 bytes long",
+    ],
+    [
+      "a p256dh that is not a P-256 point",
+      {
+        endpoint: WEB_PUSH_ENDPOINT,
+        keys: { p256dh: Buffer.alloc(65, 4).toString("base64url"), auth: "AAAAAAAAAAAAAAAAAAAAAA" },
+      },
+      "",
+    ],
+  ])("flags a subscription with %s, which no send can reach", async (_, subscription, message) => {
+    const fetchMock = stubPushService(201);
+    const log = logger();
+
+    const result = await webPushTransport({ logger: log }).send(
+      webPushTask(JSON.stringify(subscription)),
+    );
+
+    expect(result).toMatchObject({ success: false, invalidToken: true, retryable: false });
+    expect(result.error).toMatch(/^Invalid Web Push subscription: /);
+    expect(result.error).toContain(message);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-wp-1", error: result.error },
+      "Web Push subscription refused",
+    );
+  });
+
+  it("sends the largest payload a push service must accept, and refuses one byte more", async () => {
+    const browser = webPushBrowser();
+    const fetchMock = stubPushService(201);
+    // 4,096 bytes encrypted is 3,993 of JSON: work out the body that fills it.
+    const envelope = JSON.stringify({
+      title: "T",
+      body: "",
+      data: { eventId: "event-uuid-wp-1", taskId: "task-uuid-wp-1" },
+    });
+    const fits = "a".repeat(3993 - Buffer.byteLength(envelope));
+    const send = (body: string) =>
+      webPushTransport().send(
+        webPushTask(browser.destination, { renderedContent: { content: { title: "T", body } } }),
+      );
+
+    expect(await send(fits)).toMatchObject({ success: true });
+    expect((pushCall(fetchMock).init.body as Uint8Array).length).toBe(4096);
+
+    expect(await send(`${fits}a`)).toEqual({
+      success: false,
+      retryable: false,
+      error: "Web Push payload is 4097 bytes encrypted; push services accept 4096",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [404, "push subscription has unsubscribed or expired.\n"],
+    [
+      410,
+      JSON.stringify({
+        code: 410,
+        errno: 106,
+        error: "Gone",
+        message: "Request did not validate subscription has expired",
+      }),
+    ],
+  ])("flags a subscription the push service answers %s for", async (status, body) => {
+    stubPushService(status, body);
+
+    const result = await webPushTransport().send(webPushTask(webPushBrowser().destination));
+
+    expect(result).toMatchObject({ success: false, invalidToken: true, retryable: false });
+  });
+
+  it.each([
+    [400, "invalid JWT provided\n", "invalid JWT provided"],
+    [
+      401,
+      JSON.stringify({ code: 401, errno: 109, error: "Unauthorized", message: "Invalid token" }),
+      "Invalid token",
+    ],
+    [
+      403,
+      "the VAPID credentials in the authorization header do not correspond to the credentials used to create the subscriptions.\n",
+      "the VAPID credentials in the authorization header do not correspond to the credentials used to create the subscriptions.",
+    ],
+    [413, "", "HTTP 413"],
+  ])("gives up on a %s without flagging the subscription", async (status, body, reason) => {
+    stubPushService(status, body);
+
+    const result = await webPushTransport().send(webPushTask(webPushBrowser().destination));
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: false,
+      retryable: false,
+      error: `Web Push error ${status}: ${reason}`,
+    });
+  });
+
+  it("waits for capacity after a 429", async () => {
+    stubPushService(429, "Too Many Requests");
+
+    const result = await webPushTransport().send(webPushTask(webPushBrowser().destination));
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: false,
+      throttled: true,
+      error: "Web Push error 429: Too Many Requests",
+    });
+  });
+
+  it.each([
+    [500, "", "HTTP 500"],
+    [502, "<html>Bad Gateway</html>", "<html>Bad Gateway</html>"],
+    [503, JSON.stringify({ reason: "ServiceUnavailable" }), "ServiceUnavailable"],
+  ])("retries a %s", async (status, body, reason) => {
+    stubPushService(status, body);
+
+    const result = await webPushTransport().send(webPushTask(webPushBrowser().destination));
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: false,
+      error: `Web Push error ${status}: ${reason}`,
+    });
+  });
+
+  it("cuts a long error body to 200 characters", async () => {
+    stubPushService(400, "x".repeat(250));
+
+    const result = await webPushTransport().send(webPushTask(webPushBrowser().destination));
+
+    expect(result.error).toBe(`Web Push error 400: ${"x".repeat(200)}…`);
+  });
+
+  it("gives up on a redirect instead of following it", async () => {
+    const fetchMock = stubPushService(302, "", { location: "https://push.example.com/elsewhere" });
+
+    const result = await webPushTransport().send(webPushTask(webPushBrowser().destination));
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: false,
+      retryable: false,
+      error: "Web Push error 302: HTTP 302",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a network error or a timeout", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+
+    const result = await webPushTransport().send(webPushTask(webPushBrowser().destination));
+
+    expect(result).toEqual({ success: false, error: "fetch failed" });
+  });
+
+  it("cancels the request when delivery aborts the send", async () => {
+    const fetchMock = stubPushService(201);
+    const worker = new AbortController();
+
+    await webPushTransport().send(
+      webPushTask(webPushBrowser().destination, { signal: worker.signal }),
+    );
+    const signal = pushCall(fetchMock).init.signal!;
+    expect(signal.aborted).toBe(false);
+    worker.abort(new Error("Transport timeout after 10000ms"));
+
+    expect(signal.aborted).toBe(true);
+  });
+
+  it.each([
+    [{ location: FCM_MESSAGE_URL }, FCM_MESSAGE_URL],
+    [{ "apns-id": "8F0C8A8B-1234-4C3D-9E2F-0A1B2C3D4E5F" }, "8F0C8A8B-1234-4C3D-9E2F-0A1B2C3D4E5F"],
+    [{}, undefined],
+  ])("takes the message id from the reply headers %o", async (headers, id) => {
+    stubPushService(201, "", headers);
+
+    const result = await webPushTransport().send(webPushTask(webPushBrowser().destination));
+
+    expect(result).toEqual({ success: true, providerMessageId: id });
+  });
+
+  it("logs the push service's origin, never the endpoint or the keys", async () => {
+    const browser = webPushBrowser();
+    stubPushService(410, "Gone");
+    const log = logger();
+
+    await webPushTransport({ logger: log }).send(webPushTask(browser.destination));
+    stubPushService(201, "", { location: FCM_MESSAGE_URL });
+    await webPushTransport({ logger: log }).send(webPushTask(browser.destination));
+
+    expect(log.warn).toHaveBeenCalledWith(
+      {
+        taskId: "task-uuid-wp-1",
+        pushService: "https://push.example.com",
+        status: 410,
+        error: "Gone",
+        invalidToken: true,
+      },
+      "Web Push send failed",
+    );
+    expect(log.debug).toHaveBeenCalledWith(
+      {
+        taskId: "task-uuid-wp-1",
+        pushService: "https://push.example.com",
+        providerMessageId: FCM_MESSAGE_URL,
+      },
+      "Web Push message sent",
+    );
+    const logged = JSON.stringify([log.warn.mock.calls, log.debug.mock.calls]);
+    expect(logged).not.toContain("gAAAAABk-test-subscription");
+    expect(logged).not.toContain(browser.subscription.keys.auth);
+    expect(logged).not.toContain(webPushVapid.privateKey);
+  });
+});

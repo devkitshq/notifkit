@@ -8,10 +8,13 @@ import { ResendTransport } from "../../packages/provider-resend/src/index.js";
 import { TwilioTransport } from "../../packages/provider-twilio/src/index.js";
 import { VonageTransport } from "../../packages/provider-vonage/src/index.js";
 import { ConsoleTransport } from "../../packages/provider-console/src/index.js";
+import { WebPushTransport } from "../../packages/provider-web-push/src/index.js";
 import type { NotificationDispatchedPayload } from "@/contracts/index.js";
 import { startFakeInternet, type FakeInternet } from "./support/fake-internet.js";
 import { useInfra, waitFor } from "./support/infra.js";
 import { startNotifkit, apiClient, type Running } from "./support/pipeline.js";
+import { generateVAPIDKeys } from "web-push";
+import { decryptPushMessage, fakeBrowser, readVapidHeader } from "../helpers/web-push.js";
 
 /**
  * Each provider sends through its real code — real fetch, real request
@@ -709,6 +712,131 @@ describe("ConsoleTransport", () => {
   });
 });
 
+// ─── Web Push ───────────────────────────────────────────────────────────────
+
+describe("WebPushTransport", () => {
+  const vapid = generateVAPIDKeys();
+  const wp = new WebPushTransport({
+    vapidSubject: "mailto:push@example.com",
+    vapidPublicKey: vapid.publicKey,
+    vapidPrivateKey: vapid.privateKey,
+  });
+  const FCM = "fcm.googleapis.com";
+  const MOZILLA = "updates.push.services.mozilla.com";
+  const push = (destination: string, overrides: Parameters<typeof task>[0] = {}) =>
+    task({
+      channel: "push",
+      destination,
+      priority: "high",
+      content: {
+        title: "Commande expédiée 📦",
+        body: "Order #9481 is on its way.",
+        data: { url: "/orders/9481" },
+      },
+      ...overrides,
+    });
+
+  it("sends a message the browser can decrypt, signed for the push service, and keeps its Location", async () => {
+    const browser = fakeBrowser(`https://${FCM}/fcm/send/dQw4w9WgXcQ:APA91bE-test`);
+    const location = "https://fcm.googleapis.com/0:1764000000000000%7a1b2c3d";
+    net.on(FCM, () => ({ status: 201, headers: { location } }));
+    const sent = push(browser.destination);
+
+    expect(await wp.send(sent)).toEqual({ success: true, providerMessageId: location });
+
+    const req = net.requests[0]!;
+    expect(req.method).toBe("POST");
+    expect(req.path).toBe("/fcm/send/dQw4w9WgXcQ:APA91bE-test");
+    expect(req.headers["content-encoding"]).toBe("aes128gcm");
+    expect(req.headers["content-type"]).toBe("application/octet-stream");
+    expect(req.headers["content-length"]).toBe(String(req.bytes.length));
+    expect(req.headers.ttl).toBe("2419200");
+    expect(req.headers.urgency).toBe("high");
+    expect(JSON.parse(decryptPushMessage(req.bytes, browser))).toEqual({
+      title: "Commande expédiée 📦",
+      body: "Order #9481 is on its way.",
+      data: { url: "/orders/9481", eventId: sent.enrichedEventId, taskId: sent.taskId },
+    });
+    const token = readVapidHeader(req.headers.authorization as string, vapid.publicKey);
+    expect(token.valid).toBe(true);
+    expect(token.claims).toMatchObject({
+      aud: "https://fcm.googleapis.com",
+      sub: "mailto:push@example.com",
+    });
+  });
+
+  it("flags a subscription Mozilla's push service says has expired", async () => {
+    net.on(MOZILLA, () => ({
+      status: 410,
+      json: {
+        code: 410,
+        errno: 106,
+        error: "Gone",
+        message: "Request did not validate subscription has expired",
+        more_info: "https://mozilla-services.github.io/autopush-rs/errors.html",
+      },
+    }));
+    const browser = fakeBrowser(`https://${MOZILLA}/wpush/v2/gAAAAABk-test-subscription`);
+
+    expect(await wp.send(push(browser.destination))).toEqual({
+      success: false,
+      invalidToken: true,
+      retryable: false,
+      error: "Web Push error 410: Request did not validate subscription has expired",
+    });
+  });
+
+  it("never sends to a destination that is not a subscription, nor to one over http", async () => {
+    net.on(FCM, () => ({ status: 201 }));
+    const overHttp = { ...fakeBrowser(`http://${FCM}/fcm/send/abc`).subscription };
+    for (const bad of [
+      "fMEP0vJqS0:APA91bHun4MxP5egoKMwt2KZ",
+      "acme-alerts-usr123",
+      JSON.stringify(overHttp),
+    ]) {
+      expect(await wp.send(push(bad))).toMatchObject({ success: false, retryable: false });
+    }
+    expect(net.requests).toEqual([]);
+  });
+
+  it("does not follow a redirect, which would send the message somewhere the browser does not listen", async () => {
+    net.on(FCM, (req) =>
+      req.path === "/fcm/send/abc"
+        ? { status: 307, headers: { location: `https://${FCM}/elsewhere` } }
+        : { status: 201 },
+    );
+
+    expect(
+      await wp.send(push(fakeBrowser(`https://${FCM}/fcm/send/abc`).destination)),
+    ).toMatchObject({
+      success: false,
+      retryable: false,
+      error: "Web Push error 307: HTTP 307",
+    });
+    expect(net.requests.map((r) => r.path)).toEqual(["/fcm/send/abc"]);
+  });
+
+  it("retries an outage, and gives up on a hung push service within the task's timeout", async () => {
+    const destination = fakeBrowser(`https://${FCM}/fcm/send/abc`).destination;
+    net.on(FCM, () => ({ status: 500, text: "" }));
+    const outage = await wp.send(push(destination));
+    expect(outage).toMatchObject({
+      success: false,
+      invalidToken: false,
+      error: "Web Push error 500: HTTP 500",
+    });
+    expect(outage.retryable).toBeUndefined();
+
+    net.on(FCM, () => ({ delayMs: 3_000, status: 201 }));
+    const started = Date.now();
+    const hung = await wp.send(
+      push(destination, { deliveryOptions: { maxAttempts: 3, timeoutMs: 300 } }),
+    );
+    expect(hung.success).toBe(false);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
 // ─── Which failures are worth retrying ─────────────────────────────────────
 //
 // `retryable: false` tells delivery that sending again cannot help: it fails
@@ -860,6 +988,53 @@ describe("which failures are worth retrying", () => {
       expect(notPermanent(await r.send(task({ destination: "u@x.com" })))).toBe(true);
       net.on("api.resend.com", () => "hang-up");
       expect(notPermanent(await r.send(task({ destination: "u@x.com" })))).toBe(true);
+    });
+  });
+
+  describe("Web Push", () => {
+    const vapid = generateVAPIDKeys();
+    const wp = new WebPushTransport({
+      vapidSubject: "mailto:push@example.com",
+      vapidPublicKey: vapid.publicKey,
+      vapidPrivateKey: vapid.privateKey,
+    });
+    const FCM = "fcm.googleapis.com";
+    const push = () =>
+      task({
+        channel: "push",
+        destination: fakeBrowser(`https://${FCM}/fcm/send/abc:APA91b-test`).destination,
+      });
+
+    it("gives up on a push the service refused, and flags the subscription only when it is gone", async () => {
+      for (const [status, text] of [
+        [400, "invalid JWT provided\n"],
+        [401, "authorization header must be specified.\n"],
+        [
+          403,
+          "the VAPID credentials in the authorization header do not correspond to the credentials used to create the subscriptions.\n",
+        ],
+        [413, "payload too large\n"],
+        // What FCM answers to a message over 4,096 bytes.
+        [400, "binary data passed in the request must be less than 4096 bytes.\n"],
+      ] as const) {
+        net.on(FCM, () => ({ status, text }));
+        expect(await wp.send(push())).toMatchObject({ ...permanent, invalidToken: false });
+      }
+      for (const status of [404, 410]) {
+        net.on(FCM, () => ({ status, text: "push subscription has unsubscribed or expired.\n" }));
+        expect(await wp.send(push())).toMatchObject({ ...permanent, invalidToken: true });
+      }
+    });
+
+    it("tries again after a rate limit, a server error or a dropped connection", async () => {
+      net.on(FCM, () => ({ status: 429, text: "Too Many Requests\n" }));
+      const limited = await wp.send(push());
+      expect(notPermanent(limited)).toBe(true);
+      expect(limited.throttled).toBe(true);
+      net.on(FCM, () => ({ status: 502, text: "<html>Bad Gateway</html>" }));
+      expect(notPermanent(await wp.send(push()))).toBe(true);
+      net.on(FCM, () => "hang-up");
+      expect(notPermanent(await wp.send(push()))).toBe(true);
     });
   });
 });
