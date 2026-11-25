@@ -219,7 +219,7 @@ describe("MCP server", () => {
       preferences: { topics: { news: true } },
     });
     await a.call("update_user", { id: "u", timezone: "Asia/Tokyo" });
-    await a.call("add_user_contact", { userId: "u", channel: "sms", target: "+1555" });
+    await a.call("add_user_contact", { userId: "u", channel: "sms", target: "+15550000555" });
 
     const user = (await a.call("get_user", { id: "u" })).body;
     expect(user).toMatchObject({
@@ -232,7 +232,7 @@ describe("MCP server", () => {
       (await a.call("get_user_contacts", { userId: "u" })).body.contacts
         .map((c: any) => c.target)
         .sort(),
-    ).toEqual(["+1555", "u@x.com"]);
+    ).toEqual(["+15550000555", "u@x.com"]);
     expect(
       (await a.call("list_users", { segment: "vip" })).body.users.map((u: any) => u.userId),
     ).toEqual(["u"]);
@@ -248,7 +248,7 @@ describe("MCP server", () => {
       quietHours: [{ start: "22:00", end: "06:00" }],
     });
 
-    await a.call("delete_user_contact", { userId: "u", channel: "sms", target: "+1555" });
+    await a.call("delete_user_contact", { userId: "u", channel: "sms", target: "+15550000555" });
     expect((await a.call("get_user_contacts", { userId: "u" })).body.contacts).toHaveLength(1);
     await a.call("delete_user", { id: "u" });
     expect((await a.call("get_user", { id: "u" })).isError).toBe(true);

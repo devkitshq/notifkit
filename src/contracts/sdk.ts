@@ -56,6 +56,16 @@ const emailOrArray = z
   .union([emailTarget, z.array(emailTarget)])
   .transform((v) => (Array.isArray(v) ? v : [v]));
 
+// E.164 only: transports keep a number's digits, so "ext 12" would be dialled
+// as part of it, and suppressions match the "+…" form provider webhooks report.
+const E164 = /^\+[1-9]\d{6,14}$/;
+const PHONE_TARGET_MESSAGE = "expected an E.164 phone number, e.g. +447700900000";
+const phoneTarget = z.string().regex(E164, PHONE_TARGET_MESSAGE);
+const phoneOrArray = z
+  .union([phoneTarget, z.array(phoneTarget)])
+  .transform((v) => (Array.isArray(v) ? v : [v]));
+const PHONE_CHANNELS = new Set(["sms", "whatsapp"]);
+
 export const UserContactInputSchema = z
   .object({
     channel: ContactChannelSchema,
@@ -67,6 +77,10 @@ export const UserContactInputSchema = z
   })
   .refine((c) => c.channel !== "email" || PLAIN_ADDRESS.test(c.target), {
     message: EMAIL_TARGET_MESSAGE,
+    path: ["target"],
+  })
+  .refine((c) => !PHONE_CHANNELS.has(c.channel) || E164.test(c.target), {
+    message: PHONE_TARGET_MESSAGE,
     path: ["target"],
   });
 export type UserContactInput = z.infer<typeof UserContactInputSchema>;
@@ -84,7 +98,7 @@ export const AddUserSchema = z.object({
   timezone: TimezoneSchema.optional(),
   contacts: z.array(UserContactInputSchema).optional(),
   email: emailOrArray.optional(),
-  phone: stringOrArray.optional(),
+  phone: phoneOrArray.optional(),
   pushToken: stringOrArray.optional(),
   segments: z.array(z.string().min(1)).optional(),
   preferences: PreferencesSchema.optional(),
@@ -97,7 +111,7 @@ export const UpdateUserSchema = z.object({
   timezone: TimezoneSchema.optional(),
   contacts: z.array(UserContactInputSchema).optional(),
   email: emailOrArray.optional(),
-  phone: stringOrArray.optional(),
+  phone: phoneOrArray.optional(),
   pushToken: stringOrArray.optional(),
   segments: z.array(z.string().min(1)).optional(),
   preferences: PreferencesSchema.optional(),

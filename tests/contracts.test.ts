@@ -94,9 +94,38 @@ describe("End-to-End Contract Registry Tests", () => {
       expect(BatchAddContactsSchema.safeParse([contact]).success).toBe(true);
     }
     // Other channels keep free-form targets.
-    expect(
-      BatchAddContactsSchema.safeParse({ channel: "sms", target: "+15550000001" }).success,
-    ).toBe(true);
+    expect(BatchAddContactsSchema.safeParse({ channel: "slack", target: "C0123" }).success).toBe(
+      true,
+    );
+  });
+
+  it("rejects sms and whatsapp targets that are not E.164", () => {
+    // Transports keep only the digits, so "ext 12" would be dialled as part of
+    // the number; suppressions also match the "+447700900000" webhooks report.
+    const bad = [
+      "+44 7700 900000",
+      "447700900000",
+      "07700900000",
+      "+44770090000012345",
+      "+0447700900000",
+      "+44 7700 900000 ext 12",
+    ];
+    for (const target of bad) {
+      for (const channel of ["sms", "whatsapp"]) {
+        const contact = { channel, target };
+        expect(AddUserSchema.safeParse({ id: "u1", contacts: [contact] }).success).toBe(false);
+        expect(BatchAddContactsSchema.safeParse(contact).success).toBe(false);
+      }
+      expect(UpdateUserSchema.safeParse({ phone: target }).success).toBe(false);
+    }
+    for (const target of ["+447700900000", "+15550000001", "+6831234"]) {
+      for (const channel of ["sms", "whatsapp"]) {
+        const contact = { channel, target };
+        expect(AddUserSchema.safeParse({ id: "u1", contacts: [contact] }).success).toBe(true);
+        expect(BatchAddContactsSchema.safeParse([contact]).success).toBe(true);
+      }
+      expect(AddUserSchema.safeParse({ id: "u1", phone: [target] }).success).toBe(true);
+    }
   });
 
   it("accepts a non-UUID templateId on delivery outcome events", () => {

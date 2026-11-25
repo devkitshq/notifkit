@@ -412,13 +412,13 @@ describe("templates", () => {
 describe("users", () => {
   it("creates a user with contacts through every input style, and reads it back", async () => {
     const p = await project();
-    await p.client.addUser("u1", [{ channel: "sms", target: "+1" }], {
+    await p.client.addUser("u1", [{ channel: "sms", target: "+15550000001" }], {
       language: "fr",
       email: "u1@x.com",
     });
     await p.client.identify({
       id: "u2",
-      phone: ["+2", "+3"],
+      phone: ["+15550000002", "+15550000003"],
       pushToken: "tok",
       segments: ["beta"],
     });
@@ -431,7 +431,11 @@ describe("users", () => {
     ]);
 
     const u2 = await p.client.getUserContacts("u2");
-    expect(u2.contacts.map((c) => c.target).sort()).toEqual(["+2", "+3", "tok"]);
+    expect(u2.contacts.map((c) => c.target).sort()).toEqual([
+      "+15550000002",
+      "+15550000003",
+      "tok",
+    ]);
     expect((await p.client.getUser("u2")).segments).toEqual(["beta"]);
     expect((await p.api("POST", "/v1/users", { email: "no-id@x.com" })).status).toBe(400);
   });
@@ -441,14 +445,16 @@ describe("users", () => {
     await p.client.addUser({ id: "u", email: "old@x.com", timezone: "UTC" });
     await p.client.updateUser("u", {
       timezone: "Asia/Tokyo",
-      contacts: [{ channel: "sms", target: "+9", preferences: { topics: { promo: false } } }],
+      contacts: [
+        { channel: "sms", target: "+15550000009", preferences: { topics: { promo: false } } },
+      ],
     });
 
     const u = await p.client.getUser("u");
     expect(u.timezone).toBe("Asia/Tokyo");
     expect(u.email).toBe("old@x.com");
-    expect(u.contacts!.map((c) => c.target).sort()).toEqual(["+9", "old@x.com"]);
-    expect(u.contacts!.find((c) => c.target === "+9")!.preferences).toEqual({
+    expect(u.contacts!.map((c) => c.target).sort()).toEqual(["+15550000009", "old@x.com"]);
+    expect(u.contacts!.find((c) => c.target === "+15550000009")!.preferences).toEqual({
       topics: { promo: false },
     });
     await expect(p.client.updateUser("ghost", { language: "x" })).rejects.toThrow(/user_not_found/);
@@ -459,21 +465,24 @@ describe("users", () => {
     await p.client.addUser({ id: "u" });
     await p.client.addContact("u", { channel: "email", target: "a@x.com" });
     await p.client.addContacts("u", [
-      { channel: "sms", target: "+1" },
+      { channel: "sms", target: "+15550000001" },
       { channel: "webhook", target: "https://hooks.example.com/a b" },
     ]);
     expect((await p.client.getUserContacts("u")).contacts).toHaveLength(3);
 
     await p.client.deleteContact("u", "webhook", "https://hooks.example.com/a b");
-    await p.client.deleteContact("u", "sms", "+1");
+    await p.client.deleteContact("u", "sms", "+15550000001");
     expect((await p.client.getUserContacts("u")).contacts.map((c) => c.target)).toEqual([
       "a@x.com",
     ]);
 
-    await expect(p.client.deleteContact("u", "sms", "+1")).rejects.toThrow(/contact_not_found/);
+    await expect(p.client.deleteContact("u", "sms", "+15550000001")).rejects.toThrow(
+      /contact_not_found/,
+    );
     expect((await p.api("DELETE", "/v1/users/u/contacts/pigeon/x")).status).toBe(400);
     expect(
-      (await p.api("POST", "/v1/users/ghost/contacts", { channel: "sms", target: "+1" })).status,
+      (await p.api("POST", "/v1/users/ghost/contacts", { channel: "sms", target: "+15550000001" }))
+        .status,
     ).toBe(404);
     expect((await p.api("POST", "/v1/users/u/contacts", { channel: "sms" })).status).toBe(400);
   });

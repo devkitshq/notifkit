@@ -493,7 +493,7 @@ export function definePipelineSuite(mode: { fused: boolean }) {
         await addUser(p.api, {
           id: "u",
           email: "u@x.com",
-          phone: "+1555",
+          phone: "+15550000555",
           preferences: { channels: { sms: false } },
         });
         await notify(p.api, { user: "u", template: "receipt", channels: ["email", "sms"] });
@@ -578,7 +578,10 @@ export function definePipelineSuite(mode: { fused: boolean }) {
         await p.api("PUT", "/v1/templates", {
           templates: [{ id: "wa", channel: "whatsapp", content: { text: "hi" } }],
         });
-        await addUser(p.api, { id: "u", contacts: [{ channel: "whatsapp", target: "+1777" }] });
+        await addUser(p.api, {
+          id: "u",
+          contacts: [{ channel: "whatsapp", target: "+15550000777" }],
+        });
 
         for (let i = 0; i < 3; i++)
           await notify(p.api, { user: "u", template: "wa", channels: ["whatsapp"] });
@@ -594,7 +597,7 @@ export function definePipelineSuite(mode: { fused: boolean }) {
     describe("fallback", () => {
       it("moves to the next channel when the first fails", async () => {
         const p = await project();
-        await addUser(p.api, { id: "u", email: "bounce@x.com", phone: "+1555" });
+        await addUser(p.api, { id: "u", email: "bounce@x.com", phone: "+15550000555" });
         await notify(p.api, {
           user: "u",
           template: "receipt",
@@ -608,7 +611,7 @@ export function definePipelineSuite(mode: { fused: boolean }) {
       it("counts a notification once against the user's cap, however many channels it falls back through", async () => {
         const p = await project();
         await app.admin("PATCH", `/v1/projects/${p.id}`, { throttleLimit: 1 });
-        await addUser(p.api, { id: "u", email: "bounce-cap@x.com", phone: "+1555" });
+        await addUser(p.api, { id: "u", email: "bounce-cap@x.com", phone: "+15550000555" });
 
         await notify(p.api, {
           user: "u",
@@ -626,7 +629,7 @@ export function definePipelineSuite(mode: { fused: boolean }) {
 
       it("moves to the next channel when the user has no address on the first", async () => {
         const p = await project();
-        await addUser(p.api, { id: "u", phone: "+1555" });
+        await addUser(p.api, { id: "u", phone: "+15550000555" });
         await notify(p.api, {
           user: "u",
           template: "receipt",
@@ -638,7 +641,7 @@ export function definePipelineSuite(mode: { fused: boolean }) {
 
       it("does not use the fallback when the first channel works", async () => {
         const p = await project();
-        await addUser(p.api, { id: "u", email: "ok@x.com", phone: "+1555" });
+        await addUser(p.api, { id: "u", email: "ok@x.com", phone: "+15550000555" });
         await notify(p.api, {
           user: "u",
           template: "receipt",
