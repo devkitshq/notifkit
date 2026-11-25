@@ -19,6 +19,34 @@ const MAX_ENCRYPTED_BYTES = 4096;
  */
 const URGENCY = { low: "low", normal: "normal", high: "high", critical: "high" } as const;
 
+/**
+ * The push services browsers subscribe with, by host: Google's for Chrome
+ * and the other Chromium browsers (Opera, Samsung Internet, Brave…), and
+ * Mozilla's for Firefox.
+ */
+const PUSH_SERVICE_HOSTS = new Set(["fcm.googleapis.com", "updates.push.services.mozilla.com"]);
+
+/**
+ * Push services spread over subdomains: Microsoft's for Edge, one host per
+ * region (`wns2-par02p.notify.windows.com`), and Apple's for Safari, which
+ * Apple documents as any subdomain of push.apple.com.
+ */
+const PUSH_SERVICE_DOMAINS = [".notify.windows.com", ".push.apple.com"];
+
+/**
+ * Whether `url` is an endpoint of a push service browsers use: https, on its
+ * default port, with no credentials, on one of the hosts above.
+ */
+export function isKnownPushServiceUrl(url: URL): boolean {
+  if (url.protocol !== "https:" || url.port !== "" || url.username || url.password) return false;
+  // URL has already lowercased the host.
+  const hostname = url.hostname;
+  return (
+    PUSH_SERVICE_HOSTS.has(hostname) ||
+    PUSH_SERVICE_DOMAINS.some((domain) => hostname.endsWith(domain))
+  );
+}
+
 export interface WebPushTransportOptions {
   /**
    * How push services can reach you about your messages: a `mailto:` address
@@ -136,8 +164,17 @@ export class WebPushTransport implements Transport {
     try {
       // RFC 8030 has push services on https only; over http the VAPID token
       // would travel in the clear.
-      if (new URL(subscription.endpoint).protocol !== "https:") {
+      const endpoint = new URL(subscription.endpoint);
+      if (endpoint.protocol !== "https:") {
         throw new Error("the endpoint must be an https:// URL");
+      }
+      if (endpoint.username || endpoint.password) {
+        throw new Error("the endpoint must not carry credentials");
+      }
+      // The endpoint reaches notifkit from the browser, through the app, so
+      // anyone could make one up. Only a push service gets the request.
+      if (!isKnownPushServiceUrl(endpoint)) {
+        throw new Error(`${endpoint.host} is not a known push service`);
       }
       request = generateRequestDetails(subscription, payload, {
         vapidDetails: this.vapidDetails,
@@ -146,8 +183,9 @@ export class WebPushTransport implements Transport {
       });
     } catch (err) {
       // The destination is a subscription, so no other provider can use it,
-      // but its endpoint or keys are broken (a bad URL, a p256dh that is not
-      // a P-256 key): no send to it can ever work.
+      // but its endpoint or keys are unusable (a bad URL, a host that is not
+      // a push service, a p256dh that is not a P-256 key): no send to it will
+      // ever be made.
       const error = `Invalid Web Push subscription: ${(err as Error).message}`;
       this.logger?.warn({ taskId: task.taskId, error }, "Web Push subscription refused");
       return { success: false, invalidToken: true, retryable: false, error };

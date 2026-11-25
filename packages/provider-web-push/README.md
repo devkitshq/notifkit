@@ -96,9 +96,7 @@ await notifkit.addContact("usr_123", {
 });
 ```
 
-Each browser the user subscribes from is one more contact. notifkit sends to
-the `endpoint` in the subscription, so if your users are not trusted, check it
-is a push service you expect before you store it.
+Each browser the user subscribes from is one more contact.
 
 Then register a template on the `push` channel and send:
 
@@ -124,6 +122,24 @@ await notifkit.notify({
   data: { orderId: "9481" },
 });
 ```
+
+## Push services
+
+The `endpoint` in a subscription comes from the browser through your app, so
+anyone could make one up. notifkit only sends to the push services browsers
+subscribe with:
+
+| Push service | Endpoint host                       | Browsers                                                                 |
+| ------------ | ----------------------------------- | ------------------------------------------------------------------------ |
+| Google       | `fcm.googleapis.com`                | Chrome and the other Chromium browsers (Opera, Samsung Internet, Brave…) |
+| Microsoft    | `*.notify.windows.com`              | Edge                                                                     |
+| Mozilla      | `updates.push.services.mozilla.com` | Firefox                                                                  |
+| Apple        | `*.push.apple.com`                  | Safari                                                                   |
+
+Over `https://` on the default port, without credentials in the URL. A
+subscription to anything else is refused without a request and its contact
+flagged. `isKnownPushServiceUrl(url)` is exported, to check a subscription
+before you store it.
 
 ## What is sent
 
@@ -157,8 +173,9 @@ browser is next online, within `ttlSeconds`.
 
 - **404 or 410**: the browser unsubscribed, or the subscription expired. The
   contact is flagged so notifkit stops sending to it.
-- **A subscription that cannot be used** (its endpoint is not an `https://`
-  URL, or its keys are not keys): flagged the same way, without a request.
+- **A subscription that cannot be used** (its endpoint is not one of the
+  [push services](#push-services), or its keys are not keys): flagged the same
+  way, without a request.
 - **401, 403 and other 4xx**: permanent, not retried, and not flagged. A 401 or
   403 means the push service refused the VAPID signature, often because the
   browser subscribed with another public key.

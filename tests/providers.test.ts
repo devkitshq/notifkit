@@ -3927,11 +3927,15 @@ describe("SesTransport (SNS webhooks)", () => {
 // ─── Web Push ────────────────────────────────────────────────────────────────
 
 import { generateVAPIDKeys } from "web-push";
-import { WebPushTransport } from "../packages/provider-web-push/src/index.js";
+import {
+  isKnownPushServiceUrl,
+  WebPushTransport,
+} from "../packages/provider-web-push/src/index.js";
 import { decryptPushMessage, fakeBrowser, readVapidHeader } from "./helpers/web-push.js";
 
 const WEB_PUSH_SUBJECT = "mailto:push@example.com";
-const WEB_PUSH_ENDPOINT = "https://push.example.com/wpush/v2/gAAAAABk-test-subscription";
+const WEB_PUSH_ENDPOINT =
+  "https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bE-test-subscription";
 
 /** A VAPID key pair, made for the run: no key lives in the tests. */
 const webPushVapid = generateVAPIDKeys();
@@ -4033,7 +4037,7 @@ describe("WebPushTransport (Push Provider)", () => {
     expect(vapid.valid).toBe(true);
     expect(vapid.k).toBe(webPushVapid.publicKey);
     expect(vapid.header).toEqual({ typ: "JWT", alg: "ES256" });
-    expect(vapid.claims.aud).toBe("https://push.example.com");
+    expect(vapid.claims.aud).toBe("https://fcm.googleapis.com");
     expect(vapid.claims.sub).toBe(WEB_PUSH_SUBJECT);
     // Push services refuse a token valid for more than 24 hours.
     expect(vapid.claims.exp).toBeGreaterThan(before);
@@ -4209,12 +4213,12 @@ describe("WebPushTransport (Push Provider)", () => {
   it.each([
     [
       "an http endpoint",
-      { ...webPushBrowser().subscription, endpoint: "http://push.example.com/x" },
+      { ...webPushBrowser().subscription, endpoint: "http://fcm.googleapis.com/fcm/send/x" },
       "the endpoint must be an https:// URL",
     ],
     [
       "an endpoint that is not a URL",
-      { ...webPushBrowser().subscription, endpoint: "push.example.com/x" },
+      { ...webPushBrowser().subscription, endpoint: "fcm.googleapis.com/fcm/send/x" },
       "Invalid URL",
     ],
     ["no keys", { endpoint: WEB_PUSH_ENDPOINT }, "must have 'auth' and 'p256dh' keys"],
@@ -4247,6 +4251,79 @@ describe("WebPushTransport (Push Provider)", () => {
       { taskId: "task-uuid-wp-1", error: result.error },
       "Web Push subscription refused",
     );
+  });
+
+  it.each([
+    ["Google (Chrome)", "https://fcm.googleapis.com/fcm/send/dQw4w9WgXcQ:APA91bE-test"],
+    ["Mozilla (Firefox)", "https://updates.push.services.mozilla.com/wpush/v2/gAAAAABk-test"],
+    ["Microsoft (Edge)", "https://wns2-par02p.notify.windows.com/w/?token=BQYAAAB-test"],
+    ["Apple (Safari)", "https://web.push.apple.com/QGuQyavXutnMHI-test"],
+  ])("sends to %s's push service", async (_, endpoint) => {
+    const fetchMock = stubPushService(201);
+
+    const result = await webPushTransport().send(webPushTask(fakeBrowser(endpoint).destination));
+
+    expect(result.success).toBe(true);
+    expect(pushCall(fetchMock).url).toBe(endpoint);
+  });
+
+  it.each([
+    ["https://push.example.com/send/abc", "push.example.com"],
+    [
+      "https://fcm.googleapis.com.attacker.example/fcm/send/abc",
+      "fcm.googleapis.com.attacker.example",
+    ],
+    ["https://evil-fcm.googleapis.com/fcm/send/abc", "evil-fcm.googleapis.com"],
+    ["https://notify.windows.com/w/?token=abc", "notify.windows.com"],
+    ["https://evilnotify.windows.com/w/?token=abc", "evilnotify.windows.com"],
+    ["https://push.apple.com.attacker.example/abc", "push.apple.com.attacker.example"],
+    ["https://fcm.googleapis.com:8443/fcm/send/abc", "fcm.googleapis.com:8443"],
+    ["https://169.254.169.254/latest/meta-data/", "169.254.169.254"],
+    ["https://localhost/admin", "localhost"],
+  ])(
+    "flags a subscription to %s, which is not a push service, without a request",
+    async (endpoint, host) => {
+      const fetchMock = stubPushService(201);
+
+      const result = await webPushTransport().send(webPushTask(fakeBrowser(endpoint).destination));
+
+      expect(result).toEqual({
+        success: false,
+        invalidToken: true,
+        retryable: false,
+        error: `Invalid Web Push subscription: ${host} is not a known push service`,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["https://fcm.googleapis.com/fcm/send/abc", true],
+    ["https://FCM.GoogleAPIs.com/fcm/send/abc", true],
+    ["https://fcm.googleapis.com:443/fcm/send/abc", true],
+    ["https://wns2-bl2p.notify.windows.com/w/?token=abc", true],
+    ["https://api.push.apple.com/abc", true],
+    ["http://fcm.googleapis.com/fcm/send/abc", false],
+    ["https://user@fcm.googleapis.com/fcm/send/abc", false],
+    ["https://:secret@fcm.googleapis.com/fcm/send/abc", false],
+    ["https://fcm.googleapis.com:8443/fcm/send/abc", false],
+    ["https://fcm.googleapis.com./fcm/send/abc", false],
+    ["https://push.apple.com/abc", false],
+  ])("isKnownPushServiceUrl(%s) is %s", (url, known) => {
+    expect(isKnownPushServiceUrl(new URL(url))).toBe(known);
+  });
+
+  it("refuses an endpoint with credentials in it", async () => {
+    const fetchMock = stubPushService(201);
+    const endpoint = "https://user:secret@fcm.googleapis.com/fcm/send/abc";
+
+    const result = await webPushTransport().send(webPushTask(fakeBrowser(endpoint).destination));
+
+    expect(result).toMatchObject({ success: false, invalidToken: true, retryable: false });
+    expect(result.error).toBe(
+      "Invalid Web Push subscription: the endpoint must not carry credentials",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("sends the largest payload a push service must accept, and refuses one byte more", async () => {
@@ -4358,7 +4435,9 @@ describe("WebPushTransport (Push Provider)", () => {
   });
 
   it("gives up on a redirect instead of following it", async () => {
-    const fetchMock = stubPushService(302, "", { location: "https://push.example.com/elsewhere" });
+    const fetchMock = stubPushService(302, "", {
+      location: "https://fcm.googleapis.com/elsewhere",
+    });
 
     const result = await webPushTransport().send(webPushTask(webPushBrowser().destination));
 
@@ -4417,7 +4496,7 @@ describe("WebPushTransport (Push Provider)", () => {
     expect(log.warn).toHaveBeenCalledWith(
       {
         taskId: "task-uuid-wp-1",
-        pushService: "https://push.example.com",
+        pushService: "https://fcm.googleapis.com",
         status: 410,
         error: "Gone",
         invalidToken: true,
@@ -4427,13 +4506,13 @@ describe("WebPushTransport (Push Provider)", () => {
     expect(log.debug).toHaveBeenCalledWith(
       {
         taskId: "task-uuid-wp-1",
-        pushService: "https://push.example.com",
+        pushService: "https://fcm.googleapis.com",
         providerMessageId: FCM_MESSAGE_URL,
       },
       "Web Push message sent",
     );
     const logged = JSON.stringify([log.warn.mock.calls, log.debug.mock.calls]);
-    expect(logged).not.toContain("gAAAAABk-test-subscription");
+    expect(logged).not.toContain("dQw4w9WgXcQ:APA91bE-test-subscription");
     expect(logged).not.toContain(browser.subscription.keys.auth);
     expect(logged).not.toContain(webPushVapid.privateKey);
   });

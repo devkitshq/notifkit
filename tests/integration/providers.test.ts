@@ -786,13 +786,34 @@ describe("WebPushTransport", () => {
     });
   });
 
-  it("never sends to a destination that is not a subscription, nor to one over http", async () => {
-    net.on(FCM, () => ({ status: 201 }));
-    const overHttp = { ...fakeBrowser(`http://${FCM}/fcm/send/abc`).subscription };
+  it("reaches each push service browsers subscribe with", async () => {
+    const services = [
+      [FCM, "/fcm/send/dQw4w9WgXcQ:APA91bE-test"],
+      [MOZILLA, "/wpush/v2/gAAAAABk-test"],
+      ["wns2-par02p.notify.windows.com", "/w/?token=BQYAAAB-test"],
+      ["web.push.apple.com", "/QGuQyavXutnMHI-test"],
+    ] as const;
+    for (const [host] of services) net.on(host, () => ({ status: 201 }));
+
+    for (const [host, path] of services) {
+      const browser = fakeBrowser(`https://${host}${path}`);
+      expect(await wp.send(push(browser.destination))).toMatchObject({ success: true });
+      const req = net.requests.at(-1)!;
+      expect(`${req.host}${req.path}`).toBe(`${host}${path}`);
+      expect(JSON.parse(decryptPushMessage(req.bytes, browser)).title).toBe("Commande expédiée 📦");
+    }
+  });
+
+  it("never sends to a destination that is not a subscription, nor to an endpoint that is not a push service", async () => {
+    for (const host of [FCM, "push.example.com", "fcm.googleapis.com.attacker.example"]) {
+      net.on(host, () => ({ status: 201 }));
+    }
     for (const bad of [
       "fMEP0vJqS0:APA91bHun4MxP5egoKMwt2KZ",
       "acme-alerts-usr123",
-      JSON.stringify(overHttp),
+      fakeBrowser(`http://${FCM}/fcm/send/abc`).destination,
+      fakeBrowser("https://push.example.com/send/abc").destination,
+      fakeBrowser("https://fcm.googleapis.com.attacker.example/fcm/send/abc").destination,
     ]) {
       expect(await wp.send(push(bad))).toMatchObject({ success: false, retryable: false });
     }
