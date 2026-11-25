@@ -11,5 +11,6 @@
   "packages/provider-smtp": "0.1.1",
   "packages/provider-telegram": "0.1.5",
   "packages/provider-twilio": "0.1.4",
+  "packages/provider-vonage": "0.1.0",
   "packages/provider-whatsapp": "0.1.4"
 }
