@@ -427,7 +427,7 @@ describe("users", () => {
     expect(u1).toMatchObject({ userId: "u1", language: "fr", email: "u1@x.com" });
     expect(u1.contacts!.map((c) => `${c.channel}:${c.target}`).sort()).toEqual([
       "email:u1@x.com",
-      "sms:+1",
+      "sms:+15550000001",
     ]);
 
     const u2 = await p.client.getUserContacts("u2");
