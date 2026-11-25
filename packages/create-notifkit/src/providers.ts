@@ -14,6 +14,7 @@ export type ProviderId =
   | "smtp"
   | "ses"
   | "twilio"
+  | "vonage"
   | "fcm"
   | "slack"
   | "discord"
@@ -150,6 +151,29 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
       { name: "TWILIO_ACCOUNT_SID", comment: "From https://console.twilio.com" },
       { name: "TWILIO_AUTH_TOKEN", comment: "From https://console.twilio.com" },
       { name: "TWILIO_FROM", comment: "Your Twilio number in E.164 form, e.g. +15550000001" },
+    ],
+    target: { env: "TO_PHONE", comment: "Where `send` delivers the test SMS, in E.164 form" },
+    content: `{ text: "Welcome, {{name}}! Your notifkit app is working." }`,
+  },
+  vonage: {
+    id: "vonage",
+    label: "Vonage (SMS)",
+    packageName: "@notifkit/provider-vonage",
+    version: "0.1.0",
+    className: "VonageTransport",
+    channel: "sms",
+    options: `{
+      apiKey: process.env.VONAGE_API_KEY!,
+      apiSecret: process.env.VONAGE_API_SECRET!,
+      from: process.env.VONAGE_FROM!,
+    }`,
+    env: [
+      { name: "VONAGE_API_KEY", comment: "From https://dashboard.nexmo.com" },
+      { name: "VONAGE_API_SECRET", comment: "From https://dashboard.nexmo.com" },
+      {
+        name: "VONAGE_FROM",
+        comment: "Your Vonage number in E.164 form, e.g. +447700900001, or a sender ID",
+      },
     ],
     target: { env: "TO_PHONE", comment: "Where `send` delivers the test SMS, in E.164 form" },
     content: `{ text: "Welcome, {{name}}! Your notifkit app is working." }`,
