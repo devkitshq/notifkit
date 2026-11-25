@@ -234,7 +234,8 @@ export class WhatsAppTransport implements Transport {
 
 // Meta expects digits only (country code + number) — no "+", spaces, or dashes.
 function normalizeToE164Digits(phone: string | undefined): string | undefined {
-  if (!phone) return undefined;
+  // Only a phone number's characters: "ext 12" would otherwise be dialled as part of it.
+  if (!phone || !/^[+\d\s().-]+$/.test(phone)) return undefined;
   const digits = phone.replace(/[^\d]/g, "");
   return digits || undefined;
 }

@@ -1255,7 +1255,8 @@ describe("VonageTransport (SMS Provider)", () => {
     expect(sent.endsWith("…")).toBe(true);
   });
 
-  it.each([undefined, "", "+"])(
+  // "ext 89" must not be dialled as part of the number.
+  it.each([undefined, "", "+", "+49 30 1234567 ext 89"])(
     "fails without calling Vonage when the destination is %j",
     async (destination) => {
       const fetchMock = stubVonage(202, { message_uuid: MESSAGE_UUID });
@@ -2586,14 +2587,18 @@ describe("WhatsAppTransport (WhatsApp Provider)", () => {
     expect(whatsappTransport().webhookPath).toBe("/webhooks/whatsapp");
   });
 
-  it("fails if recipient has no phone number", async () => {
-    const result = await whatsappTransport().send(whatsappTask({ destination: undefined }));
-    expect(result).toEqual({
-      success: false,
-      retryable: false,
-      error: "No phone number on recipient; cannot send WhatsApp message.",
-    });
-  });
+  // "ext 89" must not be dialled as part of the number.
+  it.each([undefined, "+49 30 1234567 ext 89"])(
+    "fails if %j is not a phone number",
+    async (destination) => {
+      const result = await whatsappTransport().send(whatsappTask({ destination }));
+      expect(result).toEqual({
+        success: false,
+        retryable: false,
+        error: "No phone number on recipient; cannot send WhatsApp message.",
+      });
+    },
+  );
 
   it("fails if template has no text content", async () => {
     const result = await whatsappTransport().send(

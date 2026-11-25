@@ -63,6 +63,9 @@ const OPT_OUT_CODE = 1240;
 /** Vonage rejects a `text` longer than this. */
 const VONAGE_MAX_TEXT = 3200;
 
+/** A phone number, maybe formatted: digits, `+`, spaces, `()`, `.` and `-`. */
+const PHONE_NUMBER = /^[+\d\s().-]+$/;
+
 export interface VonageTransportOptions {
   /** API key from the Vonage Dashboard. */
   apiKey: string;
@@ -118,8 +121,12 @@ export class VonageTransport implements Transport {
   async send(task: NotificationDispatchedPayload): Promise<DeliveryResult> {
     // `destination` is optional on the contract, so a malformed task can reach
     // a transport without one. Vonage wants the number without the leading
-    // `+` (447700900000), so keep only its digits.
-    const to = task.destination?.replace(/\D/g, "");
+    // `+` (447700900000), so keep only its digits, and only of a phone number:
+    // "ext 12" would otherwise be dialled as part of it.
+    const to =
+      task.destination && PHONE_NUMBER.test(task.destination)
+        ? task.destination.replace(/\D/g, "")
+        : undefined;
     if (!to) {
       return {
         success: false,
@@ -371,7 +378,7 @@ function problemMessage(problem: unknown): string | undefined {
  * ID (`MyShop`) is passed as written.
  */
 function normaliseSender(from: string): string {
-  return /^[+\d\s().-]+$/.test(from) ? from.replace(/\D/g, "") : from;
+  return PHONE_NUMBER.test(from) ? from.replace(/\D/g, "") : from;
 }
 
 /**
