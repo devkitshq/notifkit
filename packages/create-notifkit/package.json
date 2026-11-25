@@ -1,6 +1,6 @@
 {
   "name": "create-notifkit",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Scaffold a notifkit app: npm create notifkit@latest my-app",
   "type": "module",
   "bin": {

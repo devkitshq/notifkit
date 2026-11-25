@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/devkitshq/notifkit/compare/create-notifkit-v0.1.4...create-notifkit-v0.1.5) (2026-11-25)
+
+
+### Features
+
+* **create-notifkit:** scaffold apps that send sms through vonage ([fbbdbf9](https://github.com/devkitshq/notifkit/commit/fbbdbf96c5614917695ce46caaf9ec11c2100ea9))
+
 ## [0.1.4](https://github.com/devkitshq/notifkit/compare/create-notifkit-v0.1.3...create-notifkit-v0.1.4) (2026-11-21)
 
 

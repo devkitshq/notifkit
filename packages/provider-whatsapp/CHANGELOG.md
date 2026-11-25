@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.5](https://github.com/devkitshq/notifkit/compare/provider-whatsapp-v0.1.4...provider-whatsapp-v0.1.5) (2026-11-25)
+
+
+### Bug Fixes
+
+* **provider-vonage,provider-whatsapp:** cancel the request when delivery aborts the send ([aea574e](https://github.com/devkitshq/notifkit/commit/aea574ed6eaaa972c64ff44523320bb667cb55b1))
+* **provider-vonage,provider-whatsapp:** refuse destinations that aren't a phone number ([cc585cc](https://github.com/devkitshq/notifkit/commit/cc585ccc0f47b9e62c393c2bbb34a5893ae831b5))
+
 ## [0.1.4](https://github.com/devkitshq/notifkit/compare/provider-whatsapp-v0.1.3...provider-whatsapp-v0.1.4) (2026-11-21)
 
 
