@@ -45,6 +45,9 @@
     "packages/provider-vonage": {
       "package-name": "@notifkit/provider-vonage"
     },
+    "packages/provider-web-push": {
+      "package-name": "@notifkit/provider-web-push"
+    },
     "packages/provider-whatsapp": {
       "package-name": "@notifkit/provider-whatsapp"
     }
