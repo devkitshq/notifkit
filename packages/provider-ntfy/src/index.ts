@@ -16,10 +16,11 @@ const TOPIC = /^[-_A-Za-z0-9]{1,64}$/;
 const PRIORITY = { low: "2", normal: "3", high: "4", critical: "5" } as const;
 
 /**
- * ntfy turns a body longer than this many bytes into a file attachment
- * instead of the notification text, so a longer body is cut to fit.
+ * The longest body ntfy keeps as the notification text. It reads 4,096 bytes
+ * ahead, and a body that fills them, 4,096 bytes included, becomes a file
+ * attachment, so a longer body is cut to fit.
  */
-const MAX_MESSAGE_BYTES = 4096;
+const MAX_MESSAGE_BYTES = 4095;
 
 /** ntfy refuses a title longer than this many bytes with a 400. */
 const MAX_TITLE_BYTES = 1024;
@@ -120,7 +121,11 @@ export class NtfyTransport implements Transport {
         // page while nothing is published: ntfy.sh sends `/docs` to its
         // documentation, and an http:// server URL is often sent to https://.
         redirect: "manual",
-        signal: sendSignal(task),
+        // Delivery aborts this when the send runs past its timeout. Called on
+        // its own, a send gets the same timeout.
+        signal:
+          (task as { signal?: AbortSignal }).signal ??
+          AbortSignal.timeout(task.deliveryOptions?.timeoutMs ?? 10_000),
       });
       const text = await res.text().catch(() => "");
 
@@ -140,19 +145,15 @@ export class NtfyTransport implements Transport {
 
       if (!res.ok) {
         const reason = errorReason(text) ?? `HTTP ${res.status}`;
-        // 410: a UnifiedPush topic that has had no subscriber for too long.
-        // Nobody reads it any more, so stop sending to it.
-        const invalidToken = res.status === 410;
-
         this.logger?.warn(
-          { taskId: task.taskId, status: res.status, error: reason, invalidToken },
+          { taskId: task.taskId, status: res.status, error: reason },
           "ntfy send failed",
         );
+        // No answer flags the contact. ntfy says a topic is gone (410) only to
+        // UnifiedPush publishes, which this provider doesn't send, and a 401
+        // or 403 is our token or the server's access rules refusing us.
         return {
           success: false,
-          // Never set for a 401 or 403: that is our token or the server's
-          // access rules refusing us, not the topic being gone.
-          invalidToken,
           ...(isPermanentStatus(res.status) ? { retryable: false } : {}),
           ...(res.status === 429 ? { throttled: true } : {}),
           error: `ntfy error ${res.status}: ${reason}`,
@@ -192,16 +193,6 @@ function firstText(...values: unknown[]): string | undefined {
     if (typeof value === "string" && value.trim()) return value;
   }
   return undefined;
-}
-
-/**
- * Aborts on whichever comes first: the delivery worker's own signal (set on
- * the task when it runs the send), or the task's timeout.
- */
-function sendSignal(task: NotificationDispatchedPayload): AbortSignal {
-  const timeout = AbortSignal.timeout(task.deliveryOptions?.timeoutMs ?? 10_000);
-  const worker = (task as { signal?: AbortSignal }).signal;
-  return worker ? AbortSignal.any([worker, timeout]) : timeout;
 }
 
 /**

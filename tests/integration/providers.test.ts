@@ -770,29 +770,39 @@ describe("NtfyTransport", () => {
     expect(net.requests.map((r) => r.method)).toEqual(["POST"]);
   });
 
-  it("flags a topic ntfy says is gone, retries an outage, and gives up on a hung server within the task's timeout", async () => {
-    net.on("ntfy.sh", () => ({
-      status: 410,
-      json: {
-        code: 41002,
-        http: 410,
-        error: "UnifiedPush topic has had no subscriber for too long, subscription expired",
-      },
-    }));
-    expect(await n.send(push({ destination: "upAbCdEfGhIjKl" }))).toMatchObject({
-      success: false,
-      invalidToken: true,
-      retryable: false,
-    });
+  it("sends at most 4,095 bytes, which ntfy keeps as the message rather than an attachment", async () => {
+    net.on("ntfy.sh", () => published("notifkit-alerts_42"));
+    await n.send(push({ content: { body: "a".repeat(4096) } }));
+    expect(Buffer.byteLength(net.requests[0]!.body)).toBe(4095);
+    expect(net.requests[0]!.body.endsWith("…")).toBe(true);
+  });
 
+  it("never publishes as UnifiedPush, so a 410 is a 4xx like any other", async () => {
+    // ntfy answers 410 only to a publish it reads as UnifiedPush.
+    net.on("ntfy.sh", (req) =>
+      req.headers["x-unifiedpush"] || req.headers["content-encoding"] === "aes128gcm"
+        ? {
+            status: 410,
+            json: {
+              code: 41002,
+              http: 410,
+              error: "UnifiedPush topic has had no subscriber for too long, subscription expired",
+            },
+          }
+        : published("upAbCdEfGhIjKl"),
+    );
+    expect(await n.send(push({ destination: "upAbCdEfGhIjKl" }))).toMatchObject({ success: true });
+
+    net.on("ntfy.sh", () => ({ status: 410, json: { code: 41002, http: 410, error: "gone" } }));
+    const gone = await n.send(push({ destination: "upAbCdEfGhIjKl" }));
+    expect(gone).toMatchObject({ success: false, retryable: false });
+    expect(gone.invalidToken).toBeUndefined();
+  });
+
+  it("retries an outage, and gives up on a hung server within the task's timeout", async () => {
     net.on("ntfy.sh", () => ({ status: 500, text: "upstream error" }));
     const outage = await n.send(push());
-    expect(outage).toMatchObject({
-      success: false,
-      invalidToken: false,
-      error: "ntfy error 500: HTTP 500",
-    });
-    expect(outage.retryable).toBeUndefined();
+    expect(outage).toEqual({ success: false, error: "ntfy error 500: HTTP 500" });
 
     net.on("ntfy.sh", () => ({ delayMs: 3_000, json: { id: "late" } }));
     const started = Date.now();
@@ -896,16 +906,16 @@ describe("which failures are worth retrying", () => {
       });
 
     it("gives up on a request ntfy refused, without flagging the topic", async () => {
-      net.on("ntfy.sh", error(401, 40101, "unauthorized"));
-      expect(await n.send(task({ destination: "alerts" }))).toMatchObject({
-        ...permanent,
-        invalidToken: false,
-      });
-      net.on("ntfy.sh", error(403, 40301, "forbidden"));
-      expect(await n.send(task({ destination: "alerts" }))).toMatchObject({
-        ...permanent,
-        invalidToken: false,
-      });
+      for (const [status, code, message] of [
+        [401, 40101, "unauthorized"],
+        [403, 40301, "forbidden"],
+        [410, 41002, "UnifiedPush topic has had no subscriber for too long"],
+      ] as const) {
+        net.on("ntfy.sh", error(status, code, message));
+        const refused = await n.send(task({ destination: "alerts" }));
+        expect(refused).toMatchObject(permanent);
+        expect(refused.invalidToken).toBeUndefined();
+      }
       net.on("ntfy.sh", error(400, 40010, "invalid request: topic name is not allowed"));
       expect(await n.send(task({ destination: "docs" }))).toMatchObject(permanent);
       expect(await n.send(task({ destination: undefined }))).toMatchObject(permanent);

@@ -72,9 +72,10 @@ await notifkit.notify({
 
 ## What is sent
 
-- **Message**: the template's `text` (or `body`), up to 4,096 bytes. ntfy turns
-  a longer message into a file attachment, so a longer one is cut and ends in
-  "…". A template with only a title sends the title as the message.
+- **Message**: the template's `text` (or `body`), up to 4,095 bytes. ntfy turns
+  a message of 4,096 bytes or more into a file attachment, so a longer one is
+  cut and ends in "…". A template with only a title sends the title as the
+  message.
 - **Title**: the template's `title` (or `subject`), on one line, up to 1,024
   bytes. Accents and emoji are fine: they are sent as RFC 2047 encoded words,
   which ntfy decodes.
@@ -89,11 +90,11 @@ ntfy answers with the message `id`, recorded as the `providerMessageId`.
 ntfy has no delivery receipts, so a successful send means the server accepted
 the message for the topic. A missing or invalid topic, a rejected token (401),
 a topic the token may not write to (403) and any other 4xx are permanent and
-not retried. They don't flag the contact either: on the shared `push` channel
-the target may be another provider's device token. The one exception is 410,
-which ntfy returns for a UnifiedPush topic that has lost its subscriber: the
-contact is flagged so notifkit stops sending to it. A rate limit (429) waits
-for capacity; timeouts, network errors and 5xx are retried.
+not retried. None of them flags the contact: on the shared `push` channel the
+target may be another provider's device token, and ntfy has no answer that
+means a topic is gone (its 410 is for UnifiedPush publishes, which this
+provider doesn't send). A rate limit (429) waits for capacity; timeouts,
+network errors and 5xx are retried.
 
 A redirect is not followed: it would turn the publish into a GET that returns a
 page with a 200 and publishes nothing. It fails the send instead, as does a

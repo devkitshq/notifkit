@@ -2294,16 +2294,43 @@ describe("NtfyTransport (Push Provider)", () => {
     expect(ntfyCall(fetchMock).headers["X-Title"]).toBe("Line one line two");
   });
 
-  it("cuts the message to ntfy's 4,096 bytes so it isn't turned into an attachment", async () => {
+  it("cuts a long message to ntfy's 4,095 bytes so it isn't turned into an attachment", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+
+    await new NtfyTransport().send(
+      ntfyTask({ renderedContent: { content: { body: "a".repeat(5000) } } }),
+    );
+
+    // 4,092 bytes and "…", which is 3 bytes in UTF-8.
+    const sent = ntfyCall(fetchMock).init.body as string;
+    expect(sent).toBe(`${"a".repeat(4092)}…`);
+    expect(Buffer.byteLength(sent)).toBe(4095);
+  });
+
+  it.each([
+    [4095, "sends it whole"],
+    [4096, "cuts it"],
+  ])("given a %s-byte message, %s", async (size) => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+    const body = "a".repeat(size);
+
+    await new NtfyTransport().send(ntfyTask({ renderedContent: { content: { body } } }));
+
+    // ntfy turns a body of 4,096 bytes or more into an attachment.
+    const sent = ntfyCall(fetchMock).init.body as string;
+    expect(sent).toBe(size <= 4095 ? body : `${"a".repeat(4092)}…`);
+  });
+
+  it("cuts between characters, never inside one", async () => {
     const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
     // 1 + 1,363 × 3 = 4,090 bytes: room is left for "…" (3 bytes), not for the
-    // 4-byte emoji after it, so the cut lands inside the emoji.
+    // 4-byte emoji after it, so the cut lands before the emoji.
     const body = `a${"€".repeat(1363)}🎉🎉 end`;
 
     await new NtfyTransport().send(ntfyTask({ renderedContent: { content: { body } } }));
 
     const sent = ntfyCall(fetchMock).init.body as string;
-    expect(Buffer.byteLength(sent)).toBeLessThanOrEqual(4096);
+    expect(Buffer.byteLength(sent)).toBeLessThanOrEqual(4095);
     expect(sent.endsWith("…")).toBe(true);
     expect(sent.slice(-2, -1)).toBe("€");
     expect(body.startsWith(sent.slice(0, -1))).toBe(true);
@@ -2366,6 +2393,9 @@ describe("NtfyTransport (Push Provider)", () => {
     [400, 40009, "invalid request: topic invalid"],
     [401, 40101, "unauthorized"],
     [403, 40301, "forbidden"],
+    // ntfy only answers 410 to UnifiedPush publishes, which this provider
+    // doesn't send; should one come anyway, it is a 4xx like the others.
+    [410, 41002, "UnifiedPush topic has had no subscriber for too long, subscription expired"],
   ])("gives up on a %s without flagging the contact", async (status, code, error) => {
     stubNtfy(status, { code, http: status, error, link: "https://ntfy.sh/docs/publish/" });
 
@@ -2373,22 +2403,9 @@ describe("NtfyTransport (Push Provider)", () => {
 
     expect(result).toEqual({
       success: false,
-      invalidToken: false,
       retryable: false,
       error: `ntfy error ${status}: ${error}`,
     });
-  });
-
-  it("flags a UnifiedPush topic that has lost its subscriber (410)", async () => {
-    stubNtfy(410, {
-      code: 41002,
-      http: 410,
-      error: "UnifiedPush topic has had no subscriber for too long, subscription expired",
-    });
-
-    const result = await new NtfyTransport().send(ntfyTask({ destination: "upAbCdEfGhIjKl" }));
-
-    expect(result).toMatchObject({ success: false, invalidToken: true, retryable: false });
   });
 
   it("waits out a rate limit instead of failing the attempt", async () => {
@@ -2398,7 +2415,6 @@ describe("NtfyTransport (Push Provider)", () => {
 
     expect(result).toEqual({
       success: false,
-      invalidToken: false,
       throttled: true,
       error: "ntfy error 429: limit reached: too many requests",
     });
@@ -2415,9 +2431,21 @@ describe("NtfyTransport (Push Provider)", () => {
 
     expect(result).toEqual({
       success: false,
-      invalidToken: false,
       error: `ntfy error ${status}: ${reason}`,
     });
+  });
+
+  it("publishes with delivery's own signal, so delivery can cancel it", async () => {
+    const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
+    const worker = new AbortController();
+
+    await new NtfyTransport().send(ntfyTask({ signal: worker.signal }));
+    await new NtfyTransport().send(ntfyTask());
+
+    expect(ntfyCall(fetchMock, 0).init.signal).toBe(worker.signal);
+    // Called on its own, a send still gets a timeout.
+    expect(ntfyCall(fetchMock, 1).init.signal).toBeInstanceOf(AbortSignal);
+    expect(ntfyCall(fetchMock, 1).init.signal).not.toBe(worker.signal);
   });
 
   it("retries a network error or a timeout", async () => {
@@ -2478,7 +2506,7 @@ describe("NtfyTransport (Push Provider)", () => {
     await new NtfyTransport({ accessToken: "tk_secret_value", logger: log }).send(ntfyTask());
 
     expect(log.warn).toHaveBeenCalledWith(
-      { taskId: "task-uuid-nt-1", status: 401, error: "unauthorized", invalidToken: false },
+      { taskId: "task-uuid-nt-1", status: 401, error: "unauthorized" },
       "ntfy send failed",
     );
     expect(JSON.stringify(log.warn.mock.calls)).not.toContain("tk_secret_value");
