@@ -98,6 +98,7 @@ Bring your own provider accounts. First-party packages:
 - [`@notifkit/provider-resend`](./packages/provider-resend): transactional email via Resend
 - [`@notifkit/provider-smtp`](./packages/provider-smtp): email through any SMTP server, via nodemailer
 - [`@notifkit/provider-ses`](./packages/provider-ses): email via AWS SES, with bounces and complaints through SNS
+- [`@notifkit/provider-web-push`](./packages/provider-web-push): browser push notifications via Web Push (VAPID), without Firebase
 - [`@notifkit/provider-fcm`](./packages/provider-fcm): push notifications via Firebase Cloud Messaging
 - [`@notifkit/provider-twilio`](./packages/provider-twilio): SMS via Twilio, with signature-verified delivery status callbacks
 - [`@notifkit/provider-vonage`](./packages/provider-vonage): SMS via the Vonage Messages API, with signature-verified status webhooks

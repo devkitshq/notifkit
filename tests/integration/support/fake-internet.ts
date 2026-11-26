@@ -17,6 +17,8 @@ export interface RecordedRequest {
   path: string;
   headers: http.IncomingHttpHeaders;
   body: string;
+  /** The body as sent, for one that is not text (an encrypted Web Push message). */
+  bytes: Buffer;
   json(): any;
 }
 
@@ -44,11 +46,12 @@ export async function startFakeInternet(): Promise<FakeInternet> {
   const requests: RecordedRequest[] = [];
 
   const server = http.createServer((req, res) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (c) => (body += c));
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => void respond());
     const respond = async () => {
+      const bytes = Buffer.concat(chunks);
+      const body = bytes.toString("utf8");
       // /__host/<host><path>
       const [, , host, ...rest] = (req.url ?? "/").split("/");
       const path = `/${rest.join("/")}`;
@@ -58,6 +61,7 @@ export async function startFakeInternet(): Promise<FakeInternet> {
         path,
         headers: req.headers,
         body,
+        bytes,
         json: () => JSON.parse(body),
       };
       requests.push(recorded);
