@@ -217,7 +217,11 @@ export class WebPushTransport implements Transport {
         // A push service answers a push itself. A redirect would turn the POST
         // into a GET that delivers nothing.
         redirect: "manual",
-        signal: sendSignal(task),
+        // Delivery aborts this when the send runs past its timeout. Called on
+        // its own, a send gets the same timeout.
+        signal:
+          (task as { signal?: AbortSignal }).signal ??
+          AbortSignal.timeout(task.deliveryOptions?.timeoutMs ?? 10_000),
       });
       const text = await res.text().catch(() => "");
 
@@ -308,16 +312,6 @@ function requestHeaders(headers: Record<string, unknown>): Record<string, string
     out[name] = String(value);
   }
   return out;
-}
-
-/**
- * Aborts on whichever comes first: the delivery worker's own signal (set on
- * the task when it runs the send), or the task's timeout.
- */
-function sendSignal(task: NotificationDispatchedPayload): AbortSignal {
-  const timeout = AbortSignal.timeout(task.deliveryOptions?.timeoutMs ?? 10_000);
-  const worker = (task as { signal?: AbortSignal }).signal;
-  return worker ? AbortSignal.any([worker, timeout]) : timeout;
 }
 
 /**
