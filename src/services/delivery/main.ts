@@ -25,7 +25,7 @@ import { scheduledPayloads } from "@/db/schema.js";
 import { sql as drizzleSql } from "drizzle-orm";
 import { ContactRepository, IdempotencyGuard, TemplateRepository } from "@/index.js";
 import { renderWithTemplate, TemplateCache } from "@/templates/index.js";
-import { transportRegistry } from "@/index.js";
+import { transportRegistry, type Transport } from "@/index.js";
 import { globalEmitter, getPriorityBucket, type WorkerOptions } from "@/shared/index.js";
 import { startHealthReporter, NonRetryableError } from "@/workers/index.js";
 import {
@@ -424,12 +424,16 @@ export class DeliveryWorker extends BaseWorker {
       return true;
     };
 
-    const transports = this.transportRegistry.getAll(task.channel);
+    // Only the providers that can read this address: one that can't would call
+    // it dead (FCM with a Web Push subscription) and deactivate the contact.
+    const transports = this.transportRegistry
+      .getAll(task.channel)
+      .filter((t: Transport) => t.accepts?.(task.destination ?? "") ?? true);
 
     if (transports.length === 0) {
       this.logger.warn(
         { taskId: task.taskId, channel: task.channel },
-        "no transport registered for channel — dropping",
+        "no transport for this channel and destination — dropping",
       );
       const fallbackTriggered = await fallbackToNextChannel("no_transport");
       if (!fallbackTriggered) {
@@ -440,7 +444,7 @@ export class DeliveryWorker extends BaseWorker {
           task.channel,
           task.projectId,
         );
-        await failed("no transport registered for channel", "no_transport");
+        await failed("no transport for this channel and destination", "no_transport");
       }
       return;
     }

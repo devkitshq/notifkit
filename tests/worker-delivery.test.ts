@@ -301,7 +301,7 @@ describe("DeliveryWorker", () => {
       expect.objectContaining({
         type: "notification.failed",
         payload: expect.objectContaining({
-          failureReason: "no transport registered for channel",
+          failureReason: "no transport for this channel and destination",
           failureCode: "no_transport",
         }),
       }),
@@ -824,6 +824,63 @@ describe("DeliveryWorker", () => {
 
       expect(second).not.toHaveBeenCalled();
     });
+
+    // Web Push and FCM share the push channel but not their addresses: a
+    // subscription that reaches FCM comes back as a dead token.
+    describe("providers that take different destinations", () => {
+      const subscription = JSON.stringify({ endpoint: "https://fcm.googleapis.com/fcm/send/x" });
+      const webPush = (send: any, extra: Record<string, unknown> = {}) => ({
+        send,
+        accepts: (d: string) => d.startsWith("{"),
+        ...extra,
+      });
+      const fcm = () => ({
+        send: vi.fn().mockResolvedValue({ success: false, invalidToken: true, retryable: false }),
+        accepts: (d: string) => !d.startsWith("{"),
+      });
+
+      it("never hands a destination to a provider that does not take it", async () => {
+        const wp = vi.fn().mockResolvedValue({ success: true, providerMessageId: "wp-1" });
+        const other = fcm();
+        mockTransportRegistry.getAll.mockReturnValue([other, webPush(wp)]);
+
+        await worker.process(pushTask({ destination: subscription }) as any);
+
+        expect(other.send).not.toHaveBeenCalled();
+        expect(wp).toHaveBeenCalledTimes(1);
+      });
+
+      it("retries a push service outage instead of letting FCM deactivate the subscription", async () => {
+        const other = fcm();
+        mockTransportRegistry.getAll.mockReturnValue([
+          webPush(vi.fn().mockResolvedValue({ success: false, error: "Web Push error 503" })),
+          other,
+        ]);
+
+        await worker.process(pushTask({ destination: subscription }) as any);
+
+        expect(other.send).not.toHaveBeenCalled();
+        expect(mockDeviceRepo.deactivate).not.toHaveBeenCalled();
+        expect(mockScheduledProducer.publish).toHaveBeenCalledTimes(1);
+      });
+
+      it("waits for Web Push capacity instead of spilling the subscription to FCM", async () => {
+        const wp = vi.fn();
+        const other = fcm();
+        mockTransportRegistry.getAll.mockReturnValue([
+          webPush(wp, { limits: { limit: 5, windowSeconds: 60 } }),
+          other,
+        ]);
+        mockRedis.leaseApiRateLimit = vi.fn().mockResolvedValue(0);
+
+        await worker.process(pushTask({ destination: subscription }) as any);
+
+        expect(wp).not.toHaveBeenCalled();
+        expect(other.send).not.toHaveBeenCalled();
+        expect(mockDeviceRepo.deactivate).not.toHaveBeenCalled();
+        expect(mockScheduledProducer.publish).toHaveBeenCalledTimes(1);
+      });
+    });
   });
 
   /** Pins the exact outcome events each path publishes, push and otherwise. */
@@ -1010,7 +1067,7 @@ describe("DeliveryWorker", () => {
         ...ids,
         recipientId: "usr-1",
         channel: "email",
-        failureReason: "no transport registered for channel",
+        failureReason: "no transport for this channel and destination",
         failureCode: "no_transport",
         retryable: false,
         attempt: 1,

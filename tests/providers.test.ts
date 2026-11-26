@@ -396,6 +396,18 @@ describe("FcmTransport (Push Provider)", () => {
       expect.objectContaining({ notification: { title: "Title", body: "B" } }),
     );
   });
+
+  // FCM answers a Web Push subscription with invalid-argument, a dead token.
+  it.each([
+    ["fMEP0vJqS0:APA91bHun4MxP5egoKMwt2KZ", true],
+    [JSON.stringify({ endpoint: "https://fcm.googleapis.com/fcm/send/x" }), false],
+    [' {"endpoint":"https://fcm.googleapis.com/fcm/send/x"}', false],
+  ])("takes %s as a destination: %s", (destination, taken) => {
+    const transport = new FcmTransport({
+      serviceAccountJson: JSON.stringify({ project_id: "test-project" }),
+    });
+    expect(transport.accepts(destination)).toBe(taken);
+  });
 });
 
 describe("ResendTransport (Webhooks)", () => {
@@ -4031,6 +4043,15 @@ describe("WebPushTransport (Push Provider)", () => {
       limit: 5,
       windowSeconds: 1,
     });
+  });
+
+  it.each([
+    [webPushBrowser().destination, true],
+    ["fMEP0vJqS0:APA91bHun4MxP5egoKMwt2KZ", false],
+    ["acme-alerts-usr123", false],
+    [JSON.stringify({ keys: { p256dh: "x", auth: "y" } }), false],
+  ])("takes %s as a destination: %s", (destination, taken) => {
+    expect(webPushTransport().accepts(destination)).toBe(taken);
   });
 
   it("posts the encrypted message to the subscription's endpoint and returns its Location", async () => {

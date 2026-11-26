@@ -184,14 +184,11 @@ browser is next online, within `ttlSeconds`.
 
 ### With other push providers
 
-The `push` channel is shared, and notifkit tries each push provider in turn.
-A target that is not a subscription (an FCM token, an ntfy topic) is left to
-the next provider and not flagged.
-
-`FcmTransport` is not as careful: it flags a target it cannot read. If you
-register both, list `WebPushTransport` first, and know that a subscription
-which reaches FCM, because Web Push failed or had no capacity left, will be
-deactivated.
+The `push` channel is shared. Each provider says which targets it can send to,
+and notifkit only hands a target to those: subscriptions to
+`WebPushTransport`, device tokens to `FcmTransport`. You can register both, in
+any order. When Web Push fails or is out of capacity, a subscription waits or
+is retried; it never goes to FCM.
 
 Requires `notifkit` as a peer dependency. Documentation:
 [notifkit.dev/docs](https://notifkit.dev/docs/). MIT licensed; `web-push` is

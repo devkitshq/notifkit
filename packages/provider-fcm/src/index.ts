@@ -46,6 +46,14 @@ export class FcmTransport implements Transport {
     return this.messaging;
   }
 
+  /**
+   * Not a Web Push subscription (JSON): FCM answers one with invalid-argument,
+   * which reads as a dead token and would deactivate a working browser.
+   */
+  accepts(destination: string): boolean {
+    return !destination.trimStart().startsWith("{");
+  }
+
   async send(task: NotificationDispatchedPayload): Promise<DeliveryResult> {
     // `destination` is optional on the contract, so a malformed task can reach
     // a transport without one. Failing here costs one clear error; passing

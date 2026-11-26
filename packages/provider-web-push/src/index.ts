@@ -122,6 +122,11 @@ export class WebPushTransport implements Transport {
     this.limits = limits;
   }
 
+  /** A Web Push subscription; delivery hands anything else (an FCM token) to another provider. */
+  accepts(destination: string): boolean {
+    return parseSubscription(destination) !== undefined;
+  }
+
   async send(task: NotificationDispatchedPayload): Promise<DeliveryResult> {
     // `destination` is optional on the contract, so a malformed task can reach
     // a transport without one.

@@ -48,6 +48,13 @@ export interface Transport {
   readonly channel: NotificationChannel;
   readonly limits?: { limit: number; windowSeconds: number };
   send(task: NotificationDispatchedPayload): Promise<DeliveryResult>;
+  /**
+   * Whether this provider can send to `destination`, for providers that share
+   * a channel but not an address format (a Web Push subscription is not an FCM
+   * token). Delivery skips one that says no, before its rate limit. Omitted,
+   * it takes every destination.
+   */
+  accepts?: (destination: string) => boolean;
   /** Releases held connections. `NotifkitServer.stop()` calls it after delivery stops. */
   close?: () => void | Promise<void>;
 
