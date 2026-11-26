@@ -71,6 +71,13 @@
       "when": 1790900000000,
       "tag": "0009_retention_time_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795692142246,
+      "tag": "0010_minor_wallow",
+      "breakpoints": true
     }
   ]
 }

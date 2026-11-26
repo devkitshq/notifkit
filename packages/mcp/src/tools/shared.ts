@@ -10,6 +10,7 @@ export const CHANNELS = [
   "discord",
   "whatsapp",
   "slack",
+  "teams",
 ] as const;
 // The server accepts contacts on every channel, in-app included.
 export const CONTACT_CHANNELS = CHANNELS;
