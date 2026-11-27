@@ -10,6 +10,7 @@ import { VonageTransport } from "../../packages/provider-vonage/src/index.js";
 import { NtfyTransport } from "../../packages/provider-ntfy/src/index.js";
 import { ConsoleTransport } from "../../packages/provider-console/src/index.js";
 import { WebPushTransport } from "../../packages/provider-web-push/src/index.js";
+import { OneSignalTransport } from "../../packages/provider-onesignal/src/index.js";
 import type { NotificationDispatchedPayload } from "@/contracts/index.js";
 import { startFakeInternet, type FakeInternet } from "./support/fake-internet.js";
 import { useInfra, waitFor } from "./support/infra.js";
@@ -973,6 +974,134 @@ describe("WebPushTransport", () => {
   });
 });
 
+// ─── OneSignal ──────────────────────────────────────────────────────────────
+
+describe("OneSignalTransport", () => {
+  const ONESIGNAL = "api.onesignal.com";
+  const APP_ID = "9a3e6f2c-1b4d-4c8e-9f7a-2d5b6c8e1f30";
+  const SUBSCRIPTION = "1dd608f2-c6a1-11e3-851d-000c2940e62c";
+  const os = new OneSignalTransport({ appId: APP_ID, apiKey: "os_v2_app_testkeytestkey" });
+  const push = (overrides: Parameters<typeof task>[0] = {}) =>
+    task({
+      channel: "push",
+      destination: SUBSCRIPTION,
+      priority: "high",
+      content: { title: "Commande expédiée 📦", body: "Order #9481 is on its way." },
+      ...overrides,
+    });
+
+  /**
+   * A stand-in for OneSignal that keeps idempotency keys as OneSignal does: a
+   * request with a key it has seen gets the same message back, marked as a
+   * replay, instead of a new one. With `slowFirst`, the first answer comes
+   * after the send has given up, though the message was created.
+   */
+  function idempotentOneSignal({ slowFirst = false } = {}) {
+    const messages = new Map<string, string>();
+    let slow = slowFirst;
+    net.on(ONESIGNAL, (req) => {
+      const key = req.json().idempotency_key as string;
+      const replayed = messages.has(key);
+      if (!replayed) messages.set(key, randomUUID());
+      const headers: Record<string, string> = replayed ? { "idempotent-replayed": "true" } : {};
+      const reply = { json: { id: messages.get(key), external_id: null }, headers };
+      if (!slow) return reply;
+      slow = false;
+      return { ...reply, delayMs: 1_000 };
+    });
+    return messages;
+  }
+
+  it("creates the message with the key, for the one subscription, as OneSignal receives it", async () => {
+    idempotentOneSignal();
+    const sent = push();
+
+    const r = await os.send(sent);
+
+    expect(r).toMatchObject({ success: true, providerMessageId: expect.any(String) });
+    const req = net.requests[0]!;
+    expect(req.method).toBe("POST");
+    expect(req.path).toBe("/notifications?c=push");
+    expect(req.headers.authorization).toBe("Key os_v2_app_testkeytestkey");
+    expect(req.headers["content-type"]).toBe("application/json");
+    expect(req.json()).toMatchObject({
+      app_id: APP_ID,
+      target_channel: "push",
+      include_subscription_ids: [SUBSCRIPTION],
+      headings: { en: "Commande expédiée 📦" },
+      contents: { en: "Order #9481 is on its way." },
+      data: { eventId: sent.enrichedEventId, taskId: sent.taskId },
+      priority: 10,
+    });
+  });
+
+  it("gets the same message back when a timed-out send is retried, instead of a second one", async () => {
+    const messages = idempotentOneSignal({ slowFirst: true });
+    const sent = push({ deliveryOptions: { maxAttempts: 3, timeoutMs: 300 } });
+
+    const timedOut = await os.send(sent);
+    expect(timedOut.success).toBe(false);
+    expect(timedOut.retryable).toBeUndefined();
+    const retried = await os.send(sent);
+
+    expect(net.requests).toHaveLength(2);
+    expect(messages.size).toBe(1);
+    expect(retried).toEqual({ success: true, providerMessageId: [...messages.values()][0] });
+  });
+
+  it("flags a subscription OneSignal answers 200 for but sends nothing to", async () => {
+    net.on(ONESIGNAL, () => ({
+      json: { id: "", errors: ["All included players are not subscribed"] },
+    }));
+    expect(await os.send(push())).toEqual({
+      success: false,
+      invalidToken: true,
+      retryable: false,
+      error: "OneSignal did not send: All included players are not subscribed",
+    });
+
+    net.on(ONESIGNAL, () => ({
+      json: { id: randomUUID(), errors: { invalid_player_ids: [SUBSCRIPTION] } },
+    }));
+    expect(await os.send(push())).toMatchObject({
+      success: false,
+      invalidToken: true,
+      retryable: false,
+    });
+  });
+
+  it("never sends to a destination that is not a subscription id", async () => {
+    idempotentOneSignal();
+    for (const bad of [
+      "fMEP0vJqS0:APA91bHun4MxP5egoKMwt2KZ",
+      "acme-alerts-usr123",
+      JSON.stringify({ endpoint: "https://fcm.googleapis.com/fcm/send/abc" }),
+    ]) {
+      expect(await os.send(push({ destination: bad }))).toMatchObject({
+        success: false,
+        retryable: false,
+      });
+    }
+    expect(net.requests).toEqual([]);
+  });
+
+  it("does not follow a redirect, and gives up on a hung API within the task's timeout", async () => {
+    net.on(ONESIGNAL, (req) =>
+      req.method === "POST"
+        ? { status: 307, headers: { location: "https://onesignal.com/api/v1/notifications" } }
+        : { json: { id: "x" } },
+    );
+    expect(await os.send(push())).toMatchObject({ success: false, retryable: false });
+    expect(net.requests.map((r) => r.method)).toEqual(["POST"]);
+
+    net.on(ONESIGNAL, () => ({ delayMs: 3_000, json: { id: "late" } }));
+    const started = Date.now();
+    const hung = await os.send(push({ deliveryOptions: { maxAttempts: 3, timeoutMs: 300 } }));
+    expect(hung.success).toBe(false);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
 // ─── Which failures are worth retrying ─────────────────────────────────────
 //
 // `retryable: false` tells delivery that sending again cannot help: it fails
@@ -1208,6 +1337,50 @@ describe("which failures are worth retrying", () => {
       expect(notPermanent(await wp.send(push()))).toBe(true);
       net.on(FCM, () => "hang-up");
       expect(notPermanent(await wp.send(push()))).toBe(true);
+    });
+  });
+
+  describe("OneSignal", () => {
+    const ONESIGNAL = "api.onesignal.com";
+    const os = new OneSignalTransport({
+      appId: "9a3e6f2c-1b4d-4c8e-9f7a-2d5b6c8e1f30",
+      apiKey: "os_v2_app_testkeytestkey",
+    });
+    const push = () =>
+      task({ channel: "push", destination: "1dd608f2-c6a1-11e3-851d-000c2940e62c" });
+    const rejection =
+      (status: number, message: string): Reply =>
+      () => ({ status, json: { errors: [message] } });
+
+    it("gives up on a request OneSignal refused, without flagging the subscription", async () => {
+      for (const [status, message] of [
+        [400, "Message Notifications must have English language content"],
+        [
+          401,
+          "Access denied.  Please include an 'Authorization: ...' header with a valid API key (https://documentation.onesignal.com/docs/en/keys-and-ids#api-keys).",
+        ],
+        [403, "This API is not available for applications on your plan."],
+      ] as const) {
+        net.on(ONESIGNAL, rejection(status, message));
+        const refused = await os.send(push());
+        expect(refused).toMatchObject(permanent);
+        expect(refused.invalidToken).toBeUndefined();
+      }
+    });
+
+    it("tries again after a rate limit, a server error or a dropped connection", async () => {
+      net.on(ONESIGNAL, () => ({
+        status: 429,
+        json: { errors: ["API rate limit exceeded."] },
+        headers: { "retry-after": "1" },
+      }));
+      const limited = await os.send(push());
+      expect(notPermanent(limited)).toBe(true);
+      expect(limited.throttled).toBe(true);
+      net.on(ONESIGNAL, () => ({ status: 503, text: "" }));
+      expect(notPermanent(await os.send(push()))).toBe(true);
+      net.on(ONESIGNAL, () => "hang-up");
+      expect(notPermanent(await os.send(push()))).toBe(true);
     });
   });
 });

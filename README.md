@@ -101,6 +101,7 @@ Bring your own provider accounts. First-party packages:
 - [`@notifkit/provider-web-push`](./packages/provider-web-push): browser push notifications via Web Push (VAPID), without Firebase
 - [`@notifkit/provider-fcm`](./packages/provider-fcm): push notifications via Firebase Cloud Messaging
 - [`@notifkit/provider-ntfy`](./packages/provider-ntfy): push notifications to an ntfy topic, on ntfy.sh or a self-hosted server
+- [`@notifkit/provider-onesignal`](./packages/provider-onesignal): push notifications to OneSignal subscriptions, mobile and web, through the OneSignal REST API
 - [`@notifkit/provider-twilio`](./packages/provider-twilio): SMS via Twilio, with signature-verified delivery status callbacks
 - [`@notifkit/provider-vonage`](./packages/provider-vonage): SMS via the Vonage Messages API, with signature-verified status webhooks
 - [`@notifkit/provider-slack`](./packages/provider-slack): Slack messages via Incoming Webhooks or the Web API
