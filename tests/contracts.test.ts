@@ -97,6 +97,21 @@ describe("End-to-End Contract Registry Tests", () => {
     expect(BatchAddContactsSchema.safeParse({ channel: "slack", target: "C0123" }).success).toBe(
       true,
     );
+    expect(
+      BatchAddContactsSchema.safeParse({
+        channel: "teams",
+        target: "https://prod-00.westus.logic.azure.com/workflows/abc/triggers/manual/paths/invoke",
+      }).success,
+    ).toBe(true);
+    expect(
+      registry.safeParsePayload("notification.requested", {
+        projectId: "33eb2225-c6f3-4e4b-91bb-000000000000",
+        target: { type: "user", userId: "user-456" },
+        templateId: "tmpl-789",
+        channels: ["teams"],
+        data: {},
+      }).success,
+    ).toBe(true);
   });
 
   it("rejects sms and whatsapp targets that are not E.164", () => {
