@@ -24,6 +24,12 @@
     "packages/provider-fcm": {
       "package-name": "@notifkit/provider-fcm"
     },
+    "packages/provider-ntfy": {
+      "package-name": "@notifkit/provider-ntfy"
+    },
+    "packages/provider-onesignal": {
+      "package-name": "@notifkit/provider-onesignal"
+    },
     "packages/provider-resend": {
       "package-name": "@notifkit/provider-resend"
     },
