@@ -71,6 +71,11 @@ export class NtfyTransport implements Transport {
     if (url.protocol !== "https:" && url.protocol !== "http:") {
       throw new Error(`ntfy serverUrl must be an http(s) URL, got ${url.protocol}`);
     }
+    // Credentials make fetch throw on every send; a query or hash would land in
+    // front of the topic. Use `accessToken` for auth.
+    if (url.username || url.password || url.search || url.hash) {
+      throw new Error("ntfy serverUrl must not have credentials, a query or a hash");
+    }
     this.serverUrl = url.href.replace(/\/+$/, "");
     this.accessToken = accessToken;
     this.logger = logger;

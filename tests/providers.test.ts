@@ -2280,6 +2280,18 @@ describe("NtfyTransport (Push Provider)", () => {
     expect(() => new NtfyTransport({ serverUrl: "ntfy.example.com" })).toThrow();
   });
 
+  // Credentials make every send throw (and retry); a query or hash ends up in
+  // front of the topic, as `/?x=1/topic`.
+  it.each([
+    "https://user:pass@ntfy.example.com",
+    "https://ntfy.example.com/?x=1",
+    "https://ntfy.example.com/#top",
+  ])("refuses the server URL %s when constructed", (serverUrl) => {
+    expect(() => new NtfyTransport({ serverUrl })).toThrow(
+      "ntfy serverUrl must not have credentials, a query or a hash",
+    );
+  });
+
   it("sends the access token as a bearer token, and no Authorization header without one", async () => {
     const fetchMock = stubNtfy(200, NTFY_PUBLISHED);
 
