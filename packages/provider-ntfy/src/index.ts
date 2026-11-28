@@ -9,6 +9,9 @@ const DEFAULT_SERVER_URL = "https://ntfy.sh";
  */
 const TOPIC = /^[-_A-Za-z0-9]{1,64}$/;
 
+/** A OneSignal subscription id, which is also a valid topic name. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * notifkit priority → ntfy priority (1 min … 5 max). ntfy's default is 3, so
  * `normal` changes nothing on the phone.
@@ -72,6 +75,14 @@ export class NtfyTransport implements Transport {
     this.accessToken = accessToken;
     this.logger = logger;
     this.limits = limits;
+  }
+
+  /**
+   * A topic name that isn't a UUID. On the shared push channel a UUID is a
+   * OneSignal subscription, an FCM token has a ':', and Web Push is JSON.
+   */
+  accepts(destination: string): boolean {
+    return TOPIC.test(destination) && !UUID.test(destination);
   }
 
   async send(task: NotificationDispatchedPayload): Promise<DeliveryResult> {

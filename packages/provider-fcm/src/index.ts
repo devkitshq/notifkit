@@ -47,11 +47,14 @@ export class FcmTransport implements Transport {
   }
 
   /**
-   * Not a Web Push subscription (JSON): FCM answers one with invalid-argument,
-   * which reads as a dead token and would deactivate a working browser.
+   * Not another push provider's address: FCM answers one with invalid-argument,
+   * which reads as a dead token and would deactivate a working contact. A Web
+   * Push subscription is JSON; an ntfy topic or a OneSignal subscription id
+   * (a UUID) is at most 64 of `[-_A-Za-z0-9]`. Real FCM tokens are longer and
+   * have a ':'.
    */
   accepts(destination: string): boolean {
-    return !destination.trimStart().startsWith("{");
+    return !destination.trimStart().startsWith("{") && !/^[-_A-Za-z0-9]{1,64}$/.test(destination);
   }
 
   async send(task: NotificationDispatchedPayload): Promise<DeliveryResult> {

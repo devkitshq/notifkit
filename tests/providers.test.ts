@@ -397,11 +397,14 @@ describe("FcmTransport (Push Provider)", () => {
     );
   });
 
-  // FCM answers a Web Push subscription with invalid-argument, a dead token.
+  // FCM answers another provider's address with invalid-argument, a dead token.
   it.each([
     ["fMEP0vJqS0:APA91bHun4MxP5egoKMwt2KZ", true],
+    [`dQw4w9WgXcQ:APA91b${"x".repeat(140)}`, true],
     [JSON.stringify({ endpoint: "https://fcm.googleapis.com/fcm/send/x" }), false],
     [' {"endpoint":"https://fcm.googleapis.com/fcm/send/x"}', false],
+    ["acme-alerts-usr123", false],
+    ["1dd608f2-c6a1-11e3-851d-000c2940e62c", false],
   ])("takes %s as a destination: %s", (destination, taken) => {
     const transport = new FcmTransport({
       serviceAccountJson: JSON.stringify({ project_id: "test-project" }),
@@ -2215,6 +2218,20 @@ describe("NtfyTransport (Push Provider)", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  // A UUID is a OneSignal subscription id, an FCM token has a ':', a Web Push
+  // subscription is JSON: each goes to its own provider.
+  it.each([
+    ["acme-alerts-usr123-k3v9x2", true],
+    ["a".repeat(64), true],
+    ["a".repeat(65), false],
+    ["1dd608f2-c6a1-11e3-851d-000c2940e62c", false],
+    ["1DD608F2-C6A1-11E3-851D-000C2940E62C", false],
+    ["fMEP0vJqS0:APA91bHun4MxP5egoKMwt2KZ", false],
+    ['{"endpoint":"https://fcm.googleapis.com/fcm/send/x"}', false],
+  ])("accepts(%s) is %s", (destination, accepted) => {
+    expect(new NtfyTransport().accepts(destination)).toBe(accepted);
   });
 
   it("delivers the push channel and defaults to ntfy's per-visitor rate", () => {

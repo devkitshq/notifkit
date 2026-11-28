@@ -43,7 +43,9 @@ await notifkit.addContact("usr_123", {
 ```
 
 A topic name is 1 to 64 letters, digits, `-` or `_`; anything else is refused
-without calling ntfy. On ntfy.sh topics are public: anyone who knows a name can
+without calling ntfy. Don't use a UUID as a topic name: on the shared `push`
+channel a UUID is a OneSignal subscription id, so ntfy leaves it to that
+provider. On ntfy.sh topics are public: anyone who knows a name can
 read it and publish to it, so pick names that are hard to guess, or
 [reserve them](https://docs.ntfy.sh/publish/#authentication) and set
 `accessToken`.
