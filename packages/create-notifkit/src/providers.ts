@@ -16,6 +16,8 @@ export type ProviderId =
   | "twilio"
   | "vonage"
   | "fcm"
+  | "ntfy"
+  | "onesignal"
   | "slack"
   | "discord"
   | "telegram"
@@ -195,6 +197,42 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
       },
     ],
     target: { env: "TO_PUSH_TOKEN", comment: "FCM registration token of a test device" },
+    content: `{ title: "Welcome, {{name}}!", body: "Your notifkit app is working." }`,
+  },
+  ntfy: {
+    id: "ntfy",
+    label: "ntfy (push to a topic, no account needed on ntfy.sh)",
+    packageName: "@notifkit/provider-ntfy",
+    version: "0.1.0",
+    className: "NtfyTransport",
+    channel: "push",
+    options: "",
+    env: [],
+    target: {
+      env: "TO_NTFY_TOPIC",
+      comment: "A hard-to-guess ntfy topic, not a UUID. Subscribe to it in the ntfy app",
+    },
+    content: `{ title: "Welcome, {{name}}!", body: "Your notifkit app is working." }`,
+  },
+  onesignal: {
+    id: "onesignal",
+    label: "OneSignal (push, mobile and web)",
+    packageName: "@notifkit/provider-onesignal",
+    version: "0.1.0",
+    className: "OneSignalTransport",
+    channel: "push",
+    options: `{
+      appId: process.env.ONESIGNAL_APP_ID!,
+      apiKey: process.env.ONESIGNAL_API_KEY!,
+    }`,
+    env: [
+      { name: "ONESIGNAL_APP_ID", comment: "From OneSignal > Settings > Keys & IDs" },
+      { name: "ONESIGNAL_API_KEY", comment: "An App API key (os_v2_app_...), from Keys & IDs" },
+    ],
+    target: {
+      env: "TO_ONESIGNAL_SUBSCRIPTION_ID",
+      comment: "Subscription id of a test device or browser (OneSignal.User.PushSubscription.id)",
+    },
     content: `{ title: "Welcome, {{name}}!", body: "Your notifkit app is working." }`,
   },
   slack: {
