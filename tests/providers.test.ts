@@ -5170,6 +5170,14 @@ describe("OneSignalTransport (Push Provider)", () => {
     expect(oneSignalCall(fetchMock).headers["Authorization"]).toBe(`Key ${ONESIGNAL_KEY}`);
   });
 
+  it("trims the app id it was given, as an env file can leave a newline", async () => {
+    const fetchMock = stubOneSignal(200, SENT);
+
+    await oneSignal({ appId: ` ${ONESIGNAL_APP_ID}\n` }).send(oneSignalTask());
+
+    expect(oneSignalCall(fetchMock).body.app_id).toBe(ONESIGNAL_APP_ID);
+  });
+
   it.each([
     [ONESIGNAL_SUBSCRIPTION, true],
     ["F2B7E9A0-4C1D-4E8B-9A3F-6D2C1B0E9F87", true],

@@ -49,13 +49,13 @@ export class OneSignalTransport implements Transport {
     limits = { limit: 150, windowSeconds: 1 },
   }: OneSignalTransportOptions) {
     // Wrong credentials fail every send the same way: fail at startup instead.
-    if (!UUID.test(appId ?? "")) {
+    if (!UUID.test(appId?.trim() ?? "")) {
       throw new Error(`OneSignal appId must be the app's UUID, got ${JSON.stringify(appId)}`);
     }
     if (!apiKey?.trim()) {
       throw new Error("OneSignal apiKey is required");
     }
-    this.appId = appId;
+    this.appId = appId.trim();
     this.apiKey = apiKey.trim();
     this.logger = logger;
     this.limits = limits;
