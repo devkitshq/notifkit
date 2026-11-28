@@ -5004,3 +5004,407 @@ describe("WebPushTransport (Push Provider)", () => {
     expect(logged).not.toContain(webPushVapid.privateKey);
   });
 });
+
+// ─── OneSignal ───────────────────────────────────────────────────────────────
+
+import { OneSignalTransport } from "../packages/provider-onesignal/src/index.js";
+
+// Made-up ids and key: nothing here belongs to a real OneSignal app.
+const ONESIGNAL_APP_ID = "9a3e6f2c-1b4d-4c8e-9f7a-2d5b6c8e1f30";
+const ONESIGNAL_KEY = "os_v2_app_testkeytestkeytestkey";
+const ONESIGNAL_SUBSCRIPTION = "1dd608f2-c6a1-11e3-851d-000c2940e62c";
+const ONESIGNAL_MESSAGE_ID = "b98881cc-1e94-4366-bbd9-db8f3429292b";
+
+function oneSignal(options: Record<string, unknown> = {}) {
+  return new OneSignalTransport({ appId: ONESIGNAL_APP_ID, apiKey: ONESIGNAL_KEY, ...options });
+}
+
+/** Stubs `fetch` with one OneSignal response. */
+function stubOneSignal(status: number, body: unknown = {}, headers: Record<string, string> = {}) {
+  const text = typeof body === "string" ? body : JSON.stringify(body);
+  const fn = vi
+    .fn()
+    .mockImplementation(async () => new Response(text || null, { status, headers }));
+  vi.stubGlobal("fetch", fn);
+  return fn;
+}
+
+/** The URL, RequestInit, headers and JSON body of the Nth request. */
+function oneSignalCall(fn: ReturnType<typeof stubOneSignal>, n = 0) {
+  const [url, init] = fn.mock.calls[n]! as [string, RequestInit];
+  return {
+    url,
+    init,
+    headers: init.headers as Record<string, string>,
+    body: JSON.parse(init.body as string),
+  };
+}
+
+function oneSignalTask(overrides: Record<string, unknown> = {}): any {
+  return {
+    taskId: "task-uuid-os-1",
+    enrichedEventId: "event-uuid-os-1",
+    destination: ONESIGNAL_SUBSCRIPTION,
+    priority: "normal",
+    renderedContent: { content: { title: "Order shipped", body: "Order #9481 is on its way." } },
+    ...overrides,
+  };
+}
+
+const SENT = { id: ONESIGNAL_MESSAGE_ID, external_id: null };
+
+describe("OneSignalTransport (Push Provider)", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) as any;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("delivers the push channel at OneSignal's free-plan rate unless told otherwise", () => {
+    expect(oneSignal().channel).toBe("push");
+    expect(oneSignal().limits).toEqual({ limit: 150, windowSeconds: 1 });
+    expect(oneSignal({ limits: { limit: 6000, windowSeconds: 1 } }).limits).toEqual({
+      limit: 6000,
+      windowSeconds: 1,
+    });
+  });
+
+  it("creates the message for the one subscription and returns its id", async () => {
+    const fetchMock = stubOneSignal(200, SENT);
+
+    const result = await oneSignal().send(oneSignalTask());
+
+    expect(result).toEqual({ success: true, providerMessageId: ONESIGNAL_MESSAGE_ID });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const { url, init, headers, body } = oneSignalCall(fetchMock);
+    expect(url).toBe("https://api.onesignal.com/notifications?c=push");
+    expect(init.method).toBe("POST");
+    expect(init.redirect).toBe("manual");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(headers).toEqual({
+      "Content-Type": "application/json",
+      Authorization: `Key ${ONESIGNAL_KEY}`,
+    });
+    expect(body).toEqual({
+      app_id: ONESIGNAL_APP_ID,
+      target_channel: "push",
+      include_subscription_ids: [ONESIGNAL_SUBSCRIPTION],
+      headings: { en: "Order shipped" },
+      contents: { en: "Order #9481 is on its way." },
+      data: { eventId: "event-uuid-os-1", taskId: "task-uuid-os-1" },
+      priority: 5,
+      idempotency_key: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+    });
+  });
+
+  it("sends every attempt of a task with the same idempotency key, and other tasks with others", async () => {
+    const fetchMock = stubOneSignal(200, SENT);
+
+    await oneSignal().send(oneSignalTask());
+    await oneSignal().send(oneSignalTask({ deliveryAttemptCount: 1 }));
+    await oneSignal().send(oneSignalTask({ taskId: "task-uuid-os-2" }));
+
+    const keys = [0, 1, 2].map((n) => oneSignalCall(fetchMock, n).body.idempotency_key);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it("counts a replayed message as sent", async () => {
+    stubOneSignal(200, SENT, { "Idempotent-Replayed": "true" });
+    const log = logger();
+
+    const result = await oneSignal({ logger: log }).send(oneSignalTask());
+
+    expect(result).toEqual({ success: true, providerMessageId: ONESIGNAL_MESSAGE_ID });
+    expect(log.debug).toHaveBeenCalledWith(
+      { taskId: "task-uuid-os-1", providerMessageId: ONESIGNAL_MESSAGE_ID, replayed: true },
+      "OneSignal message sent",
+    );
+  });
+
+  it.each([
+    [{ appId: "my-app" }, "OneSignal appId must be the app's UUID"],
+    [{ appId: "" }, "OneSignal appId must be the app's UUID"],
+    [{ apiKey: "" }, "OneSignal apiKey is required"],
+    [{ apiKey: "   " }, "OneSignal apiKey is required"],
+  ])("refuses %o when constructed", (options, message) => {
+    expect(() => oneSignal(options)).toThrow(message);
+  });
+
+  it("trims the key it was given", async () => {
+    const fetchMock = stubOneSignal(200, SENT);
+
+    await oneSignal({ apiKey: `  ${ONESIGNAL_KEY}\n` }).send(oneSignalTask());
+
+    expect(oneSignalCall(fetchMock).headers["Authorization"]).toBe(`Key ${ONESIGNAL_KEY}`);
+  });
+
+  it.each([
+    [ONESIGNAL_SUBSCRIPTION, true],
+    ["F2B7E9A0-4C1D-4E8B-9A3F-6D2C1B0E9F87", true],
+    ["fMEP0vJqS0:APA91bHun4MxP5egoKMwt2KZFBaFUH", false],
+    ['{"endpoint":"https://fcm.googleapis.com/fcm/send/abc","keys":{}}', false],
+    ["acme-alerts-usr123", false],
+    [`${ONESIGNAL_SUBSCRIPTION}-x`, false],
+    ["", false],
+  ])("accepts(%s) is %s", (destination, accepted) => {
+    expect(oneSignal().accepts(destination)).toBe(accepted);
+  });
+
+  it.each([
+    ["low", 5],
+    ["normal", 5],
+    ["high", 10],
+    ["critical", 10],
+  ])("sends the %s priority as OneSignal priority %s", async (priority, expected) => {
+    const fetchMock = stubOneSignal(200, SENT);
+
+    await oneSignal().send(oneSignalTask({ priority }));
+
+    expect(oneSignalCall(fetchMock).body.priority).toBe(expected);
+  });
+
+  it.each([
+    [
+      { title: "T", subject: "S", text: "from text", body: "from body" },
+      { headings: { en: "T" }, contents: { en: "from text" } },
+    ],
+    [
+      { subject: "S", body: "B" },
+      { headings: { en: "S" }, contents: { en: "B" } },
+    ],
+    [{ title: "Only a title" }, { contents: { en: "Only a title" } }],
+    [{ title: " ", body: "Only a body" }, { contents: { en: "Only a body" } }],
+  ])("builds the message from %o", async (content, expected) => {
+    const fetchMock = stubOneSignal(200, SENT);
+
+    await oneSignal().send(oneSignalTask({ renderedContent: { content } }));
+
+    const { body } = oneSignalCall(fetchMock);
+    expect({ headings: body.headings, contents: body.contents }).toEqual({
+      headings: undefined,
+      ...expected,
+    });
+  });
+
+  it("passes the template's data object to the app, with the task's ids", async () => {
+    const fetchMock = stubOneSignal(200, SENT);
+    const content = { title: "T", body: "B", data: { orderId: "9481", taskId: "template value" } };
+
+    await oneSignal().send(oneSignalTask({ renderedContent: { content } }));
+
+    expect(oneSignalCall(fetchMock).body.data).toEqual({
+      orderId: "9481",
+      eventId: "event-uuid-os-1",
+      taskId: "task-uuid-os-1",
+    });
+  });
+
+  it.each([
+    [undefined, "No destination (OneSignal subscription id) on task"],
+    [
+      "fMEP0vJqS0:APA91bHun4MxP5egoKMwt2KZFBaFUH",
+      "Destination is not a OneSignal subscription id (a UUID)",
+    ],
+    [
+      '{"endpoint":"https://fcm.googleapis.com/fcm/send/abc"}',
+      "Destination is not a OneSignal subscription id (a UUID)",
+    ],
+  ])(
+    "fails a task whose destination is %s without calling OneSignal or flagging it",
+    async (destination, error) => {
+      const fetchMock = stubOneSignal(200, SENT);
+
+      const result = await oneSignal().send(oneSignalTask({ destination }));
+
+      expect(result).toEqual({ success: false, retryable: false, error });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails a task with no text without calling OneSignal", async () => {
+    const fetchMock = stubOneSignal(200, SENT);
+
+    const result = await oneSignal().send(
+      oneSignalTask({ renderedContent: { content: { title: " ", data: { a: 1 } } } }),
+    );
+
+    expect(result).toEqual({ success: false, retryable: false, error: "No message body on task" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // What OneSignal answers for a subscription id it never issued, too.
+  it("flags a subscription OneSignal sent nothing to because it is not subscribed", async () => {
+    stubOneSignal(200, { id: "", errors: ["All included players are not subscribed"] });
+    const log = logger();
+
+    const result = await oneSignal({ logger: log }).send(oneSignalTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: true,
+      retryable: false,
+      error: "OneSignal did not send: All included players are not subscribed",
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-os-1", status: 200, error: "All included players are not subscribed" },
+      "OneSignal subscription is unsubscribed",
+    );
+  });
+
+  // What OneSignal answers once the browser has opted out.
+  it("flags a subscription listed in invalid_player_ids, whatever its case", async () => {
+    stubOneSignal(200, {
+      id: ONESIGNAL_MESSAGE_ID,
+      errors: { invalid_player_ids: [ONESIGNAL_SUBSCRIPTION.toUpperCase()] },
+    });
+
+    const result = await oneSignal().send(oneSignalTask());
+
+    expect(result).toEqual({
+      success: false,
+      invalidToken: true,
+      retryable: false,
+      error: "OneSignal did not send: the subscription is unsubscribed (invalid_player_ids)",
+    });
+  });
+
+  it("counts the message as sent when invalid_player_ids names another subscription", async () => {
+    stubOneSignal(200, {
+      id: ONESIGNAL_MESSAGE_ID,
+      errors: { invalid_player_ids: ["0b6f4e2a-9c3d-4f1e-8a7b-5d2c9e1f3a60"] },
+    });
+
+    const result = await oneSignal().send(oneSignalTask());
+
+    expect(result).toEqual({ success: true, providerMessageId: ONESIGNAL_MESSAGE_ID });
+  });
+
+  it.each([
+    [{ id: "", errors: ["Something went wrong"] }, "Something went wrong"],
+    [{ id: "" }, "no message id in the reply"],
+    ["<!DOCTYPE html><html>maintenance</html>", "<!DOCTYPE html><html>maintenance</html>"],
+  ])("does not count a 200 without a message id as sent: %o", async (body, reason) => {
+    stubOneSignal(200, body);
+
+    const result = await oneSignal().send(oneSignalTask());
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: `OneSignal did not send: ${reason}`,
+    });
+  });
+
+  it.each([
+    [
+      400,
+      {
+        errors: ["Incorrect subscription_id format in include_subscription_ids (not a valid UUID)"],
+      },
+      "Incorrect subscription_id format in include_subscription_ids (not a valid UUID)",
+    ],
+    [
+      401,
+      {
+        errors: [
+          "Access denied.  Please include an 'Authorization: ...' header with a valid API key (https://documentation.onesignal.com/docs/en/keys-and-ids#api-keys).",
+        ],
+      },
+      "Access denied.  Please include an 'Authorization: ...' header with a valid API key (https://documentation.onesignal.com/docs/en/keys-and-ids#api-keys).",
+    ],
+    [
+      403,
+      { errors: ["This API is not available for applications on your plan."] },
+      "This API is not available for applications on your plan.",
+    ],
+    [404, "", "HTTP 404"],
+    [302, "", "HTTP 302"],
+  ])("gives up on a %s without flagging the subscription", async (status, body, reason) => {
+    stubOneSignal(status, body);
+
+    const result = await oneSignal().send(oneSignalTask());
+
+    expect(result).toEqual({
+      success: false,
+      retryable: false,
+      error: `OneSignal error ${status}: ${reason}`,
+    });
+  });
+
+  it("waits for capacity after a 429", async () => {
+    stubOneSignal(429, { errors: ["API rate limit exceeded."] }, { "Retry-After": "2" });
+
+    const result = await oneSignal().send(oneSignalTask());
+
+    expect(result).toEqual({
+      success: false,
+      throttled: true,
+      error: "OneSignal error 429: API rate limit exceeded.",
+    });
+  });
+
+  it.each([
+    [500, { errors: ["Internal server error"] }, "Internal server error"],
+    [502, "<html>Bad Gateway</html>", "<html>Bad Gateway</html>"],
+    [503, "", "HTTP 503"],
+  ])("retries a %s", async (status, body, reason) => {
+    stubOneSignal(status, body);
+
+    const result = await oneSignal().send(oneSignalTask());
+
+    expect(result).toEqual({ success: false, error: `OneSignal error ${status}: ${reason}` });
+  });
+
+  it("cuts a long error page to 200 characters", async () => {
+    stubOneSignal(502, "x".repeat(250));
+
+    const result = await oneSignal().send(oneSignalTask());
+
+    expect(result.error).toBe(`OneSignal error 502: ${"x".repeat(200)}…`);
+  });
+
+  it("retries a network error or a timeout", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+    const log = logger();
+
+    const result = await oneSignal({ logger: log }).send(oneSignalTask());
+
+    expect(result).toEqual({ success: false, error: "fetch failed" });
+    expect(log.warn).toHaveBeenCalledWith(
+      { taskId: "task-uuid-os-1", error: "fetch failed" },
+      "OneSignal send threw",
+    );
+  });
+
+  it("sends with delivery's own signal, so delivery can cancel it", async () => {
+    const fetchMock = stubOneSignal(200, SENT);
+    const worker = new AbortController();
+
+    await oneSignal().send(oneSignalTask({ signal: worker.signal }));
+    await oneSignal().send(oneSignalTask());
+
+    expect(oneSignalCall(fetchMock, 0).init.signal).toBe(worker.signal);
+    expect(oneSignalCall(fetchMock, 1).init.signal).toBeInstanceOf(AbortSignal);
+    expect(oneSignalCall(fetchMock, 1).init.signal).not.toBe(worker.signal);
+  });
+
+  it("logs a failed send without the key", async () => {
+    stubOneSignal(403, { errors: ["This API is not available for applications on your plan."] });
+    const log = logger();
+
+    await oneSignal({ logger: log }).send(oneSignalTask());
+
+    expect(log.warn).toHaveBeenCalledWith(
+      {
+        taskId: "task-uuid-os-1",
+        status: 403,
+        error: "This API is not available for applications on your plan.",
+      },
+      "OneSignal send failed",
+    );
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain(ONESIGNAL_KEY);
+  });
+});
