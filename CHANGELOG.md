@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.1.25](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.24...notifkit-v0.1.25) (2026-11-28)
+
+
+### Features
+
+* **provider-ntfy:** add ntfy push provider ([#61](https://github.com/devkitshq/notifkit/issues/61)) ([fce3699](https://github.com/devkitshq/notifkit/commit/fce369935e918a32e6e031b361bc744a48bf6287))
+* **provider-onesignal:** add onesignal push provider ([#66](https://github.com/devkitshq/notifkit/issues/66)) ([de3fe28](https://github.com/devkitshq/notifkit/commit/de3fe28cd2c08493e30b1e32463322fcdded1f28)), closes [#23](https://github.com/devkitshq/notifkit/issues/23)
+* **provider-web-push:** add web push (vapid) provider ([#63](https://github.com/devkitshq/notifkit/issues/63)) ([a14ec6d](https://github.com/devkitshq/notifkit/commit/a14ec6d9767c57182fb62705c21252a0148b1efe))
+
+
+### Bug Fixes
+
+* **delivery:** send each push target only to providers that accept it ([ded378c](https://github.com/devkitshq/notifkit/commit/ded378c3bdbb5776a50810eaa1427a59693ae8c2))
+* **provider-fcm:** use the template's title for the notification title ([#62](https://github.com/devkitshq/notifkit/issues/62)) ([221edf4](https://github.com/devkitshq/notifkit/commit/221edf4a1f73eaf0d77943540686d1365ba69cd2))
+* **provider-ntfy:** refuse a server url with credentials, a query or a hash ([47de001](https://github.com/devkitshq/notifkit/commit/47de0017d3605ea108345803814947851e7ab2b7))
+* **provider-onesignal:** trim the app id like the api key ([ca5a4b4](https://github.com/devkitshq/notifkit/commit/ca5a4b4786ce8e1f66b47a9058e45f060396e541))
+* **push:** send ntfy topics and onesignal ids only to their own provider ([e16fdca](https://github.com/devkitshq/notifkit/commit/e16fdcaecb714b51529e52bb61b02f14ce5a56d5))
+
 ## [0.1.24](https://github.com/devkitshq/notifkit/compare/notifkit-v0.1.23...notifkit-v0.1.24) (2026-11-25)
 
 

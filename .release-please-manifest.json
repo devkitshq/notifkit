@@ -1,12 +1,12 @@
 {
-  ".": "0.1.24",
-  "packages/create-notifkit": "0.1.5",
+  ".": "0.1.25",
+  "packages/create-notifkit": "0.1.6",
   "packages/mcp": "0.1.8",
   "packages/provider-console": "0.1.3",
   "packages/provider-discord": "0.1.6",
-  "packages/provider-fcm": "0.1.6",
-  "packages/provider-ntfy": "0.1.0",
-  "packages/provider-onesignal": "0.1.0",
+  "packages/provider-fcm": "0.1.7",
+  "packages/provider-ntfy": "0.1.1",
+  "packages/provider-onesignal": "0.1.1",
   "packages/provider-resend": "0.1.7",
   "packages/provider-ses": "0.1.2",
   "packages/provider-slack": "0.1.6",
@@ -14,6 +14,6 @@
   "packages/provider-telegram": "0.1.5",
   "packages/provider-twilio": "0.1.5",
   "packages/provider-vonage": "0.1.1",
-  "packages/provider-web-push": "0.1.0",
+  "packages/provider-web-push": "0.1.1",
   "packages/provider-whatsapp": "0.1.5"
 }
