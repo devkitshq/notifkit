@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/devkitshq/notifkit/compare/create-notifkit-v0.1.5...create-notifkit-v0.1.6) (2026-11-28)
+
+
+### Features
+
+* **create-notifkit:** add ntfy and onesignal providers ([538c99c](https://github.com/devkitshq/notifkit/commit/538c99cedce871bd3b22153df7bfc9212c5c537a))
+
 ## [0.1.5](https://github.com/devkitshq/notifkit/compare/create-notifkit-v0.1.4...create-notifkit-v0.1.5) (2026-11-25)
 
 
